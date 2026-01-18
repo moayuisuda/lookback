@@ -8,8 +8,7 @@
   "build": {
     "appId": "com.lookback.app",
     "productName": "LookBack",
-    "icon": "resources/icon.svg",
-    "electronDist": "node_modules/electron/dist",
+    "icon": "resources/icon.png",
     "files": [
       "**/*",
       "!**/.venv/**",
@@ -37,7 +36,13 @@
           ]
         }
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://mirror.ghproxy.com/https://github.com/anhaohui/RroRef/releases/latest/download/"
+      }
+    ]
   },
   "scripts": {
     "dev": "concurrently \"tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --watch --onSuccess 'electron .'\" \"vite\"",
@@ -57,6 +62,7 @@
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
     "electron-log": "^5.4.3",
+    "electron-updater": "^6.7.3",
     "express": "^5.2.1",
     "fs-extra": "^11.3.3",
     "konva": "^10.0.12",
