@@ -1,0 +1,116 @@
+import { actions, type ImageMeta } from '../store/galleryStore';
+import { API_BASE_URL } from '../config';
+
+export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File[]> => {
+  const items = Array.from(dataTransfer.items);
+  const files: File[] = [];
+
+  const scanEntry = async (entry: FileSystemEntry) => {
+    if (entry.isFile) {
+      try {
+        const file = await new Promise<File>((resolve, reject) => {
+          (entry as FileSystemFileEntry).file(resolve, reject);
+        });
+        files.push(file);
+      } catch (e) {
+        console.error('Failed to read file entry', entry.name, e);
+      }
+    } else if (entry.isDirectory) {
+      try {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const readAllEntries = async (): Promise<FileSystemEntry[]> => {
+          const entries: FileSystemEntry[] = [];
+          let batch: FileSystemEntry[] = [];
+          do {
+            batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+              reader.readEntries(resolve, reject);
+            });
+            entries.push(...batch);
+          } while (batch.length > 0);
+          return entries;
+        };
+        
+        const entries = await readAllEntries();
+        for (const e of entries) {
+          await scanEntry(e);
+        }
+      } catch (e) {
+        console.error('Failed to read directory entry', entry.name, e);
+      }
+    }
+  };
+
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry();
+    if (entry) {
+      await scanEntry(entry);
+    }
+  }
+  return files;
+};
+
+export const importFiles = async (files: File[]): Promise<ImageMeta[]> => {
+  const importedImages: ImageMeta[] = [];
+
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+
+    try {
+      const fileWithPath = file as File & { path?: string };
+      let imageUrl: string | null = null;
+
+      if (fileWithPath.path) {
+        imageUrl = `file://${encodeURI(fileWithPath.path)}`;
+
+        const res = await fetch(`${API_BASE_URL}/api/collect`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            imageUrl,
+            name: file.name,
+            filename: file.name,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.meta) {
+            actions.addImage(data.meta);
+            importedImages.push(data.meta);
+          }
+        } else {
+          console.error('Failed to import', file.name);
+        }
+      } else {
+        const imageBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsDataURL(file);
+        });
+
+        const res = await fetch(`${API_BASE_URL}/api/import-blob`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64, filename: file.name }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.meta) {
+            actions.addImage(data.meta);
+            importedImages.push(data.meta);
+          }
+        } else {
+          console.error('Failed to import blob', file.name);
+        }
+      }
+    } catch (e) {
+      console.error('Error importing file', file.name, e);
+    }
+  }
+
+  return importedImages;
+};

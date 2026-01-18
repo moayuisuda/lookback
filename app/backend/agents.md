@@ -1,0 +1,41 @@
+# Server Directory Agents
+
+本目录包含应用的“后端”代码（本地 API 服务与向量服务），由 Electron 主进程启动。
+
+## 职责
+- **Local API (`server.ts`)**
+  - 启动本地 Express 服务（默认端口 `30001`），为前端与插件提供 REST API。
+  - 管理本地数据存储：图片文件、元数据、画布数据与排序文件。
+  - 开发阶段不做旧数据兼容；存储格式不兼容时返回错误并提示重置数据目录。
+  - 当前判定为“不兼容”的情况：
+    - meta 缺少 `id` / `image` / `createdAt` 等核心字段，或字段类型不合法
+    - `image` 路径不是 `images/` 开头
+    - `tags` / `vector` / `dominantColor` 的类型不合法（例如 tags 不是数组）
+  - 新增字段缺失不视为不兼容：例如 `name` 通常会从 `image` 文件名推导并在读/索引时补齐；但对 x.com/twitter.com 与 pinterest.* 页面来源的采集，如果扩展未解析到 `name`，服务端会保持为空，前端据此不展示 name。
+  - 提供索引相关 API：重新索引、批量索引缺失向量（`/api/index-missing`）。
+  - 提供检索 API：Tag 过滤 + 向量相似度检索 + 颜色近似过滤（`/api/search`）。
+  - 搜索响应策略：先返回快速结果（name/tag/color），向量相似度结果异步推送到渲染进程更新。支持 `threshold` 参数自定义向量搜索阈值。
+  - **搜索优化**：CLIP 向量检索前，会自动调用免费翻译 API 将搜索词转换为英文，以提高非英文搜索的匹配准确度。
+  - 提供元数据更新 API：Tag 更新、主体色（dominantColor）更新、名称（name）更新（用于右键菜单编辑与文件名搜索）。
+  - **并发控制**：引入 `KeyedMutex` 确保同一文件的读写操作串行化，防止向量生成与颜色提取并发写入导致 JSON 文件损坏。
+  - 模型目录 `model/` 与 `images/`、`meta/` 同级，位于 storage 根目录下。
+- **Python Vector Service (`python/tagger.py`)**
+  - 常驻加载 CLIP 模型，提供图片/文本向量生成能力。
+  - 提供图片主体色提取能力（偏向高色彩像素聚合），用于颜色过滤。
+  - 通过 stdio 与 Node 侧队列请求进行通信。
+  - **日志机制**：
+    - 正常状态日志（启动、模型加载）带 `[INFO]` 前缀，通过 stderr 输出。
+    - Node 侧解析 stderr，将 `[INFO]` 转换为正常日志，其余作为错误日志记录。
+  - `CLIPProcessor.from_pretrained(..., use_fast=True)` 依赖 `torchvision`（`CLIPImageProcessorFast`）。
+  - 支持通过环境变量覆盖 uv 路径：`PROREF_UV_PATH`。
+  - 使用 `PROREF_MODEL_DIR` 指定模型目录；启动时可触发下载并输出进度事件。
+
+## 命令行使用
+- **下载/准备模型**
+  - `cd app/backend/python && PROREF_MODEL_DIR=/abs/storage/model uv run python tagger.py --download-model`
+- **提取图片主体色（dominantColor）**
+  - `echo '{"mode":"dominant-color","arg":"/abs/path/to/image.png"}' | (cd app/backend/python && PROREF_MODEL_DIR=/abs/storage/model uv run python tagger.py)`
+- **生成图片向量**
+  - `echo '{"mode":"encode-image","arg":"/abs/path/to/image.png"}' | (cd app/backend/python && PROREF_MODEL_DIR=/abs/storage/model uv run python tagger.py)`
+- **生成文本向量**
+  - `echo '{"mode":"encode-text","arg":"blue line on off-white background"}' | (cd app/backend/python && PROREF_MODEL_DIR=/abs/storage/model uv run python tagger.py)`

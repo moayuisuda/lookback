@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+input[type="color"] {
+  border-radius: 5px;
+  padding: 0;
+}
+
+input[type="color"]::-moz-color-swatch {
+  border: none;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+}
+
+@theme {
+  --color-secondary: rgba(57, 197, 187, 0.4);
+  --color-primary: #39c5bb;
+  --color-danger: #ef4444;
+}
+
+.draggable {
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+html, body, #root {
+  background-color: transparent;
+}
+
+body {
+    @apply text-white overflow-hidden;
+}
+
+/* 隐藏滚动条但保留功能 */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.minimap-viewport {
+
+}
