@@ -1,6 +1,8 @@
 import React from "react";
 import { Settings2 } from "lucide-react";
 import { THEME } from "../../theme";
+import { useSnapshot } from "valtio";
+import { globalState } from "../../store/globalStore";
 import { CanvasButton } from "./CanvasButton";
 import { useT } from "../../i18n/useT";
 
@@ -26,6 +28,9 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   onToggleExpanded,
 }) => {
   const { t } = useT();
+  const appSnap = useSnapshot(globalState);
+  const hideCanvasButtons = appSnap.pinMode && appSnap.mouseThrough;
+  if (hideCanvasButtons) return null;
   return (
     <div className="absolute top-4 left-4 z-10 flex items-center">
       <button
@@ -35,30 +40,34 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
       >
         <Settings2 color={isExpanded ? THEME.primary : "#666"} size={16} />
       </button>
-      <div
-        className={`gap-2 ml-2 overflow-hidden transition-all duration-300 ease-in-out ${
-          isExpanded ? "flex" : "hidden"
-        }`}
-      >
-        <CanvasButton
-          isActive={canvasGrayscale}
-          onClick={onToggleGrayscale}
-          title={t("canvas.toolbar.toggleGrayscale")}
+      {!hideCanvasButtons && (
+        <div
+          className={`gap-2 ml-2 overflow-hidden transition-all duration-300 ease-in-out ${
+            isExpanded ? "flex" : "hidden"
+          }`}
         >
-          {t("canvas.toolbar.grayscale")}
-        </CanvasButton>
-        <CanvasButton onClick={onAutoLayout}>{t("canvas.toolbar.smartLayout")}</CanvasButton>
-        <CanvasButton
-          isActive={showMinimap}
-          onClick={onToggleMinimap}
-          title={t("canvas.toolbar.toggleMinimap")}
-        >
-          {t("canvas.toolbar.minimap")}
-        </CanvasButton>
-        <CanvasButton variant="danger" onClick={onRequestClear}>
-          {t("common.clear")}
-        </CanvasButton>
-      </div>
+          <CanvasButton
+            isActive={canvasGrayscale}
+            onClick={onToggleGrayscale}
+            title={t("canvas.toolbar.toggleGrayscale")}
+          >
+            {t("canvas.toolbar.grayscale")}
+          </CanvasButton>
+          <CanvasButton onClick={onAutoLayout}>
+            {t("canvas.toolbar.smartLayout")}
+          </CanvasButton>
+          <CanvasButton
+            isActive={showMinimap}
+            onClick={onToggleMinimap}
+            title={t("canvas.toolbar.toggleMinimap")}
+          >
+            {t("canvas.toolbar.minimap")}
+          </CanvasButton>
+          <CanvasButton variant="danger" onClick={onRequestClear}>
+            {t("common.clear")}
+          </CanvasButton>
+        </div>
+      )}
     </div>
   );
 };

@@ -42,7 +42,11 @@
         "provider": "generic",
         "url": "https://mirror.ghproxy.com/https://github.com/anhaohui/RroRef/releases/latest/download/"
       }
-    ]
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "scripts": {
     "dev": "concurrently \"tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --watch --onSuccess 'electron .'\" \"vite\"",

@@ -57,11 +57,36 @@ const uploadTempImage = async (
   return { filename: data.filename, path: data.path };
 };
 
+const acceleratorToHotkey = (accelerator: string): string | null => {
+  const raw = accelerator.trim();
+  if (!raw) return null;
+  const parts = raw.split("+").map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const mainKey = parts[parts.length - 1];
+  const modifiers = parts.slice(0, -1);
+  const keys: string[] = [];
+  modifiers.forEach((m) => {
+    const lower = m.toLowerCase();
+    if (lower === "command" || lower === "cmd" || lower === "ctrl" || lower === "control") {
+      if (!keys.includes("mod")) keys.push("mod");
+    } else if (lower === "shift") {
+      keys.push("shift");
+    } else if (lower === "alt" || lower === "option") {
+      keys.push("alt");
+    }
+  });
+  const main = mainKey.toLowerCase();
+  if (!main) return null;
+  keys.push(main);
+  return keys.join("+");
+};
+
 export const Canvas: React.FC = () => {
   const appSnap = useSnapshot(globalState);
   const canvasSnap = useSnapshot(canvasState);
   const { t } = useT();
   const isPinTransparent = appSnap.pinMode && appSnap.pinTransparent;
+  const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
   const selectedIds = canvasSnap.selectedIds;
   const primaryId = canvasSnap.primaryId;
   const autoEditId = canvasSnap.autoEditId;
@@ -82,6 +107,9 @@ export const Canvas: React.FC = () => {
     anchor: { x: number; y: number } | null;
     snapshots: Map<string, { x: number; y: number }>;
   }>({ active: false, draggedId: null, anchor: null, snapshots: new Map() });
+
+  const isMouseOverCanvasRef = useRef(false);
+  const isIgnoringMouseRef = useRef(false);
 
   const stageViewportInitializedRef = useRef(false);
 
@@ -154,6 +182,39 @@ export const Canvas: React.FC = () => {
       return null;
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
+
+  const handleCanvasMouseEnter = () => {
+    isMouseOverCanvasRef.current = true;
+    if (shouldEnableMouseThrough && !isIgnoringMouseRef.current) {
+      window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
+      isIgnoringMouseRef.current = true;
+    }
+  };
+
+  const handleCanvasMouseLeave = () => {
+    isMouseOverCanvasRef.current = false;
+    if (isIgnoringMouseRef.current) {
+      window.electron?.setIgnoreMouseEvents?.(false);
+      isIgnoringMouseRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!shouldEnableMouseThrough && isIgnoringMouseRef.current) {
+      window.electron?.setIgnoreMouseEvents?.(false);
+      isIgnoringMouseRef.current = false;
+    }
+    if (shouldEnableMouseThrough && isMouseOverCanvasRef.current && !isIgnoringMouseRef.current) {
+      window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
+      isIgnoringMouseRef.current = true;
+    }
+    return () => {
+      if (isIgnoringMouseRef.current) {
+        window.electron?.setIgnoreMouseEvents?.(false);
+        isIgnoringMouseRef.current = false;
+      }
+    };
+  }, [shouldEnableMouseThrough]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -601,7 +662,7 @@ export const Canvas: React.FC = () => {
     };
   }, []);
 
-  const handleAutoLayout = () => {
+  const handleAutoLayout = useCallback(() => {
     if (selectedIds.size > 0) {
       const items = canvasSnap.canvasItems || [];
       const selectedItems = items.filter((item) =>
@@ -705,7 +766,16 @@ export const Canvas: React.FC = () => {
       height: stage.height(),
       scale,
     });
-  };
+  }, [canvasSnap.canvasItems, selectedIds]);
+
+  useEffect(() => {
+    const cleanup = window.electron?.onRendererEvent?.((event: string) => {
+      if (event === "canvas-auto-layout") {
+        handleAutoLayout();
+      }
+    });
+    return cleanup;
+  }, [handleAutoLayout]);
 
   const handleFlipSelection = useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -723,15 +793,16 @@ export const Canvas: React.FC = () => {
     });
   }, [selectedIds, canvasSnap.canvasItems]);
 
+  const groupHotkey = acceleratorToHotkey(appSnap.canvasGroupShortcut) || "mod+g";
+
   useHotkeys(
-    "mod+g",
+    groupHotkey,
     (e) => {
       e.preventDefault();
-      if (selectedIds.size === 0) return;
       handleAutoLayout();
     },
     { preventDefault: true },
-    [handleAutoLayout]
+    [handleAutoLayout, groupHotkey]
   );
 
   useHotkeys(
@@ -953,6 +1024,8 @@ export const Canvas: React.FC = () => {
       onContextMenu={(e) => e.preventDefault()}
       onClick={() => globalActions.setActiveArea("canvas")}
       onMouseDown={() => globalActions.setActiveArea("canvas")}
+      onMouseEnter={handleCanvasMouseEnter}
+      onMouseLeave={handleCanvasMouseLeave}
     >
       <CanvasToolbar
         canvasGrayscale={canvasSnap.canvasGrayscale}

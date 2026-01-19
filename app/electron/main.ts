@@ -38,12 +38,26 @@ let lastGalleryDockDelta = 0;
 let localeCache: { locale: Locale; mtimeMs: number } | null = null;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
   process.platform === 'darwin' ? 'Command+L' : 'Ctrl+L';
-let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
-let isSettingsOpen = false;
-let isPinMode: boolean;
-let isPinTransparent: boolean;
+const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT =
+  process.platform === 'darwin' ? 'Command+Up' : 'Ctrl+Up';
+const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT =
+  process.platform === 'darwin' ? 'Command+Down' : 'Ctrl+Down';
+const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
+  process.platform === 'darwin' ? 'Command+T' : 'Ctrl+T';
+const DEFAULT_CANVAS_GROUP_SHORTCUT =
+  process.platform === 'darwin' ? 'Command+G' : 'Ctrl+G';
 
-function syncWindowShadow() {
+let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
+let canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
+let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
+let canvasGroupShortcut = DEFAULT_CANVAS_GROUP_SHORTCUT;
+
+let isSettingsOpen = false;
+  let isPinMode: boolean;
+  let isPinTransparent: boolean;
+  
+  function syncWindowShadow() {
   if (!mainWindow) return;
   if (process.platform !== 'darwin') return;
   const shouldHaveShadow = !(isPinMode && isPinTransparent);
@@ -80,18 +94,38 @@ async function getLocale(): Promise<Locale> {
   }
 }
 
-async function getToggleWindowShortcut(): Promise<string> {
+async function loadShortcuts(): Promise<void> {
   try {
     const settingsPath = path.join(getStorageDir(), 'settings.json');
     const settings = await fs.readJson(settingsPath).catch(() => null);
-    const raw =
-      settings && typeof settings === 'object'
-        ? (settings as { toggleWindowShortcut?: unknown }).toggleWindowShortcut
-        : undefined;
-    if (typeof raw === 'string' && raw.trim()) return raw.trim();
-    return DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+    if (!settings || typeof settings !== 'object') return;
+
+    const rawToggle = (settings as Record<string, unknown>).toggleWindowShortcut;
+    if (typeof rawToggle === 'string' && rawToggle.trim()) {
+      toggleWindowShortcut = rawToggle.trim();
+    }
+
+    const rawOpacityUp = (settings as Record<string, unknown>).canvasOpacityUpShortcut;
+    if (typeof rawOpacityUp === 'string' && rawOpacityUp.trim()) {
+      canvasOpacityUpShortcut = rawOpacityUp.trim();
+    }
+
+    const rawOpacityDown = (settings as Record<string, unknown>).canvasOpacityDownShortcut;
+    if (typeof rawOpacityDown === 'string' && rawOpacityDown.trim()) {
+      canvasOpacityDownShortcut = rawOpacityDown.trim();
+    }
+
+    const rawMouseThrough = (settings as Record<string, unknown>).toggleMouseThroughShortcut;
+    if (typeof rawMouseThrough === 'string' && rawMouseThrough.trim()) {
+      toggleMouseThroughShortcut = rawMouseThrough.trim();
+    }
+
+    const rawCanvasGroup = (settings as Record<string, unknown>).canvasGroupShortcut;
+    if (typeof rawCanvasGroup === 'string' && rawCanvasGroup.trim()) {
+      canvasGroupShortcut = rawCanvasGroup.trim();
+    }
   } catch {
-    return DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+    // ignore
   }
 }
 
@@ -392,37 +426,101 @@ function toggleMainWindowVisibility() {
   mainWindow.focus();
 }
 
-function registerToggleWindowShortcut(accelerator: string): {
-  success: boolean;
-  error?: string;
-  accelerator: string;
-} {
+function registerShortcut(
+  accelerator: string,
+  currentVar: string,
+  updateVar: (val: string) => void,
+  action: () => void,
+  checkSettingsOpen: boolean = false
+): { success: boolean; error?: string; accelerator: string } {
   const next = typeof accelerator === 'string' ? accelerator.trim() : '';
   if (!next) {
-    return { success: false, error: 'Empty shortcut', accelerator: toggleWindowShortcut };
+    return { success: false, error: 'Empty shortcut', accelerator: currentVar };
   }
+  
+  const prev = currentVar;
+  
+  // Create a handler wrapper to check for settings open
+  const handler = () => {
+    if (checkSettingsOpen && isSettingsOpen && mainWindow?.isFocused()) {
+      return;
+    }
+    action();
+  };
 
-  const prev = toggleWindowShortcut;
   try {
-    globalShortcut.unregister(prev);
-    const ok = globalShortcut.register(next, () => {
-      if (isSettingsOpen && mainWindow?.isFocused()) {
-        return;
-      }
-      toggleMainWindowVisibility();
-    });
+    // If the new shortcut is different from old one, unregister old one
+    if (prev !== next) {
+      globalShortcut.unregister(prev);
+    } else {
+        // If same, we still might need to re-register to update handler if logic changed (unlikely here but safe)
+        globalShortcut.unregister(prev);
+    }
+
+    const ok = globalShortcut.register(next, handler);
     if (!ok) {
-      globalShortcut.unregister(next);
-      globalShortcut.register(prev, () => toggleMainWindowVisibility());
+      // If failed, try to restore old one
+      if (prev !== next) {
+          globalShortcut.unregister(next);
+          globalShortcut.register(prev, handler); // Note: we re-register prev with SAME handler
+      }
       return { success: false, error: 'Shortcut registration failed', accelerator: prev };
     }
-    toggleWindowShortcut = next;
+    updateVar(next);
     return { success: true, accelerator: next };
   } catch (e) {
-    globalShortcut.unregister(next);
-    globalShortcut.register(prev, () => toggleMainWindowVisibility());
+    if (prev !== next) {
+        globalShortcut.unregister(next);
+        globalShortcut.register(prev, handler);
+    }
     return { success: false, error: e instanceof Error ? e.message : String(e), accelerator: prev };
   }
+}
+
+function registerToggleWindowShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator, 
+    toggleWindowShortcut, 
+    (v) => { toggleWindowShortcut = v; }, 
+    toggleMainWindowVisibility,
+    true
+  );
+}
+
+function registerCanvasOpacityUpShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityUpShortcut,
+    (v) => { canvasOpacityUpShortcut = v; },
+    () => { mainWindow?.webContents.send('renderer-event', 'canvas-opacity-up'); }
+  );
+}
+
+function registerCanvasOpacityDownShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityDownShortcut,
+    (v) => { canvasOpacityDownShortcut = v; },
+    () => { mainWindow?.webContents.send('renderer-event', 'canvas-opacity-down'); }
+  );
+}
+
+function registerToggleMouseThroughShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    toggleMouseThroughShortcut,
+    (v) => { toggleMouseThroughShortcut = v; },
+    () => { mainWindow?.webContents.send('renderer-event', 'toggle-mouse-through'); }
+  );
+}
+
+function registerCanvasGroupShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    canvasGroupShortcut,
+    (v) => { canvasGroupShortcut = v; },
+    () => { mainWindow?.webContents.send('renderer-event', 'canvas-auto-layout'); }
+  );
 }
 
 function getModelDir(): string {
@@ -1021,11 +1119,15 @@ app.whenReady().then(async () => {
   await loadWindowPinState();
   createWindow();
   applyPinStateToWindow();
-  const accelerator = await getToggleWindowShortcut();
-  const res = registerToggleWindowShortcut(accelerator);
-  if (!res.success) {
-    log.warn('Failed to register global shortcut:', res.error ?? '');
-  }
+  
+  await loadShortcuts();
+  
+  registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
+  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
+  registerCanvasGroupShortcut(canvasGroupShortcut);
+
   if (mainWindow) {
     try {
       await startServer();
@@ -1058,6 +1160,35 @@ app.whenReady().then(async () => {
 
 ipcMain.handle('set-toggle-window-shortcut', async (_event, accelerator: string) => {
   return registerToggleWindowShortcut(accelerator);
+});
+
+ipcMain.handle('set-canvas-opacity-up-shortcut', async (_event, accelerator: string) => {
+  return registerCanvasOpacityUpShortcut(accelerator);
+});
+
+ipcMain.handle('set-canvas-opacity-down-shortcut', async (_event, accelerator: string) => {
+  return registerCanvasOpacityDownShortcut(accelerator);
+});
+
+ipcMain.handle('set-toggle-mouse-through-shortcut', async (_event, accelerator: string) => {
+  return registerToggleMouseThroughShortcut(accelerator);
+});
+
+ipcMain.handle('set-canvas-group-shortcut', async (_event, accelerator: string) => {
+  return registerCanvasGroupShortcut(accelerator);
+});
+
+ipcMain.on('set-mouse-through', (_event, enabled: boolean) => {
+  // If disabling, ensure we reset ignore mouse events (just in case)
+  if (!enabled && mainWindow) {
+    mainWindow.setIgnoreMouseEvents(false);
+  }
+});
+
+ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean, options?: { forward: boolean }) => {
+  if (mainWindow) {
+    mainWindow.setIgnoreMouseEvents(ignore, options);
+  }
 });
 
 ipcMain.on('settings-open-changed', (_event, open: boolean) => {

@@ -26,6 +26,7 @@ var import_electron2 = require("electron");
 var import_path2 = __toESM(require("path"), 1);
 var import_fs_extra2 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
+var import_electron_updater = require("electron-updater");
 var import_child_process2 = require("child_process");
 var import_readline2 = __toESM(require("readline"), 1);
 var import_https2 = __toESM(require("https"), 1);
@@ -54,6 +55,23 @@ var loadStorageRoot = () => {
       }
     }
   } catch {
+  }
+  if (import_electron.app.isPackaged && process.platform !== "darwin") {
+    try {
+      const exeDir = import_path.default.dirname(import_electron.app.getPath("exe"));
+      const portableDataDir = import_path.default.join(exeDir, "data");
+      if (import_fs_extra.default.existsSync(portableDataDir)) {
+        return portableDataDir;
+      }
+      const testFile = import_path.default.join(exeDir, ".write_test");
+      try {
+        import_fs_extra.default.writeFileSync(testFile, "test");
+        import_fs_extra.default.removeSync(testFile);
+        return portableDataDir;
+      } catch {
+      }
+    } catch {
+    }
   }
   return import_path.default.join(import_electron.app.getPath("userData"), "lookback_storage");
 };
@@ -2129,8 +2147,14 @@ var en = {
   "titleBar.change": "Change",
   "titleBar.window": "Window",
   "titleBar.pinTransparent": "Pin transparent",
+  "titleBar.canvasOpacity": "Canvas Opacity",
+  "titleBar.mouseThrough": "Paper Mode",
   "titleBar.shortcuts": "Shortcuts",
   "titleBar.toggleWindowVisibility": "Toggle window visibility",
+  "titleBar.canvasOpacityUp": "Increase Canvas Opacity",
+  "titleBar.canvasOpacityDown": "Decrease Canvas Opacity",
+  "titleBar.toggleMouseThrough": "Toggle Paper Mode",
+  "titleBar.canvasGroup": "Smart Layout (Canvas)",
   "titleBar.shortcutClickToRecord": "Click to record",
   "titleBar.shortcutRecording": "Press a shortcut\u2026",
   "titleBar.index": "Index",
@@ -2283,8 +2307,14 @@ var zh = {
   "titleBar.change": "\u66F4\u6539",
   "titleBar.window": "\u7A97\u53E3",
   "titleBar.pinTransparent": "\u7F6E\u9876\u900F\u660E",
+  "titleBar.canvasOpacity": "\u753B\u5E03\u900F\u660E\u5EA6",
+  "titleBar.mouseThrough": "\u57AB\u7EB8\u6A21\u5F0F",
   "titleBar.shortcuts": "\u5FEB\u6377\u952E",
   "titleBar.toggleWindowVisibility": "\u5207\u6362\u7A97\u53E3\u663E\u793A",
+  "titleBar.canvasOpacityUp": "\u589E\u52A0\u753B\u5E03\u900F\u660E\u5EA6",
+  "titleBar.canvasOpacityDown": "\u51CF\u5C11\u753B\u5E03\u900F\u660E\u5EA6",
+  "titleBar.toggleMouseThrough": "\u5207\u6362\u57AB\u7EB8\u6A21\u5F0F",
+  "titleBar.canvasGroup": "\u753B\u5E03\u667A\u80FD\u5E03\u5C40",
   "titleBar.shortcutClickToRecord": "\u70B9\u51FB\u5F55\u5236",
   "titleBar.shortcutRecording": "\u8BF7\u6309\u4E0B\u5FEB\u6377\u952E\u2026",
   "titleBar.index": "\u7D22\u5F15",
@@ -2406,7 +2436,7 @@ var zh = {
   "toast.globalError": "\u9519\u8BEF\uFF1A{{message}}",
   "toast.unhandledRejection": "\u672A\u5904\u7406\u7684 Promise \u62D2\u7EDD\uFF1A{{reason}}",
   "toast.storageIncompatible": "\u5B58\u50A8\u76EE\u5F55\u4E0D\u517C\u5BB9\uFF0C\u8BF7\u91CD\u7F6E\u6570\u636E\u6587\u4EF6\u5939\u3002",
-  "settings.canvas": "\u753B\u5E03",
+  "settings.canvas": "\u5F53\u524D\u753B\u5E03",
   "settings.canvas.create": "\u65B0\u5EFA\u753B\u5E03",
   "settings.canvas.placeholder": "\u753B\u5E03\u540D\u79F0",
   "settings.canvas.deleteConfirm": "\u786E\u8BA4\u5220\u9664\u8BE5\u753B\u5E03\uFF1F",
@@ -2450,7 +2480,15 @@ var mainWindow = null;
 var lastGalleryDockDelta = 0;
 var localeCache = null;
 var DEFAULT_TOGGLE_WINDOW_SHORTCUT = process.platform === "darwin" ? "Command+L" : "Ctrl+L";
+var DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
+var DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
+var DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = process.platform === "darwin" ? "Command+T" : "Ctrl+T";
+var DEFAULT_CANVAS_GROUP_SHORTCUT = process.platform === "darwin" ? "Command+G" : "Ctrl+G";
 var toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+var canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
+var canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
+var toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
+var canvasGroupShortcut = DEFAULT_CANVAS_GROUP_SHORTCUT;
 var isSettingsOpen = false;
 var isPinMode;
 var isPinTransparent;
@@ -2487,15 +2525,32 @@ async function getLocale() {
     return "en";
   }
 }
-async function getToggleWindowShortcut() {
+async function loadShortcuts() {
   try {
     const settingsPath = import_path2.default.join(getStorageDir(), "settings.json");
     const settings = await import_fs_extra2.default.readJson(settingsPath).catch(() => null);
-    const raw = settings && typeof settings === "object" ? settings.toggleWindowShortcut : void 0;
-    if (typeof raw === "string" && raw.trim()) return raw.trim();
-    return DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+    if (!settings || typeof settings !== "object") return;
+    const rawToggle = settings.toggleWindowShortcut;
+    if (typeof rawToggle === "string" && rawToggle.trim()) {
+      toggleWindowShortcut = rawToggle.trim();
+    }
+    const rawOpacityUp = settings.canvasOpacityUpShortcut;
+    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
+      canvasOpacityUpShortcut = rawOpacityUp.trim();
+    }
+    const rawOpacityDown = settings.canvasOpacityDownShortcut;
+    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
+      canvasOpacityDownShortcut = rawOpacityDown.trim();
+    }
+    const rawMouseThrough = settings.toggleMouseThroughShortcut;
+    if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
+      toggleMouseThroughShortcut = rawMouseThrough.trim();
+    }
+    const rawCanvasGroup = settings.canvasGroupShortcut;
+    if (typeof rawCanvasGroup === "string" && rawCanvasGroup.trim()) {
+      canvasGroupShortcut = rawCanvasGroup.trim();
+    }
   } catch {
-    return DEFAULT_TOGGLE_WINDOW_SHORTCUT;
   }
 }
 async function loadWindowPinState() {
@@ -2522,6 +2577,43 @@ function loadMainWindow() {
     const filePath = import_path2.default.join(__dirname, "../dist-renderer/index.html");
     import_electron_log.default.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
+  }
+}
+function setupAutoUpdater() {
+  import_electron_updater.autoUpdater.logger = import_electron_log.default;
+  import_electron_updater.autoUpdater.autoDownload = true;
+  import_electron_updater.autoUpdater.on("checking-for-update", () => {
+    import_electron_log.default.info("Checking for update...");
+  });
+  import_electron_updater.autoUpdater.on("update-available", (info) => {
+    import_electron_log.default.info("Update available.", info);
+    if (mainWindow) {
+      mainWindow.webContents.send("update-available", info);
+    }
+  });
+  import_electron_updater.autoUpdater.on("update-not-available", (info) => {
+    import_electron_log.default.info("Update not available.", info);
+  });
+  import_electron_updater.autoUpdater.on("error", (err) => {
+    import_electron_log.default.error("Error in auto-updater.", err);
+  });
+  import_electron_updater.autoUpdater.on("download-progress", (progressObj) => {
+    let log_message = "Download speed: " + progressObj.bytesPerSecond;
+    log_message = log_message + " - Downloaded " + progressObj.percent + "%";
+    log_message = log_message + " (" + progressObj.transferred + "/" + progressObj.total + ")";
+    import_electron_log.default.info(log_message);
+    if (mainWindow) {
+      mainWindow.webContents.send("download-progress", progressObj);
+    }
+  });
+  import_electron_updater.autoUpdater.on("update-downloaded", (info) => {
+    import_electron_log.default.info("Update downloaded", info);
+    if (mainWindow) {
+      mainWindow.webContents.send("update-downloaded", info);
+    }
+  });
+  if (import_electron2.app.isPackaged) {
+    import_electron_updater.autoUpdater.checkForUpdatesAndNotify();
   }
 }
 function createWindow(options) {
@@ -2556,6 +2648,7 @@ function createWindow(options) {
   if ((options == null ? void 0 : options.load) !== false) {
     loadMainWindow();
   }
+  setupAutoUpdater();
   import_electron2.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
   import_electron2.ipcMain.on("window-max", () => {
     if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
@@ -2696,32 +2789,100 @@ function toggleMainWindowVisibility() {
   }
   mainWindow.focus();
 }
-function registerToggleWindowShortcut(accelerator) {
+function registerShortcut(accelerator, currentVar, updateVar, action, checkSettingsOpen = false) {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
   if (!next) {
-    return { success: false, error: "Empty shortcut", accelerator: toggleWindowShortcut };
+    return { success: false, error: "Empty shortcut", accelerator: currentVar };
   }
-  const prev = toggleWindowShortcut;
+  const prev = currentVar;
+  const handler = () => {
+    if (checkSettingsOpen && isSettingsOpen && (mainWindow == null ? void 0 : mainWindow.isFocused())) {
+      return;
+    }
+    action();
+  };
   try {
-    import_electron2.globalShortcut.unregister(prev);
-    const ok = import_electron2.globalShortcut.register(next, () => {
-      if (isSettingsOpen && (mainWindow == null ? void 0 : mainWindow.isFocused())) {
-        return;
-      }
-      toggleMainWindowVisibility();
-    });
+    if (prev !== next) {
+      import_electron2.globalShortcut.unregister(prev);
+    } else {
+      import_electron2.globalShortcut.unregister(prev);
+    }
+    const ok = import_electron2.globalShortcut.register(next, handler);
     if (!ok) {
-      import_electron2.globalShortcut.unregister(next);
-      import_electron2.globalShortcut.register(prev, () => toggleMainWindowVisibility());
+      if (prev !== next) {
+        import_electron2.globalShortcut.unregister(next);
+        import_electron2.globalShortcut.register(prev, handler);
+      }
       return { success: false, error: "Shortcut registration failed", accelerator: prev };
     }
-    toggleWindowShortcut = next;
+    updateVar(next);
     return { success: true, accelerator: next };
   } catch (e) {
-    import_electron2.globalShortcut.unregister(next);
-    import_electron2.globalShortcut.register(prev, () => toggleMainWindowVisibility());
+    if (prev !== next) {
+      import_electron2.globalShortcut.unregister(next);
+      import_electron2.globalShortcut.register(prev, handler);
+    }
     return { success: false, error: e instanceof Error ? e.message : String(e), accelerator: prev };
   }
+}
+function registerToggleWindowShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    toggleWindowShortcut,
+    (v) => {
+      toggleWindowShortcut = v;
+    },
+    toggleMainWindowVisibility,
+    true
+  );
+}
+function registerCanvasOpacityUpShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityUpShortcut,
+    (v) => {
+      canvasOpacityUpShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-opacity-up");
+    }
+  );
+}
+function registerCanvasOpacityDownShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityDownShortcut,
+    (v) => {
+      canvasOpacityDownShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-opacity-down");
+    }
+  );
+}
+function registerToggleMouseThroughShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    toggleMouseThroughShortcut,
+    (v) => {
+      toggleMouseThroughShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "toggle-mouse-through");
+    }
+  );
+}
+function registerCanvasGroupShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    canvasGroupShortcut,
+    (v) => {
+      canvasGroupShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-auto-layout");
+    }
+  );
 }
 function getModelDir() {
   return import_path2.default.join(getStorageDir(), "model");
@@ -3212,11 +3373,12 @@ import_electron2.app.whenReady().then(async () => {
   await loadWindowPinState();
   createWindow();
   applyPinStateToWindow();
-  const accelerator = await getToggleWindowShortcut();
-  const res = registerToggleWindowShortcut(accelerator);
-  if (!res.success) {
-    import_electron_log.default.warn("Failed to register global shortcut:", res.error ?? "");
-  }
+  await loadShortcuts();
+  registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
+  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
+  registerCanvasGroupShortcut(canvasGroupShortcut);
   if (mainWindow) {
     try {
       await startServer2();
@@ -3240,6 +3402,28 @@ import_electron2.app.whenReady().then(async () => {
 });
 import_electron2.ipcMain.handle("set-toggle-window-shortcut", async (_event, accelerator) => {
   return registerToggleWindowShortcut(accelerator);
+});
+import_electron2.ipcMain.handle("set-canvas-opacity-up-shortcut", async (_event, accelerator) => {
+  return registerCanvasOpacityUpShortcut(accelerator);
+});
+import_electron2.ipcMain.handle("set-canvas-opacity-down-shortcut", async (_event, accelerator) => {
+  return registerCanvasOpacityDownShortcut(accelerator);
+});
+import_electron2.ipcMain.handle("set-toggle-mouse-through-shortcut", async (_event, accelerator) => {
+  return registerToggleMouseThroughShortcut(accelerator);
+});
+import_electron2.ipcMain.handle("set-canvas-group-shortcut", async (_event, accelerator) => {
+  return registerCanvasGroupShortcut(accelerator);
+});
+import_electron2.ipcMain.on("set-mouse-through", (_event, enabled) => {
+  if (!enabled && mainWindow) {
+    mainWindow.setIgnoreMouseEvents(false);
+  }
+});
+import_electron2.ipcMain.on("set-ignore-mouse-events", (_event, ignore, options) => {
+  if (mainWindow) {
+    mainWindow.setIgnoreMouseEvents(ignore, options);
+  }
 });
 import_electron2.ipcMain.on("settings-open-changed", (_event, open) => {
   isSettingsOpen = Boolean(open);

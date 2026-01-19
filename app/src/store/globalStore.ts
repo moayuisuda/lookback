@@ -109,6 +109,12 @@ export interface GlobalState {
   pinMode: boolean;
   pinTransparent: boolean;
   toggleWindowShortcut: string;
+  canvasOpacity: number;
+  mouseThrough: boolean;
+  canvasOpacityUpShortcut: string;
+  canvasOpacityDownShortcut: string;
+  toggleMouseThroughShortcut: string;
+   canvasGroupShortcut: string;
   sidebarWidth: number;
   activeArea: ActiveArea;
   vectorSearchThreshold: number;
@@ -159,10 +165,13 @@ const ensureSidebarWidth = (value: unknown): number => {
   return value;
 };
 
-const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '')
-    ? 'Command+L'
-    : 'Ctrl+L';
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
+
+const DEFAULT_TOGGLE_WINDOW_SHORTCUT = isMac ? 'Command+L' : 'Ctrl+L';
+const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
+const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
+const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
+const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 
 export const globalState = proxy<GlobalState>({
   tagColors: {},
@@ -171,6 +180,12 @@ export const globalState = proxy<GlobalState>({
   pinMode: false,
   pinTransparent: false,
   toggleWindowShortcut: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
+  canvasOpacity: 1,
+  mouseThrough: false,
+  canvasOpacityUpShortcut: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
+  canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
+  toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+  canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
   sidebarWidth: 320,
   activeArea: null,
   vectorSearchThreshold: 0.19,
@@ -187,6 +202,12 @@ export const globalActions = {
         rawPinTransparent,
         rawPinMode,
         rawToggleWindowShortcut,
+        rawCanvasOpacity,
+        rawMouseThrough,
+        rawCanvasOpacityUpShortcut,
+        rawCanvasOpacityDownShortcut,
+        rawToggleMouseThroughShortcut,
+        rawCanvasGroupShortcut,
       ] =
         await Promise.all([
           fileStorage.get<Record<string, unknown>>({
@@ -216,6 +237,30 @@ export const globalActions = {
           fileStorage.get<unknown>({
             key: 'toggleWindowShortcut',
             fallback: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
+          }),
+          fileStorage.get<unknown>({
+            key: 'canvasOpacity',
+            fallback: 1,
+          }),
+          fileStorage.get<unknown>({
+            key: 'mouseThrough',
+            fallback: false,
+          }),
+          fileStorage.get<unknown>({
+            key: 'canvasOpacityUpShortcut',
+            fallback: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
+          }),
+          fileStorage.get<unknown>({
+            key: 'canvasOpacityDownShortcut',
+            fallback: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
+          }),
+          fileStorage.get<unknown>({
+            key: 'toggleMouseThroughShortcut',
+            fallback: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+          }),
+          fileStorage.get<unknown>({
+            key: 'canvasGroupShortcut',
+            fallback: DEFAULT_CANVAS_GROUP_SHORTCUT,
           }),
         ]);
 
@@ -254,6 +299,30 @@ export const globalActions = {
 
       if (typeof rawToggleWindowShortcut === 'string' && rawToggleWindowShortcut.trim()) {
         globalState.toggleWindowShortcut = rawToggleWindowShortcut.trim();
+      }
+
+      if (typeof rawCanvasOpacity === 'number') {
+        globalState.canvasOpacity = rawCanvasOpacity;
+      }
+
+      if (typeof rawMouseThrough === 'boolean') {
+        globalState.mouseThrough = rawMouseThrough;
+      }
+
+      if (typeof rawCanvasOpacityUpShortcut === 'string' && rawCanvasOpacityUpShortcut.trim()) {
+        globalState.canvasOpacityUpShortcut = rawCanvasOpacityUpShortcut.trim();
+      }
+
+      if (typeof rawCanvasOpacityDownShortcut === 'string' && rawCanvasOpacityDownShortcut.trim()) {
+        globalState.canvasOpacityDownShortcut = rawCanvasOpacityDownShortcut.trim();
+      }
+
+      if (typeof rawToggleMouseThroughShortcut === 'string' && rawToggleMouseThroughShortcut.trim()) {
+        globalState.toggleMouseThroughShortcut = rawToggleMouseThroughShortcut.trim();
+      }
+
+      if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
+        globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
       }
     } catch (error) {
       console.error('Failed to hydrate settings:', error);
@@ -339,6 +408,98 @@ export const globalActions = {
     if (res && res.success !== true) {
       globalState.toggleWindowShortcut = prev;
       await fileStorage.set('toggleWindowShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
+    return true;
+  },
+
+  setCanvasOpacity: (opacity: number) => {
+    const val = Math.max(0.1, Math.min(1, opacity));
+    globalState.canvasOpacity = val;
+    void fileStorage.set('canvasOpacity', val);
+  },
+
+  setMouseThrough: (enabled: boolean) => {
+    globalState.mouseThrough = enabled;
+    void fileStorage.set('mouseThrough', enabled);
+    window.electron?.setMouseThrough?.(enabled);
+  },
+
+  setCanvasOpacityUpShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    const prev = globalState.canvasOpacityUpShortcut;
+    globalState.canvasOpacityUpShortcut = next;
+    await fileStorage.set('canvasOpacityUpShortcut', next);
+
+    const res = await window.electron?.setCanvasOpacityUpShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.canvasOpacityUpShortcut = prev;
+      await fileStorage.set('canvasOpacityUpShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
+    return true;
+  },
+
+  setCanvasOpacityDownShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    const prev = globalState.canvasOpacityDownShortcut;
+    globalState.canvasOpacityDownShortcut = next;
+    await fileStorage.set('canvasOpacityDownShortcut', next);
+
+    const res = await window.electron?.setCanvasOpacityDownShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.canvasOpacityDownShortcut = prev;
+      await fileStorage.set('canvasOpacityDownShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
+    return true;
+  },
+
+  setToggleMouseThroughShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    const prev = globalState.toggleMouseThroughShortcut;
+    globalState.toggleMouseThroughShortcut = next;
+    await fileStorage.set('toggleMouseThroughShortcut', next);
+
+    const res = await window.electron?.setToggleMouseThroughShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.toggleMouseThroughShortcut = prev;
+      await fileStorage.set('toggleMouseThroughShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
+    return true;
+  },
+
+  setCanvasGroupShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    const prev = globalState.canvasGroupShortcut;
+    globalState.canvasGroupShortcut = next;
+    await fileStorage.set('canvasGroupShortcut', next);
+
+    const res = await window.electron?.setCanvasGroupShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.canvasGroupShortcut = prev;
+      await fileStorage.set('canvasGroupShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',

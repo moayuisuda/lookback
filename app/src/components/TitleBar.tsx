@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Minus, Square, X, Pin, Settings, Plus, Trash2, Edit2, Check } from 'lucide-react';
+import { Minus, Square, X, Pin, Settings, Plus, Trash2, Edit2, Check, ChevronDown } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   globalActions,
@@ -35,6 +35,7 @@ export const TitleBar: React.FC = () => {
   const modelSnap = useSnapshot(modelProgressState);
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
   const [storageDir, setStorageDir] = useState('');
   const [loadingStorageDir, setLoadingStorageDir] = useState(false);
   const [updatingStorageDir, setUpdatingStorageDir] = useState(false);
@@ -63,9 +64,14 @@ export const TitleBar: React.FC = () => {
     if (settingsOpen) {
       void loadStorageDir();
       void loadSettings();
-      void refreshCanvases();
     }
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (canvasMenuOpen) {
+      void refreshCanvases();
+    }
+  }, [canvasMenuOpen]);
 
   const handleCreateCanvas = async () => {
       if (!newCanvasName.trim()) return;
@@ -416,6 +422,11 @@ export const TitleBar: React.FC = () => {
     window.electron?.setPinTransparent?.(next);
   };
 
+  const handleToggleMouseThrough = () => {
+    const next = !snap.mouseThrough;
+    globalActions.setMouseThrough(next);
+  };
+
   const handleShortcutInvalid = () => {
     globalActions.pushToast({ key: 'toast.shortcutInvalid' }, 'error');
   };
@@ -424,7 +435,43 @@ export const TitleBar: React.FC = () => {
     await globalActions.setToggleWindowShortcut(accelerator);
   };
 
+  const handleSetCanvasOpacityUpShortcut = async (accelerator: string) => {
+    await globalActions.setCanvasOpacityUpShortcut(accelerator);
+  };
+
+  const handleSetCanvasOpacityDownShortcut = async (accelerator: string) => {
+    await globalActions.setCanvasOpacityDownShortcut(accelerator);
+  };
+
+  const handleSetToggleMouseThroughShortcut = async (accelerator: string) => {
+    await globalActions.setToggleMouseThroughShortcut(accelerator);
+  };
+
+  const handleSetCanvasGroupShortcut = async (accelerator: string) => {
+    await globalActions.setCanvasGroupShortcut(accelerator);
+  };
+
+  useEffect(() => {
+    const cleanup = window.electron?.onRendererEvent?.((event: string) => {
+      if (event === 'canvas-opacity-up') {
+        globalActions.setCanvasOpacity(globalState.canvasOpacity + 0.1);
+      } else if (event === 'canvas-opacity-down') {
+        globalActions.setCanvasOpacity(globalState.canvasOpacity - 0.1);
+      } else if (event === 'toggle-mouse-through') {
+        if (globalState.pinMode) {
+          globalActions.setMouseThrough(!globalState.mouseThrough);
+        }
+      }
+    });
+    return cleanup;
+  }, []);
+
   const [localThreshold, setLocalThreshold] = useState<number | null>(null);
+
+  const handleCanvasOpacityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    globalActions.setCanvasOpacity(val);
+  };
 
   const handleVectorSearchThresholdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
@@ -465,6 +512,117 @@ export const TitleBar: React.FC = () => {
       </div>
       
       <div className="flex items-center gap-1 no-drag">
+        <div className="relative">
+             <button
+                onClick={() => setCanvasMenuOpen(!canvasMenuOpen)}
+                className={clsx(
+                  "flex items-center gap-1 px-2 py-1 hover:bg-neutral-800 rounded transition-colors max-w-[160px]",
+                  canvasMenuOpen && "bg-neutral-800"
+                )}
+                title={t('settings.canvas')}
+            >
+                <span className="truncate text-[10px] text-neutral-300 font-medium">
+                  {canvasSnap.currentCanvasName || t('common.notSet')}
+                </span>
+                <ChevronDown size={10} className="text-neutral-500 shrink-0" />
+            </button>
+            
+            {canvasMenuOpen && (
+                <div className="absolute right-0 top-8 mt-1 w-64 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag z-[110]">
+                     <div className="space-y-1">
+            <div className="text-[11px] text-neutral-400 flex justify-between items-center">
+                <span>{t('settings.canvas')}</span>
+                <button 
+                    onClick={() => setIsCreatingCanvas(true)}
+                    className="p-1 hover:bg-neutral-800 rounded"
+                    title={t('settings.canvas.create')}
+                >
+                    <Plus size={12} />
+                </button>
+            </div>
+            
+            {isCreatingCanvas && (
+                <div className="flex gap-1 mb-2">
+                    <input 
+                        className="flex-1 bg-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-700 outline-none focus:border-blue-500"
+                        value={newCanvasName}
+                        onChange={e => setNewCanvasName(e.target.value)}
+                        placeholder={t('settings.canvas.placeholder')}
+                        onKeyDown={e => e.key === 'Enter' && handleCreateCanvas()}
+                        autoFocus
+                    />
+                    <button onClick={handleCreateCanvas} className="p-1 hover:bg-neutral-700 rounded text-green-500">
+                        <Check size={12} />
+                    </button>
+                    <button onClick={() => setIsCreatingCanvas(false)} className="p-1 hover:bg-neutral-700 rounded text-neutral-400">
+                        <X size={12} />
+                    </button>
+                </div>
+            )}
+
+            <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                {canvases.map(c => (
+                    <div key={c.name} 
+                        className={clsx(
+                            "flex items-center justify-between p-1 rounded group",
+                            canvasSnap.currentCanvasName === c.name ? "bg-neutral-800" : "hover:bg-neutral-800/50 text-neutral-300"
+                        )}
+                        style={{ color: canvasSnap.currentCanvasName === c.name ? THEME.primary : undefined }}
+                    >
+                        {editingCanvas === c.name ? (
+                            <div className="flex flex-1 gap-1 items-center">
+                                <input 
+                                    className="flex-1 bg-neutral-900 text-[10px] px-1 rounded border border-neutral-700 outline-none"
+                                    value={editingName}
+                                    onChange={e => setEditingName(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && handleRenameCanvas()}
+                                    autoFocus
+                                    onClick={e => e.stopPropagation()}
+                                />
+                                <button onClick={handleRenameCanvas} className="text-green-500 hover:text-green-400">
+                                    <Check size={10} />
+                                </button>
+                                <button onClick={() => setEditingCanvas(null)} className="text-neutral-500 hover:text-neutral-400">
+                                    <X size={10} />
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                <div 
+                                    className="flex-1 truncate text-[10px] cursor-pointer"
+                                    onClick={() => { handleSwitchCanvas(c.name); setCanvasMenuOpen(false); }}
+                                >
+                                    {c.name}
+                                </div>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); setEditingCanvas(c.name); setEditingName(c.name); }}
+                                        className="p-0.5 hover:text-white text-neutral-500"
+                                        title={t('settings.canvas.rename')}
+                                    >
+                                        <Edit2 size={10} />
+                                    </button>
+                                    {canvases.length > 1 && (
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); handleDeleteCanvas(c.name); }}
+                                            className="p-0.5 hover:text-red-400 text-neutral-500"
+                                            title={t('settings.canvas.deleteConfirm')}
+                                        >
+                                            <Trash2 size={10} />
+                                        </button>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </div>
+                ))}
+            </div>
+          </div>
+                </div>
+            )}
+        </div>
+        
+        <div className="w-px h-4 bg-neutral-700 mx-1" />
         <button
           onClick={handleToggleSettings}
           className={clsx(
@@ -499,100 +657,13 @@ export const TitleBar: React.FC = () => {
       </div>
 
       {settingsOpen && (
-        <div className="absolute right-2 top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag">
-          <div className="font-semibold mb-2">{t('titleBar.settings')}</div>
-          
-          <div className="mb-3 space-y-1">
-            <div className="text-[11px] text-neutral-400 flex justify-between items-center">
-                <span>{t('settings.canvas')}</span>
-                <button 
-                    onClick={() => setIsCreatingCanvas(true)}
-                    className="p-1 hover:bg-neutral-800 rounded"
-                    title={t('settings.canvas.create')}
-                >
-                    <Plus size={12} />
-                </button>
-            </div>
-            
-            {isCreatingCanvas && (
-                <div className="flex gap-1 mb-2">
-                    <input 
-                        className="flex-1 bg-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-700 outline-none focus:border-blue-500"
-                        value={newCanvasName}
-                        onChange={e => setNewCanvasName(e.target.value)}
-                        placeholder={t('settings.canvas.placeholder')}
-                        onKeyDown={e => e.key === 'Enter' && handleCreateCanvas()}
-                        autoFocus
-                    />
-                    <button onClick={handleCreateCanvas} className="p-1 hover:bg-neutral-700 rounded text-green-500">
-                        <Check size={12} />
-                    </button>
-                    <button onClick={() => setIsCreatingCanvas(false)} className="p-1 hover:bg-neutral-700 rounded text-neutral-400">
-                        <X size={12} />
-                    </button>
-                </div>
-            )}
+        <div className="absolute right-2 top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag flex flex-col gap-3 max-h-[85vh] overflow-y-auto custom-scrollbar">
+          <div className="font-semibold px-1">{t('titleBar.settings')}</div>
 
-            <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
-                {canvases.map(c => (
-                    <div key={c.name} className={clsx(
-                        "flex items-center justify-between p-1 rounded group",
-                        canvasSnap.currentCanvasName === c.name ? "bg-neutral-800 text-blue-400" : "hover:bg-neutral-800/50 text-neutral-300"
-                    )}>
-                        {editingCanvas === c.name ? (
-                            <div className="flex flex-1 gap-1 items-center">
-                                <input 
-                                    className="flex-1 bg-neutral-900 text-[10px] px-1 rounded border border-neutral-700 outline-none"
-                                    value={editingName}
-                                    onChange={e => setEditingName(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && handleRenameCanvas()}
-                                    autoFocus
-                                    onClick={e => e.stopPropagation()}
-                                />
-                                <button onClick={handleRenameCanvas} className="text-green-500 hover:text-green-400">
-                                    <Check size={10} />
-                                </button>
-                                <button onClick={() => setEditingCanvas(null)} className="text-neutral-500 hover:text-neutral-400">
-                                    <X size={10} />
-                                </button>
-                            </div>
-                        ) : (
-                            <>
-                                <div 
-                                    className="flex-1 truncate text-[10px] cursor-pointer"
-                                    onClick={() => handleSwitchCanvas(c.name)}
-                                >
-                                    {c.name}
-                                </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); setEditingCanvas(c.name); setEditingName(c.name); }}
-                                        className="p-0.5 hover:text-white text-neutral-500"
-                                        title={t('settings.canvas.rename')}
-                                    >
-                                        <Edit2 size={10} />
-                                    </button>
-                                    {canvases.length > 1 && (
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); handleDeleteCanvas(c.name); }}
-                                            className="p-0.5 hover:text-red-400 text-neutral-500"
-                                            title={t('settings.canvas.deleteConfirm')}
-                                        >
-                                            <Trash2 size={10} />
-                                        </button>
-                                    )}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                ))}
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-[11px] text-neutral-400">{t('titleBar.dataFolder')}</div>
+          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
+            <div className="text-[11px] text-neutral-400 mb-1">{t('titleBar.dataFolder')}</div>
             <div className="flex items-center gap-2">
-              <div className="flex-1 truncate text-[10px] text-neutral-300">
+              <div className="flex-1 truncate text-[10px] text-neutral-300" title={storageDir || t('titleBar.dataFolder.default')}>
                 {loadingStorageDir
                   ? t('common.loading')
                   : storageDir || t('titleBar.dataFolder.default')}
@@ -600,23 +671,24 @@ export const TitleBar: React.FC = () => {
               <button
                 onClick={handleChangeStorageDir}
                 disabled={updatingStorageDir}
-                className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60"
+                className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 border border-neutral-700 transition-colors"
               >
                 {t('titleBar.change')}
               </button>
             </div>
           </div>
-          <div className="mt-3 space-y-1">
-            <div className="text-[11px] text-neutral-400">{t('common.language')}</div>
+
+          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
+            <div className="text-[11px] text-neutral-400 mb-1">{t('common.language')}</div>
             <div className="flex gap-1">
               <button
                 type="button"
                 onClick={() => setLocale('en')}
                 className={clsx(
-                  'px-2 py-0.5 rounded text-[10px] transition-colors',
+                  'flex-1 py-1 rounded text-[10px] transition-colors border',
                   locale === 'en'
-                    ? 'bg-neutral-700 text-white'
-                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200',
+                    ? 'bg-neutral-700 text-white border-neutral-600'
+                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700',
                 )}
               >
                 {t('common.language.en')}
@@ -625,17 +697,18 @@ export const TitleBar: React.FC = () => {
                 type="button"
                 onClick={() => setLocale('zh')}
                 className={clsx(
-                  'px-2 py-0.5 rounded text-[10px] transition-colors',
+                  'flex-1 py-1 rounded text-[10px] transition-colors border',
                   locale === 'zh'
-                    ? 'bg-neutral-700 text-white'
-                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200',
+                    ? 'bg-neutral-700 text-white border-neutral-600'
+                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700',
                 )}
               >
                 {t('common.language.zh')}
               </button>
             </div>
           </div>
-          <div className="mt-3 space-y-1">
+
+          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
             <div className="text-[11px] text-neutral-400">{t('titleBar.window')}</div>
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-neutral-300">
@@ -646,37 +719,42 @@ export const TitleBar: React.FC = () => {
                 onToggle={handleTogglePinTransparent}
               />
             </div>
-          </div>
-          <div className="mt-3 space-y-1">
-            <div className="text-[11px] text-neutral-400">{t('titleBar.shortcuts')}</div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] text-neutral-300">
-                {t('titleBar.toggleWindowVisibility')}
-              </span>
-              <div className="flex items-center gap-1">
-                <ShortcutInput
-                  value={snap.toggleWindowShortcut}
-                  onChange={(accel) => void handleSetToggleWindowShortcut(accel)}
-                  onInvalid={handleShortcutInvalid}
+            {snap.pinMode && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-neutral-300">
+                  {t('titleBar.mouseThrough')}
+                </span>
+                <ToggleSwitch
+                  checked={snap.mouseThrough}
+                  onToggle={handleToggleMouseThrough}
                 />
-                <button
-                  type="button"
-                  className="h-6 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-200 transition-colors"
-                  onClick={() => {
-                    const isMac =
-                      typeof navigator !== 'undefined' &&
-                      /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
-                    const fallback = isMac ? 'Command+L' : 'Ctrl+L';
-                    void handleSetToggleWindowShortcut(fallback);
-                  }}
-                  title={t('common.reset')}
-                >
-                  {t('common.reset')}
-                </button>
               </div>
+            )}
+            <div className="flex flex-col gap-1 pt-1 border-t border-neutral-800/50">
+                <div className="flex justify-between text-[10px]">
+                  <span>{t('titleBar.canvasOpacity')}</span>
+                  <span>{snap.canvasOpacity.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.1"
+                  value={snap.canvasOpacity}
+                  onChange={handleCanvasOpacityChange}
+                  style={{
+                      '--thumb-color': THEME.primary,
+                  } as React.CSSProperties}
+                  className={clsx(
+                    "w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer",
+                    "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full",
+                    "[&::-webkit-slider-thumb]:bg-[var(--thumb-color)]"
+                  )}
+                />
             </div>
           </div>
-          <div className="mt-3 space-y-1">
+
+          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
             <div className="text-[11px] text-neutral-400">{t('titleBar.index')}</div>
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-neutral-300">
@@ -689,7 +767,7 @@ export const TitleBar: React.FC = () => {
               />
             </div>
             {enableVectorSearch && (
-              <div className="flex flex-col gap-1 mt-2">
+              <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-[10px]">
                   <span>{t('titleBar.threshold')}</span>
                   <span>{(localThreshold ?? snap.vectorSearchThreshold).toFixed(2)}</span>
@@ -703,78 +781,165 @@ export const TitleBar: React.FC = () => {
                   onChange={handleVectorSearchThresholdChange}
                   onMouseUp={handleVectorSearchThresholdCommit}
                   onTouchEnd={handleVectorSearchThresholdCommit}
-                  className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-blue-400"
+                  style={{
+                      '--thumb-color': THEME.primary,
+                  } as React.CSSProperties}
+                  className={clsx(
+                    "w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer",
+                    "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full",
+                    "[&::-webkit-slider-thumb]:bg-[var(--thumb-color)]"
+                  )}
                 />
               </div>
             )}
-            {modelSnap.isDownloading && (
-              <div className="mt-2 pt-2 border-t border-neutral-700">
-                <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                  <span>
-                    {modelSnap.statusKey
-                      ? t(modelSnap.statusKey, modelSnap.statusParams)
-                      : t('model.downloading')}
-                  </span>
-                  <span>
-                    {modelSnap.total > 0
-                      ? `${Math.round((modelSnap.current / modelSnap.total) * 100)}%`
-                      : ''}
-                  </span>
-                </div>
-                {modelSnap.filename && (
-                  <div className="text-[9px] text-neutral-500 truncate mb-1">
-                    {modelSnap.filename}
-                  </div>
-                )}
-                <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300"
-                    style={{
-                      width:
-                        modelSnap.total > 0
-                          ? `${(modelSnap.current / modelSnap.total) * 100}%`
-                          : '0%',
-                    }}
-                  />
-                </div>
-              </div>
+            
+            {(modelSnap.isDownloading || indexingSnap.isIndexing) && (
+                 <div className="pt-2 border-t border-neutral-800/50 space-y-2">
+                    {modelSnap.isDownloading && (
+                      <div>
+                        <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
+                          <span>
+                            {modelSnap.statusKey
+                              ? t(modelSnap.statusKey, modelSnap.statusParams)
+                              : t('model.downloading')}
+                          </span>
+                          <span>
+                            {modelSnap.total > 0
+                              ? `${Math.round((modelSnap.current / modelSnap.total) * 100)}%`
+                              : ''}
+                          </span>
+                        </div>
+                        {modelSnap.filename && (
+                          <div className="text-[9px] text-neutral-500 truncate mb-1">
+                            {modelSnap.filename}
+                          </div>
+                        )}
+                        <div className="h-1 bg-neutral-800 rounded overflow-hidden">
+                          <div
+                            className="h-full bg-blue-600 transition-all duration-300"
+                            style={{
+                              width:
+                                modelSnap.total > 0
+                                  ? `${(modelSnap.current / modelSnap.total) * 100}%`
+                                  : '0%',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {indexingSnap.isIndexing && (
+                        <div>
+                           <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
+                             <span>
+                               {indexingSnap.statusKey
+                                 ? t(indexingSnap.statusKey, indexingSnap.statusParams)
+                                 : t('titleBar.processing')}
+                             </span>
+                             <span>{indexingSnap.total > 0 ? `${Math.round((indexingSnap.current / indexingSnap.total) * 100)}%` : ''}</span>
+                           </div>
+                           {indexingSnap.filename && (
+                             <div className="text-[9px] text-neutral-500 truncate mb-1">
+                               {indexingSnap.filename}
+                             </div>
+                           )}
+                           <div className="h-1 bg-neutral-800 rounded overflow-hidden">
+                             <div 
+                               className="h-full bg-blue-600 transition-all duration-300"
+                               style={{ 
+                                 width: indexingSnap.total > 0 
+                                   ? `${(indexingSnap.current / indexingSnap.total) * 100}%` 
+                                   : '0%'
+                               }} 
+                             />
+                           </div>
+                        </div>
+                    )}
+                 </div>
             )}
+            
             <button
                 onClick={handleIndexMissing}
                 disabled={indexing}
-                className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 w-full text-center mt-1"
+                className="w-full px-2 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 text-center border border-neutral-700 transition-colors"
               >
                 {indexing ? t('titleBar.indexing') : t('titleBar.indexUnindexedImages')}
-              </button>
+            </button>
+          </div>
 
-              {indexingSnap.isIndexing && (
-                <div className="mt-2 pt-2 border-t border-neutral-700">
-                   <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                     <span>
-                       {indexingSnap.statusKey
-                         ? t(indexingSnap.statusKey, indexingSnap.statusParams)
-                         : t('titleBar.processing')}
-                     </span>
-                     <span>{indexingSnap.total > 0 ? `${Math.round((indexingSnap.current / indexingSnap.total) * 100)}%` : ''}</span>
-                   </div>
-                   {indexingSnap.filename && (
-                     <div className="text-[9px] text-neutral-500 truncate mb-1">
-                       {indexingSnap.filename}
-                     </div>
-                   )}
-                   <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                     <div 
-                       className="h-full bg-blue-600 transition-all duration-300"
-                       style={{ 
-                         width: indexingSnap.total > 0 
-                           ? `${(indexingSnap.current / indexingSnap.total) * 100}%` 
-                           : '0%'
-                       }} 
-                     />
-                   </div>
+          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
+            <div className="text-[11px] text-neutral-400">{t('titleBar.shortcuts')}</div>
+            <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t('titleBar.toggleWindowVisibility')}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <ShortcutInput
+                      value={snap.toggleWindowShortcut}
+                      onChange={(accel) => void handleSetToggleWindowShortcut(accel)}
+                      onInvalid={handleShortcutInvalid}
+                    />
+                    <button
+                      type="button"
+                      className="h-6 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-200 transition-colors border border-neutral-700"
+                      onClick={() => {
+                        const isMac =
+                          typeof navigator !== 'undefined' &&
+                          /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
+                        const fallback = isMac ? 'Command+L' : 'Ctrl+L';
+                        void handleSetToggleWindowShortcut(fallback);
+                      }}
+                      title={t('common.reset')}
+                    >
+                      {t('common.reset')}
+                    </button>
+                  </div>
                 </div>
-              )}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t('titleBar.canvasOpacityUp')}
+                  </span>
+                  <ShortcutInput
+                      value={snap.canvasOpacityUpShortcut}
+                      onChange={(accel) => void handleSetCanvasOpacityUpShortcut(accel)}
+                      onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t('titleBar.canvasOpacityDown')}
+                  </span>
+                  <ShortcutInput
+                      value={snap.canvasOpacityDownShortcut}
+                      onChange={(accel) => void handleSetCanvasOpacityDownShortcut(accel)}
+                      onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t('titleBar.canvasGroup')}
+                  </span>
+                  <ShortcutInput
+                      value={snap.canvasGroupShortcut}
+                      onChange={(accel) => void handleSetCanvasGroupShortcut(accel)}
+                      onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                {snap.pinMode && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-neutral-300">
+                      {t('titleBar.toggleMouseThrough')}
+                    </span>
+                    <ShortcutInput
+                        value={snap.toggleMouseThroughShortcut}
+                        onChange={(accel) => void handleSetToggleMouseThroughShortcut(accel)}
+                        onInvalid={handleShortcutInvalid}
+                    />
+                  </div>
+                )}
             </div>
+          </div>
         </div>
       )}
     </div>

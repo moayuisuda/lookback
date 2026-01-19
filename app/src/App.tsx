@@ -202,7 +202,10 @@ function App() {
           })}
         </div>
       )}
-      <div className="flex flex-1 overflow-hidden">
+      <div 
+        className="flex flex-1 overflow-hidden"
+        style={{ opacity: globalSnap.canvasOpacity }}
+      >
         {!globalSnap.pinMode && (
           <>
             <Gallery />

@@ -50,6 +50,7 @@ export const SERVER_PORT = 30001;
 const CONFIG_FILE = path.join(app.getPath("userData"), "lookback_config.json");
 
 const loadStorageRoot = (): string => {
+  // 1. Try reading from config file in userData
   try {
     if (fs.pathExistsSync(CONFIG_FILE)) {
       const raw = fs.readJsonSync(CONFIG_FILE) as { storageDir?: string };
@@ -60,6 +61,37 @@ const loadStorageRoot = (): string => {
   } catch {
     // ignore and fallback
   }
+
+  // 2. Check if we are packaged and if the installation directory is writable
+  // If so, default to using a "data" folder next to the executable
+  // Skip on macOS to avoid modifying signed app bundles
+  if (app.isPackaged && process.platform !== "darwin") {
+    try {
+      const exeDir = path.dirname(app.getPath("exe"));
+      const portableDataDir = path.join(exeDir, "data");
+      
+      // If it already exists, use it
+      if (fs.existsSync(portableDataDir)) {
+        return portableDataDir;
+      }
+
+      // If not, check if we can write to the exe directory
+      // We try to write a temporary file
+      const testFile = path.join(exeDir, ".write_test");
+      try {
+        fs.writeFileSync(testFile, "test");
+        fs.removeSync(testFile);
+        // Writable! Use the portable path
+        return portableDataDir;
+      } catch {
+        // Not writable, fallback to userData
+      }
+    } catch {
+      // Ignore errors during detection
+    }
+  }
+
+  // 3. Fallback to default userData storage
   return path.join(app.getPath("userData"), "lookback_storage");
 };
 

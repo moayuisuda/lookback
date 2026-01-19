@@ -10,6 +10,17 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   setPinTransparent: (enabled) => import_electron.ipcRenderer.send("set-pin-transparent", enabled),
   resizeWindowBy: (delta) => import_electron.ipcRenderer.send("resize-window-by", delta),
   setToggleWindowShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-window-shortcut", accelerator),
+  setCanvasOpacityUpShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-up-shortcut", accelerator),
+  setCanvasOpacityDownShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-down-shortcut", accelerator),
+  setToggleMouseThroughShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-mouse-through-shortcut", accelerator),
+  setCanvasGroupShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-group-shortcut", accelerator),
+  setMouseThrough: (enabled) => import_electron.ipcRenderer.send("set-mouse-through", enabled),
+  setIgnoreMouseEvents: (ignore, options) => import_electron.ipcRenderer.send("set-ignore-mouse-events", ignore, options),
+  onRendererEvent: (callback) => {
+    const handler = (_, event, ...args) => callback(event, ...args);
+    import_electron.ipcRenderer.on("renderer-event", handler);
+    return () => import_electron.ipcRenderer.off("renderer-event", handler);
+  },
   setSettingsOpen: (open) => import_electron.ipcRenderer.send("settings-open-changed", open),
   getStorageDir: () => import_electron.ipcRenderer.invoke("get-storage-dir"),
   chooseStorageDir: () => import_electron.ipcRenderer.invoke("choose-storage-dir"),
