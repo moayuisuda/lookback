@@ -1,4 +1,5 @@
 export const OPEN_TAG_COLOR_PICKER = "open-tag-color-picker" as const;
+export const CANVAS_AUTO_LAYOUT = "canvas-auto-layout" as const;
 
 export type OpenTagColorPickerDetail = {
   tag: string;
@@ -37,4 +38,3 @@ export const onOpenTagColorPicker = (
   window.addEventListener(OPEN_TAG_COLOR_PICKER, listener);
   return () => window.removeEventListener(OPEN_TAG_COLOR_PICKER, listener);
 };
-

@@ -60,24 +60,22 @@ export const FilterSelector: React.FC<FilterSelectorProps> = ({
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={clsx(
-          "flex items-center gap-1 px-2 py-1.5 rounded-md transition-colors text-xs font-medium border border-neutral-700 shadow-sm",
-          activeFilters.length > 0
-            ? "bg-(--brand-color-weak) text-(--brand-color) border-(--brand-color)"
-            : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700 hover:text-white"
+          "glass-btn w-full",
+          activeFilters.length > 0 && "glass-btn--active"
         )}
         title={t("canvas.toolbar.filters")}
       >
         <span>{t("canvas.toolbar.filters")}</span>
         {activeFilters.length > 0 && (
-          <span className="bg-(--brand-color-strong) text-(--brand-color) text-[9px] px-1 rounded-full">
+          <span className="bg-(--brand-color-strong) text-(--brand-color) text-[9px] px-1.5 py-0.5 rounded-full font-bold">
             {activeFilters.length}
           </span>
         )}
-        <ChevronDown size={12} />
+        <ChevronDown size={12} className={clsx("transition-transform duration-200", isOpen && "rotate-180")} />
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1 w-40 bg-neutral-900 border border-neutral-700 rounded-md shadow-lg py-1 z-50">
+        <div className="absolute top-full left-0 mt-2 w-48 bg-neutral-900/90 border border-neutral-700/80 rounded-lg shadow-xl py-1.5 z-50 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-200">
           {AVAILABLE_FILTERS.map((filter) => (
             <button
               key={filter.id}

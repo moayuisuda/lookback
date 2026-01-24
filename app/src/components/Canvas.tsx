@@ -5,13 +5,14 @@ import { Stage, Layer } from "react-konva";
 import {
   actions as galleryActions,
   type ImageMeta,
-  type CanvasImage as CanvasImageState,
 } from "../store/galleryStore";
 import {
   canvasState,
   canvasActions,
   getRenderBbox,
+  type CanvasImage as CanvasImageState,
 } from "../store/canvasStore";
+import { anchorActions } from "../store/anchorStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot } from "valtio";
 import Konva from "konva";
@@ -27,55 +28,37 @@ import { SelectionRect, type SelectionBoxState } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
 import { createTempMetasFromFiles } from "../utils/import";
 import { THEME } from "../theme";
-
-const acceleratorToHotkey = (accelerator: string): string | null => {
-  const raw = accelerator.trim();
-  if (!raw) return null;
-  const parts = raw
-    .split("+")
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (parts.length === 0) return null;
-  const mainKey = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1);
-  const keys: string[] = [];
-  modifiers.forEach((m) => {
-    const lower = m.toLowerCase();
-    if (
-      lower === "command" ||
-      lower === "cmd" ||
-      lower === "ctrl" ||
-      lower === "control"
-    ) {
-      if (!keys.includes("mod")) keys.push("mod");
-    } else if (lower === "shift") {
-      keys.push("shift");
-    } else if (lower === "alt" || lower === "option") {
-      keys.push("alt");
-    }
-  });
-  const main = mainKey.toLowerCase();
-  if (!main) return null;
-  keys.push(main);
-  return keys.join("+");
-};
+import { CANVAS_AUTO_LAYOUT } from "../events/uiEvents";
 
 export const Canvas: React.FC = () => {
   const appSnap = useSnapshot(globalState);
   const canvasSnap = useSnapshot(canvasState);
+  const {
+    selectedIds,
+    primaryId,
+    autoEditId,
+    isClearModalOpen,
+    dimensions,
+    isSpaceDown,
+    canvasViewport,
+    multiSelectUnion,
+    selectionBox,
+    canvasItems,
+    canvasFilters,
+    showMinimap,
+    isCanvasToolbarExpanded,
+    canvasGrayscale,
+  } = canvasSnap;
+
   const { t } = useT();
   const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
-  const selectedIds = canvasSnap.selectedIds;
-  const primaryId = canvasSnap.primaryId;
-  const autoEditId = canvasSnap.autoEditId;
-  const isClearModalOpen = canvasSnap.isClearModalOpen;
+
   const selectedIdsRef = useRef<Set<string>>(new Set());
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const dimensions = canvasSnap.dimensions;
-  const isSpaceDown = canvasSnap.isSpaceDown;
-  const stageScale = canvasSnap.canvasViewport.scale || 1;
-  const multiSelectUnion = canvasSnap.multiSelectUnion;
+
+  const stageScale = canvasViewport.scale || 1;
+
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
   const debouncedCommit = useMemo(
@@ -120,10 +103,6 @@ export const Canvas: React.FC = () => {
   const isMouseOverCanvasRef = useRef(false);
   const isIgnoringMouseRef = useRef(false);
 
-  const stageViewportInitializedRef = useRef(false);
-
-  const selectionBox: SelectionBoxState = canvasSnap.selectionBox;
-
   const setSelectedIds = (ids: Set<string>) => {
     canvasState.selectedIds = ids;
   };
@@ -151,6 +130,10 @@ export const Canvas: React.FC = () => {
   const setIsSpaceDown = (value: boolean) => {
     canvasState.isSpaceDown = value;
   };
+
+  useEffect(() => {
+    canvasActions.initCanvas();
+  }, []);
 
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
@@ -249,23 +232,7 @@ export const Canvas: React.FC = () => {
     };
   }, [appSnap.pinMode, appSnap.sidebarWidth]);
 
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    const viewport = canvasSnap.canvasViewport;
-    if (!viewport) return;
-    const isDefault =
-      viewport.x === 0 &&
-      viewport.y === 0 &&
-      viewport.width === 0 &&
-      viewport.height === 0 &&
-      viewport.scale === 1;
-    if (isDefault) return;
-    if (stageViewportInitializedRef.current) return;
-    stage.position({ x: viewport.x, y: viewport.y });
-    stage.scale({ x: viewport.scale, y: viewport.scale });
-    stageViewportInitializedRef.current = true;
-  }, [canvasSnap.canvasViewport]);
+
 
   useEffect(() => {
     const handleDropRequest = (e: Event) => {
@@ -414,7 +381,6 @@ export const Canvas: React.FC = () => {
     const stage = stageRef.current;
     if (!stage) return;
 
-    // 如果有选中内容，以选中内容的中心为基准进行元素缩放
     if (selectedIds.size > 0) {
       let minX = Infinity;
       let minY = Infinity;
@@ -425,7 +391,7 @@ export const Canvas: React.FC = () => {
         item: (typeof items)[0];
       }[] = [];
 
-      const items = canvasSnap.canvasItems || [];
+      const items = canvasItems || [];
       items.forEach((item) => {
         if (selectedIds.has(item.canvasId)) {
           const scale = item.scale || 1;
@@ -492,14 +458,14 @@ export const Canvas: React.FC = () => {
       return;
     }
 
-    const scaleBy = 1.1;
-    const oldScale = stage.scaleX();
+    const scaleBy = 1.05;
+    const oldScale = canvasViewport.scale;
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
 
     const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
+      x: (pointer.x - canvasViewport.x) / oldScale,
+      y: (pointer.y - canvasViewport.y) / oldScale,
     };
 
     const newScale = e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
@@ -508,8 +474,7 @@ export const Canvas: React.FC = () => {
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * newScale,
     };
-    stage.scale({ x: newScale, y: newScale });
-    stage.position(newPos);
+    
     canvasActions.setCanvasViewport({
       x: newPos.x,
       y: newPos.y,
@@ -560,6 +525,26 @@ export const Canvas: React.FC = () => {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron?.onRendererEvent?.(
+      (event: string, ...args: unknown[]) => {
+        if (event === "restore-anchor") {
+          const slot = args[0] as string;
+          if (slot) {
+            anchorActions.restoreAnchor(slot);
+          }
+        } else if (event === "save-anchor") {
+          const slot = args[0] as string;
+          if (slot) {
+            anchorActions.saveAnchor(slot);
+            globalActions.pushToast({ key: "canvas.anchor.saved" }, "success");
+          }
+        }
+      },
+    );
+    return cleanup;
   }, []);
 
   const handleMouseDown = (
@@ -667,14 +652,19 @@ export const Canvas: React.FC = () => {
 
       const dx = currentPoint.x - last.x;
       const dy = currentPoint.y - last.y;
-      const nextPos = { x: stage.x() + dx, y: stage.y() + dy };
-      stage.position(nextPos);
+      // We need to calculate based on the current viewport state in store
+      // because stage.x() might not be updated yet in React render cycle
+      // However, for smooth dragging, we usually rely on event deltas.
+      // Since we are now controlled, we should base on canvasViewport.
+      
+      const nextPos = { x: canvasViewport.x + dx, y: canvasViewport.y + dy };
+      
       canvasActions.setCanvasViewport({
         x: nextPos.x,
         y: nextPos.y,
         width: stage.width(),
         height: stage.height(),
-        scale: stage.scaleX(),
+        scale: canvasViewport.scale,
       });
       lastPanPointRef.current = currentPoint;
       return;
@@ -753,7 +743,7 @@ export const Canvas: React.FC = () => {
           ? new Set(selectedIds)
           : new Set<string>();
         let lastHitId: string | null = null;
-        (canvasSnap.canvasItems || []).forEach((item) => {
+        (canvasItems || []).forEach((item) => {
           let node = stage.findOne(`.image-${item.canvasId}`);
           if (!node) {
             node = stage.findOne(`.text-${item.canvasId}`);
@@ -836,7 +826,7 @@ export const Canvas: React.FC = () => {
 
   const handleAutoLayout = useCallback(() => {
     if (selectedIds.size > 0) {
-      const items = canvasSnap.canvasItems || [];
+      const items = canvasItems || [];
       const selectedItems = items.filter((item) =>
         selectedIds.has(item.canvasId),
       );
@@ -919,15 +909,6 @@ export const Canvas: React.FC = () => {
     const x = (containerWidth - width * scale) / 2 - minX * scale;
     const y = (containerHeight - height * scale) / 2 - minY * scale;
 
-    stage.to({
-      x,
-      y,
-      scaleX: scale,
-      scaleY: scale,
-      duration: 0.3,
-      easing: Konva.Easings.EaseInOut,
-    });
-
     canvasActions.setCanvasViewport({
       x,
       y,
@@ -935,22 +916,21 @@ export const Canvas: React.FC = () => {
       height: stage.height(),
       scale,
     });
-  }, [canvasSnap.canvasItems, selectedIds]);
+  }, [canvasItems, selectedIds]);
 
   useEffect(() => {
-    const cleanup = window.electron?.onRendererEvent?.((event: string) => {
-      if (event === "canvas-auto-layout") {
-        handleAutoLayout();
-      }
-    });
-    return cleanup;
+    const handleLayoutEvent = () => handleAutoLayout();
+    window.addEventListener(CANVAS_AUTO_LAYOUT, handleLayoutEvent);
+    return () => {
+      window.removeEventListener(CANVAS_AUTO_LAYOUT, handleLayoutEvent);
+    };
   }, [handleAutoLayout]);
 
   const handleFlipSelection = useCallback(() => {
     if (selectedIds.size === 0) return;
 
     selectedIds.forEach((id) => {
-      const item = canvasSnap.canvasItems.find((i) => i.canvasId === id);
+      const item = canvasItems.find((i) => i.canvasId === id);
       if (item && item.type !== "text") {
         const currentScaleX = item.scaleX || 1;
         canvasActions.updateCanvasImage(id, {
@@ -961,20 +941,7 @@ export const Canvas: React.FC = () => {
     setTimeout(() => {
       setMultiSelectUnion(computeMultiSelectUnion(selectedIds));
     }, 0);
-  }, [selectedIds, canvasSnap.canvasItems]);
-
-  const groupHotkey =
-    acceleratorToHotkey(appSnap.canvasGroupShortcut) || "mod+g";
-
-  useHotkeys(
-    groupHotkey,
-    (e) => {
-      e.preventDefault();
-      handleAutoLayout();
-    },
-    { preventDefault: true },
-    [handleAutoLayout, groupHotkey],
-  );
+  }, [selectedIds, canvasItems]);
 
   useHotkeys(
     "mod+f",
@@ -1066,7 +1033,7 @@ export const Canvas: React.FC = () => {
     }
     const snapshots = new Map<string, { x: number; y: number }>();
     currentSelected.forEach((selectedId) => {
-      const target = canvasSnap.canvasItems.find(
+      const target = canvasItems.find(
         (it) => it.canvasId === selectedId,
       );
       if (target) snapshots.set(selectedId, { x: target.x, y: target.y });
@@ -1099,7 +1066,7 @@ export const Canvas: React.FC = () => {
       }
     >();
     currentSelected.forEach((selectedId) => {
-      const target = canvasSnap.canvasItems.find(
+      const target = canvasItems.find(
         (it) => it.canvasId === selectedId,
       );
       if (!target) return;
@@ -1246,9 +1213,9 @@ export const Canvas: React.FC = () => {
       onMouseLeave={handleCanvasMouseLeave}
     >
       <CanvasToolbar
-        canvasFilters={canvasSnap.canvasFilters}
-        showMinimap={canvasSnap.showMinimap}
-        isExpanded={canvasSnap.isCanvasToolbarExpanded}
+        canvasFilters={canvasFilters}
+        showMinimap={showMinimap}
+        isExpanded={isCanvasToolbarExpanded}
         onFiltersChange={(filters) => canvasActions.setCanvasFilters(filters)}
         onToggleMinimap={() => canvasActions.toggleMinimap()}
         onAutoLayout={handleAutoLayout}
@@ -1284,6 +1251,10 @@ export const Canvas: React.FC = () => {
       <Stage
         width={dimensions.width}
         height={dimensions.height}
+        x={canvasViewport.x}
+        y={canvasViewport.y}
+        scaleX={canvasViewport.scale}
+        scaleY={canvasViewport.scale}
         style={{ opacity: appSnap.canvasOpacity }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -1297,7 +1268,7 @@ export const Canvas: React.FC = () => {
         ref={stageRef}
       >
         <Layer>
-          {(canvasSnap.canvasItems || []).map((item) => {
+          {(canvasItems || []).map((item) => {
             if (item.type === "text") {
               return (
                 <CanvasText
@@ -1305,7 +1276,7 @@ export const Canvas: React.FC = () => {
                   item={item}
                   isSelected={selectedIds.has(item.canvasId)}
                   showControls={
-                    selectedIds.size === 1 && selectedIds.has(item.canvasId)
+                    selectedIds.size === 1 && selectedIds.has(item.canvasId) && !appSnap.mouseThrough
                   }
                   isPanModifierActive={isSpaceDown}
                   stageScale={stageScale}
@@ -1355,7 +1326,7 @@ export const Canvas: React.FC = () => {
                 image={item as CanvasImageState}
                 isSelected={selectedIds.has(item.canvasId)}
                 showControls={
-                  selectedIds.size === 1 && selectedIds.has(item.canvasId)
+                  selectedIds.size === 1 && selectedIds.has(item.canvasId) && !appSnap.mouseThrough
                 }
                 isPanModifierActive={isSpaceDown}
                 stageScale={stageScale}
@@ -1385,8 +1356,8 @@ export const Canvas: React.FC = () => {
                   }
                   setMultiSelectUnion(computeMultiSelectUnion(newSet));
                 }}
-                globalGrayscale={canvasSnap.canvasGrayscale}
-                globalFilters={canvasSnap.canvasFilters}
+                globalGrayscale={canvasGrayscale}
+                globalFilters={canvasFilters}
               />
             );
           })}
@@ -1400,7 +1371,7 @@ export const Canvas: React.FC = () => {
           <SelectionRect selectionBox={selectionBox} />
         </Layer>
       </Stage>
-      {canvasSnap.showMinimap && !shouldEnableMouseThrough && (
+      {showMinimap && !shouldEnableMouseThrough && (
         <Minimap stageRef={stageRef} />
       )}
       <ConfirmModal

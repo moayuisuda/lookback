@@ -11,14 +11,8 @@ contextBridge.exposeInMainWorld('electron', {
   resizeWindowBy: (delta: number) => ipcRenderer.send('resize-window-by', delta),
   setToggleWindowShortcut: (accelerator: string) =>
     ipcRenderer.invoke('set-toggle-window-shortcut', accelerator),
-  setCanvasOpacityUpShortcut: (accelerator: string) =>
-    ipcRenderer.invoke('set-canvas-opacity-up-shortcut', accelerator),
-  setCanvasOpacityDownShortcut: (accelerator: string) =>
-    ipcRenderer.invoke('set-canvas-opacity-down-shortcut', accelerator),
   setToggleMouseThroughShortcut: (accelerator: string) =>
     ipcRenderer.invoke('set-toggle-mouse-through-shortcut', accelerator),
-  setCanvasGroupShortcut: (accelerator: string) =>
-    ipcRenderer.invoke('set-canvas-group-shortcut', accelerator),
   setMouseThrough: (enabled: boolean) => ipcRenderer.send('set-mouse-through', enabled),
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) =>
     ipcRenderer.send('set-ignore-mouse-events', ignore, options),

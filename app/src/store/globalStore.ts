@@ -114,7 +114,8 @@ export interface GlobalState {
   canvasOpacityUpShortcut: string;
   canvasOpacityDownShortcut: string;
   toggleMouseThroughShortcut: string;
-   canvasGroupShortcut: string;
+  toggleGalleryShortcut: string;
+  canvasGroupShortcut: string;
   sidebarWidth: number;
   activeArea: ActiveArea;
   isGalleryOpen: boolean;
@@ -183,6 +184,7 @@ const DEFAULT_TOGGLE_WINDOW_SHORTCUT = isMac ? 'Command+L' : 'Ctrl+L';
 const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
+const DEFAULT_TOGGLE_GALLERY_SHORTCUT = isMac ? 'Command+B' : 'Ctrl+B';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 
 export const globalState = proxy<GlobalState>({
@@ -197,6 +199,7 @@ export const globalState = proxy<GlobalState>({
   canvasOpacityUpShortcut: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
   canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+  toggleGalleryShortcut: DEFAULT_TOGGLE_GALLERY_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
   sidebarWidth: 320,
   activeArea: null,
@@ -242,6 +245,11 @@ export const globalActions = {
         settings,
         'toggleMouseThroughShortcut',
         DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+      );
+      const rawToggleGalleryShortcut = readSetting<unknown>(
+        settings,
+        'toggleGalleryShortcut',
+        DEFAULT_TOGGLE_GALLERY_SHORTCUT,
       );
       const rawCanvasGroupShortcut = readSetting<unknown>(
         settings,
@@ -299,6 +307,10 @@ export const globalActions = {
 
       if (typeof rawToggleMouseThroughShortcut === 'string' && rawToggleMouseThroughShortcut.trim()) {
         globalState.toggleMouseThroughShortcut = rawToggleMouseThroughShortcut.trim();
+      }
+
+      if (typeof rawToggleGalleryShortcut === 'string' && rawToggleGalleryShortcut.trim()) {
+        globalState.toggleGalleryShortcut = rawToggleGalleryShortcut.trim();
       }
 
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
@@ -424,40 +436,16 @@ export const globalActions = {
   setCanvasOpacityUpShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
-    const prev = globalState.canvasOpacityUpShortcut;
     globalState.canvasOpacityUpShortcut = next;
     await settingStorage.set('canvasOpacityUpShortcut', next);
-
-    const res = await window.electron?.setCanvasOpacityUpShortcut?.(next);
-    if (res && res.success !== true) {
-      globalState.canvasOpacityUpShortcut = prev;
-      await settingStorage.set('canvasOpacityUpShortcut', prev);
-      globalActions.pushToast(
-        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
-        'error',
-      );
-      return false;
-    }
     return true;
   },
 
   setCanvasOpacityDownShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
-    const prev = globalState.canvasOpacityDownShortcut;
     globalState.canvasOpacityDownShortcut = next;
     await settingStorage.set('canvasOpacityDownShortcut', next);
-
-    const res = await window.electron?.setCanvasOpacityDownShortcut?.(next);
-    if (res && res.success !== true) {
-      globalState.canvasOpacityDownShortcut = prev;
-      await settingStorage.set('canvasOpacityDownShortcut', prev);
-      globalActions.pushToast(
-        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
-        'error',
-      );
-      return false;
-    }
     return true;
   },
 
@@ -481,23 +469,19 @@ export const globalActions = {
     return true;
   },
 
+  setToggleGalleryShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.toggleGalleryShortcut = next;
+    await settingStorage.set('toggleGalleryShortcut', next);
+    return true;
+  },
+
   setCanvasGroupShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
-    const prev = globalState.canvasGroupShortcut;
     globalState.canvasGroupShortcut = next;
     await settingStorage.set('canvasGroupShortcut', next);
-
-    const res = await window.electron?.setCanvasGroupShortcut?.(next);
-    if (res && res.success !== true) {
-      globalState.canvasGroupShortcut = prev;
-      await settingStorage.set('canvasGroupShortcut', prev);
-      globalActions.pushToast(
-        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
-        'error',
-      );
-      return false;
-    }
     return true;
   },
 

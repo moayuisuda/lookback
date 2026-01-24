@@ -23,8 +23,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // electron/main.ts
 var import_electron3 = require("electron");
-var import_path7 = __toESM(require("path"), 1);
-var import_fs_extra6 = __toESM(require("fs-extra"), 1);
+var import_path8 = __toESM(require("path"), 1);
+var import_fs_extra7 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
 var import_electron_updater = require("electron-updater");
 var import_child_process2 = require("child_process");
@@ -34,11 +34,11 @@ var import_zlib = __toESM(require("zlib"), 1);
 
 // backend/server.ts
 var import_electron2 = require("electron");
-var import_path6 = __toESM(require("path"), 1);
-var import_express7 = __toESM(require("express"), 1);
+var import_path7 = __toESM(require("path"), 1);
+var import_express8 = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
 var import_body_parser = __toESM(require("body-parser"), 1);
-var import_fs_extra5 = __toESM(require("fs-extra"), 1);
+var import_fs_extra6 = __toESM(require("fs-extra"), 1);
 var import_https = __toESM(require("https"), 1);
 var import_http = __toESM(require("http"), 1);
 var import_child_process = require("child_process");
@@ -1647,12 +1647,52 @@ var createCanvasRouter = (deps) => {
   return router;
 };
 
-// backend/routes/temp.ts
-var import_path5 = __toESM(require("path"), 1);
+// backend/routes/anchors.ts
 var import_express5 = __toESM(require("express"), 1);
+var import_path5 = __toESM(require("path"), 1);
 var import_fs_extra4 = __toESM(require("fs-extra"), 1);
-var createTempRouter = (deps) => {
+var createAnchorsRouter = (deps) => {
   const router = import_express5.default.Router();
+  const getAnchorsPath = () => import_path5.default.join(deps.getStorageDir(), "anchors.json");
+  router.get("/api/anchors", async (_req, res) => {
+    try {
+      const anchorsPath = getAnchorsPath();
+      await withFileLock(anchorsPath, async () => {
+        if (await import_fs_extra4.default.pathExists(anchorsPath)) {
+          const anchors = await import_fs_extra4.default.readJson(anchorsPath);
+          res.json(anchors);
+          return;
+        }
+        res.json({});
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/anchors", async (req, res) => {
+    try {
+      const anchors = req.body;
+      const anchorsPath = getAnchorsPath();
+      await withFileLock(anchorsPath, async () => {
+        await import_fs_extra4.default.ensureFile(anchorsPath);
+        await import_fs_extra4.default.writeJson(anchorsPath, anchors);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/temp.ts
+var import_path6 = __toESM(require("path"), 1);
+var import_express6 = __toESM(require("express"), 1);
+var import_fs_extra5 = __toESM(require("fs-extra"), 1);
+var createTempRouter = (deps) => {
+  const router = import_express6.default.Router();
   router.post("/api/download-url", async (req, res) => {
     try {
       const { url } = req.body;
@@ -1669,18 +1709,18 @@ var createTempRouter = (deps) => {
       try {
         const urlObj = new URL(trimmedUrl);
         const pathname = urlObj.pathname;
-        const baseName = import_path5.default.basename(pathname).split("?")[0];
+        const baseName = import_path6.default.basename(pathname).split("?")[0];
         if (baseName && /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(baseName)) {
           urlFilename = baseName;
         }
       } catch {
       }
-      const ext = import_path5.default.extname(urlFilename) || ".jpg";
-      const nameWithoutExt = import_path5.default.basename(urlFilename, ext);
+      const ext = import_path6.default.extname(urlFilename) || ".jpg";
+      const nameWithoutExt = import_path6.default.basename(urlFilename, ext);
       const safeName = nameWithoutExt.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "image";
       const timestamp = Date.now();
       const filename = `${safeName}_${timestamp}${ext}`;
-      const filepath = import_path5.default.join(deps.getCanvasTempDir(), filename);
+      const filepath = import_path6.default.join(deps.getCanvasTempDir(), filename);
       await deps.downloadImage(trimmedUrl, filepath);
       res.json({
         success: true,
@@ -1701,15 +1741,15 @@ var createTempRouter = (deps) => {
       }
       let filename = "temp.png";
       if (providedFilename) {
-        const ext = import_path5.default.extname(providedFilename) || ".png";
-        const name = import_path5.default.basename(providedFilename, ext);
+        const ext = import_path6.default.extname(providedFilename) || ".png";
+        const name = import_path6.default.basename(providedFilename, ext);
         const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
         filename = `${safeName}${ext}`;
       }
-      const filepath = import_path5.default.join(deps.getCanvasTempDir(), filename);
+      const filepath = import_path6.default.join(deps.getCanvasTempDir(), filename);
       const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
       await withFileLock(filepath, async () => {
-        await import_fs_extra4.default.writeFile(filepath, base64Data, "base64");
+        await import_fs_extra5.default.writeFile(filepath, base64Data, "base64");
       });
       res.json({
         success: true,
@@ -1729,12 +1769,12 @@ var createTempRouter = (deps) => {
         return;
       }
       const canvasTempDir = deps.getCanvasTempDir();
-      const normalizedPath = import_path5.default.normalize(filePath);
+      const normalizedPath = import_path6.default.normalize(filePath);
       if (!normalizedPath.startsWith(canvasTempDir)) {
-        const inTemp = import_path5.default.join(canvasTempDir, import_path5.default.basename(filePath));
+        const inTemp = import_path6.default.join(canvasTempDir, import_path6.default.basename(filePath));
         await withFileLock(inTemp, async () => {
-          if (await import_fs_extra4.default.pathExists(inTemp)) {
-            await import_fs_extra4.default.unlink(inTemp);
+          if (await import_fs_extra5.default.pathExists(inTemp)) {
+            await import_fs_extra5.default.unlink(inTemp);
             res.json({ success: true });
             return;
           }
@@ -1743,8 +1783,8 @@ var createTempRouter = (deps) => {
         return;
       }
       await withFileLock(normalizedPath, async () => {
-        if (await import_fs_extra4.default.pathExists(normalizedPath)) {
-          await import_fs_extra4.default.unlink(normalizedPath);
+        if (await import_fs_extra5.default.pathExists(normalizedPath)) {
+          await import_fs_extra5.default.unlink(normalizedPath);
           res.json({ success: true });
           return;
         }
@@ -1762,12 +1802,12 @@ var createTempRouter = (deps) => {
         res.status(400).json({ error: "File path is required" });
         return;
       }
-      const normalizedPath = import_path5.default.normalize(filePath);
+      const normalizedPath = import_path6.default.normalize(filePath);
       let targetPath = normalizedPath;
       const canvasTempDir = deps.getCanvasTempDir();
       if (!normalizedPath.startsWith(canvasTempDir)) {
-        const inTemp = import_path5.default.join(canvasTempDir, import_path5.default.basename(filePath));
-        const exists = await withFileLock(inTemp, () => import_fs_extra4.default.pathExists(inTemp));
+        const inTemp = import_path6.default.join(canvasTempDir, import_path6.default.basename(filePath));
+        const exists = await withFileLock(inTemp, () => import_fs_extra5.default.pathExists(inTemp));
         if (!exists) {
           res.status(403).json({ error: "Invalid file path: Must be in temp directory" });
           return;
@@ -1776,7 +1816,7 @@ var createTempRouter = (deps) => {
       } else {
         const exists = await withFileLock(
           normalizedPath,
-          () => import_fs_extra4.default.pathExists(normalizedPath)
+          () => import_fs_extra5.default.pathExists(normalizedPath)
         );
         if (!exists) {
           res.status(404).json({ error: "File not found" });
@@ -1794,9 +1834,9 @@ var createTempRouter = (deps) => {
 };
 
 // backend/routes/model.ts
-var import_express6 = __toESM(require("express"), 1);
+var import_express7 = __toESM(require("express"), 1);
 var createModelRouter = (deps) => {
-  const router = import_express6.default.Router();
+  const router = import_express7.default.Router();
   router.post("/api/download-model", async (_req, res) => {
     try {
       deps.downloadModel((data) => {
@@ -1820,8 +1860,8 @@ var createModelRouter = (deps) => {
 
 // backend/server.ts
 var SERVER_PORT = 30001;
-var CONFIG_FILE = import_path6.default.join(import_electron2.app.getPath("userData"), "lookback_config.json");
-var DEFAULT_STORAGE_DIR = import_path6.default.join(import_electron2.app.getPath("userData"), "lookback_storage");
+var CONFIG_FILE = import_path7.default.join(import_electron2.app.getPath("userData"), "lookback_config.json");
+var DEFAULT_STORAGE_DIR = import_path7.default.join(import_electron2.app.getPath("userData"), "lookback_storage");
 var loadStorageRoot = async () => {
   try {
     if (await lockedFs.pathExists(CONFIG_FILE)) {
@@ -1834,16 +1874,16 @@ var loadStorageRoot = async () => {
   }
   if (import_electron2.app.isPackaged && process.platform !== "darwin") {
     try {
-      const exeDir = import_path6.default.dirname(import_electron2.app.getPath("exe"));
-      const portableDataDir = import_path6.default.join(exeDir, "data");
+      const exeDir = import_path7.default.dirname(import_electron2.app.getPath("exe"));
+      const portableDataDir = import_path7.default.join(exeDir, "data");
       if (await lockedFs.pathExists(portableDataDir)) {
         return portableDataDir;
       }
-      const testFile = import_path6.default.join(exeDir, ".write_test");
+      const testFile = import_path7.default.join(exeDir, ".write_test");
       const writable = await withFileLock(testFile, async () => {
         try {
-          await import_fs_extra5.default.writeFile(testFile, "test");
-          await import_fs_extra5.default.remove(testFile);
+          await import_fs_extra6.default.writeFile(testFile, "test");
+          await import_fs_extra6.default.remove(testFile);
           return true;
         } catch {
           return false;
@@ -1858,25 +1898,25 @@ var loadStorageRoot = async () => {
   return DEFAULT_STORAGE_DIR;
 };
 var STORAGE_DIR = DEFAULT_STORAGE_DIR;
-var IMAGE_DIR = import_path6.default.join(STORAGE_DIR, "images");
-var CANVAS_TEMP_DIR = import_path6.default.join(STORAGE_DIR, "canvas_temp");
-var CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
-var SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+var IMAGE_DIR = import_path7.default.join(STORAGE_DIR, "images");
+var CANVAS_TEMP_DIR = import_path7.default.join(STORAGE_DIR, "canvas_temp");
+var CANVASES_DIR = import_path7.default.join(STORAGE_DIR, "canvases");
+var SETTINGS_FILE = import_path7.default.join(STORAGE_DIR, "settings.json");
 var settingsCache = null;
 var updateStoragePaths = (root) => {
   STORAGE_DIR = root;
-  IMAGE_DIR = import_path6.default.join(STORAGE_DIR, "images");
-  CANVAS_TEMP_DIR = import_path6.default.join(STORAGE_DIR, "canvas_temp");
-  CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
-  SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+  IMAGE_DIR = import_path7.default.join(STORAGE_DIR, "images");
+  CANVAS_TEMP_DIR = import_path7.default.join(STORAGE_DIR, "canvas_temp");
+  CANVASES_DIR = import_path7.default.join(STORAGE_DIR, "canvases");
+  SETTINGS_FILE = import_path7.default.join(STORAGE_DIR, "settings.json");
 };
 var ensureStorageDirs = async (root) => {
   await Promise.all([
     lockedFs.ensureDir(root),
-    lockedFs.ensureDir(import_path6.default.join(root, "images")),
-    lockedFs.ensureDir(import_path6.default.join(root, "model")),
-    lockedFs.ensureDir(import_path6.default.join(root, "canvas_temp")),
-    lockedFs.ensureDir(import_path6.default.join(root, "canvases"))
+    lockedFs.ensureDir(import_path7.default.join(root, "images")),
+    lockedFs.ensureDir(import_path7.default.join(root, "model")),
+    lockedFs.ensureDir(import_path7.default.join(root, "canvas_temp")),
+    lockedFs.ensureDir(import_path7.default.join(root, "canvases"))
   ]);
 };
 var getStorageDir = () => STORAGE_DIR;
@@ -1887,19 +1927,19 @@ var setStorageRoot = async (root) => {
   settingsCache = null;
   await ensureStorageDirs(STORAGE_DIR);
   await withFileLock(CONFIG_FILE, async () => {
-    await import_fs_extra5.default.writeJson(CONFIG_FILE, { storageDir: STORAGE_DIR });
+    await import_fs_extra6.default.writeJson(CONFIG_FILE, { storageDir: STORAGE_DIR });
   });
   initDatabase();
 };
 var readSettings = async () => {
   if (settingsCache) return settingsCache;
   return withFileLock(SETTINGS_FILE, async () => {
-    if (!await import_fs_extra5.default.pathExists(SETTINGS_FILE)) {
+    if (!await import_fs_extra6.default.pathExists(SETTINGS_FILE)) {
       settingsCache = {};
       return settingsCache;
     }
     try {
-      const raw = await import_fs_extra5.default.readJson(SETTINGS_FILE);
+      const raw = await import_fs_extra6.default.readJson(SETTINGS_FILE);
       if (raw && typeof raw === "object") {
         settingsCache = raw;
         return settingsCache;
@@ -1914,7 +1954,7 @@ var readSettings = async () => {
 var persistSettings = (0, import_radash.debounce)({ delay: 500 }, async (settings) => {
   await withFileLock(SETTINGS_FILE, async () => {
     try {
-      await import_fs_extra5.default.writeJson(SETTINGS_FILE, settings);
+      await import_fs_extra6.default.writeJson(SETTINGS_FILE, settings);
     } catch (error) {
       console.error("Failed to write settings file", error);
     }
@@ -1951,10 +1991,10 @@ var PythonMetaService = class {
     const candidates = [];
     if (import_electron2.app.isPackaged) {
       if (process.platform === "win32") {
-        candidates.push(import_path6.default.join(process.resourcesPath, "bin", "uv.exe"));
+        candidates.push(import_path7.default.join(process.resourcesPath, "bin", "uv.exe"));
       } else if (process.platform === "darwin") {
         candidates.push(
-          import_path6.default.join(
+          import_path7.default.join(
             process.resourcesPath,
             "bin",
             "mac",
@@ -1965,10 +2005,10 @@ var PythonMetaService = class {
       }
     } else {
       if (process.platform === "win32") {
-        candidates.push(import_path6.default.join(import_electron2.app.getAppPath(), "bin", "win32", "uv.exe"));
+        candidates.push(import_path7.default.join(import_electron2.app.getAppPath(), "bin", "win32", "uv.exe"));
       } else if (process.platform === "darwin") {
         candidates.push(
-          import_path6.default.join(
+          import_path7.default.join(
             import_electron2.app.getAppPath(),
             "bin",
             "mac",
@@ -1984,9 +2024,9 @@ var PythonMetaService = class {
     if (home) {
       const versions = ["3.14", "3.13", "3.12", "3.11", "3.10"];
       for (const v of versions) {
-        candidates.push(import_path6.default.join(home, "Library", "Python", v, "bin", "uv"));
+        candidates.push(import_path7.default.join(home, "Library", "Python", v, "bin", "uv"));
       }
-      candidates.push(import_path6.default.join(home, ".local", "bin", "uv"));
+      candidates.push(import_path7.default.join(home, ".local", "bin", "uv"));
     }
     candidates.push("/opt/homebrew/bin/uv", "/usr/local/bin/uv", "uv");
     const uniq = [];
@@ -2044,7 +2084,7 @@ var PythonMetaService = class {
   spawnProcess(command, args, cwd) {
     const env = {
       ...process.env,
-      PROREF_MODEL_DIR: import_path6.default.join(getStorageDir(), "model"),
+      PROREF_MODEL_DIR: import_path7.default.join(getStorageDir(), "model"),
       // Use Aliyun mirror for PyPI (often more stable/accessible)
       UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
       // Also set PIP_INDEX_URL as fallback/standard
@@ -2062,11 +2102,11 @@ var PythonMetaService = class {
   }
   start() {
     if (this.process) return;
-    let scriptPath = import_path6.default.join(__dirname, "../backend/python/tagger.py");
+    let scriptPath = import_path7.default.join(__dirname, "../backend/python/tagger.py");
     if (import_electron2.app.isPackaged) {
       scriptPath = scriptPath.replace("app.asar", "app.asar.unpacked");
     }
-    const pythonDir = import_path6.default.dirname(scriptPath);
+    const pythonDir = import_path7.default.dirname(scriptPath);
     const uvArgs = ["run", "python", scriptPath];
     const uvCandidates = this.getUvCandidates();
     const trySpawn = async (index) => {
@@ -2076,7 +2116,7 @@ var PythonMetaService = class {
         return;
       }
       const command = uvCandidates[index];
-      if (import_path6.default.isAbsolute(command)) {
+      if (import_path7.default.isAbsolute(command)) {
         const exists = await lockedFs.pathExists(command);
         if (!exists) {
           await trySpawn(index + 1);
@@ -2104,11 +2144,11 @@ var PythonMetaService = class {
   }
   downloadModel(onProgress) {
     return new Promise((resolve, reject) => {
-      let scriptPath = import_path6.default.join(__dirname, "../backend/python/tagger.py");
+      let scriptPath = import_path7.default.join(__dirname, "../backend/python/tagger.py");
       if (import_electron2.app.isPackaged) {
         scriptPath = scriptPath.replace("app.asar", "app.asar.unpacked");
       }
-      const pythonDir = import_path6.default.dirname(scriptPath);
+      const pythonDir = import_path7.default.dirname(scriptPath);
       const uvArgs = ["run", "python", scriptPath, "--download-model"];
       const uvCandidates = this.getUvCandidates();
       const trySpawn = async (index) => {
@@ -2118,7 +2158,7 @@ var PythonMetaService = class {
           return;
         }
         const command = uvCandidates[index];
-        if (import_path6.default.isAbsolute(command)) {
+        if (import_path7.default.isAbsolute(command)) {
           const exists = await lockedFs.pathExists(command);
           if (!exists) {
             await trySpawn(index + 1);
@@ -2127,7 +2167,7 @@ var PythonMetaService = class {
         }
         const env = {
           ...process.env,
-          PROREF_MODEL_DIR: import_path6.default.join(getStorageDir(), "model"),
+          PROREF_MODEL_DIR: import_path7.default.join(getStorageDir(), "model"),
           UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
           PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
           HF_ENDPOINT: "https://hf-mirror.com"
@@ -2282,14 +2322,14 @@ function downloadImage(url, dest) {
         }
       }
       srcPath = decodeURIComponent(srcPath);
-      import_fs_extra5.default.copy(srcPath, dest).then(() => resolve()).catch((err) => {
-        import_fs_extra5.default.unlink(dest, () => {
+      import_fs_extra6.default.copy(srcPath, dest).then(() => resolve()).catch((err) => {
+        import_fs_extra6.default.unlink(dest, () => {
         });
         reject(err);
       });
       return;
     }
-    const file = import_fs_extra5.default.createWriteStream(dest);
+    const file = import_fs_extra6.default.createWriteStream(dest);
     const client = url.startsWith("https") ? import_https.default : import_http.default;
     const request = client.get(url, (response) => {
       if (response.statusCode === 200) {
@@ -2300,7 +2340,7 @@ function downloadImage(url, dest) {
         });
       } else {
         file.close();
-        import_fs_extra5.default.unlink(dest, () => {
+        import_fs_extra6.default.unlink(dest, () => {
         });
         reject(
           new Error(
@@ -2310,12 +2350,12 @@ function downloadImage(url, dest) {
       }
     });
     request.on("error", (err) => {
-      import_fs_extra5.default.unlink(dest, () => {
+      import_fs_extra6.default.unlink(dest, () => {
       });
       reject(err);
     });
     file.on("error", (err) => {
-      import_fs_extra5.default.unlink(dest, () => {
+      import_fs_extra6.default.unlink(dest, () => {
       });
       reject(err);
     });
@@ -2323,7 +2363,7 @@ function downloadImage(url, dest) {
 }
 async function startServer(sendToRenderer) {
   await initializeStorage();
-  const server = (0, import_express7.default)();
+  const server = (0, import_express8.default)();
   server.use((0, import_cors.default)());
   server.use(import_body_parser.default.json({ limit: "25mb" }));
   const vectorService = new PythonMetaService();
@@ -2348,10 +2388,10 @@ async function startServer(sendToRenderer) {
       method: req == null ? void 0 : req.method,
       url: req == null ? void 0 : req.originalUrl
     };
-    const logFile = import_path6.default.join(STORAGE_DIR, "server.log");
+    const logFile = import_path7.default.join(STORAGE_DIR, "server.log");
     await withFileLock(logFile, async () => {
-      await import_fs_extra5.default.ensureFile(logFile);
-      await import_fs_extra5.default.appendFile(logFile, `${JSON.stringify(payload)}
+      await import_fs_extra6.default.ensureFile(logFile);
+      await import_fs_extra6.default.appendFile(logFile, `${JSON.stringify(payload)}
 `);
     });
   };
@@ -2369,6 +2409,11 @@ async function startServer(sendToRenderer) {
     createCanvasRouter({
       getCanvasesDir: () => CANVASES_DIR,
       getCanvasTempDir: () => CANVAS_TEMP_DIR
+    })
+  );
+  server.use(
+    createAnchorsRouter({
+      getStorageDir: () => STORAGE_DIR
     })
   );
   server.use(
@@ -2409,8 +2454,8 @@ async function startServer(sendToRenderer) {
       sendToRenderer: sendRenderer
     })
   );
-  server.use("/images", import_express7.default.static(STORAGE_DIR));
-  server.use("/temp-images", import_express7.default.static(CANVAS_TEMP_DIR));
+  server.use("/images", import_express8.default.static(STORAGE_DIR));
+  server.use("/temp-images", import_express8.default.static(CANVAS_TEMP_DIR));
   server.use(
     (err, req, res, _next) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -2454,6 +2499,7 @@ var en = {
   "titleBar.canvasOpacityUp": "Increase Canvas Opacity",
   "titleBar.canvasOpacityDown": "Decrease Canvas Opacity",
   "titleBar.toggleMouseThrough": "Toggle Paper Mode",
+  "titleBar.toggleGallery": "Toggle Gallery",
   "titleBar.canvasGroup": "Smart Layout (Canvas)",
   "titleBar.shortcutClickToRecord": "Click to record",
   "titleBar.shortcutRecording": "Press a shortcut\u2026",
@@ -2478,6 +2524,8 @@ var en = {
   "toast.updateNameFailed": "Failed to update name",
   "toast.imageDeleted": "Image deleted",
   "toast.deleteImageFailed": "Failed to delete image",
+  "toast.canvasDeleted": "Canvas deleted",
+  "toast.deleteCanvasFailed": "Failed to delete canvas",
   "toast.vectorIndexed": "Vector indexed",
   "toast.vectorIndexFailed": "Failed to index vector",
   "toast.openFileFailed": "Failed to open file",
@@ -2547,9 +2595,16 @@ var en = {
   "canvas.filters.trianglePixelate": "Triangle Pixelate",
   "canvas.toolbar.toggleGrayscale": "Toggle Grayscale Mode",
   "canvas.toolbar.grayscale": "Grayscale",
-  "canvas.toolbar.smartLayout": "Smart Layout",
+  "canvas.toolbar.smartLayout": "Auto Layout",
   "canvas.toolbar.toggleMinimap": "Toggle Minimap",
   "canvas.toolbar.minimap": "Minimap",
+  "canvas.toolbar.anchors": "Anchors",
+  "canvas.anchor.slot": "Slot {{slot}}",
+  "canvas.anchor.save": "Save Anchor",
+  "canvas.anchor.restore": "Restore Anchor",
+  "canvas.anchor.delete": "Delete Anchor",
+  "canvas.anchor.empty": "Empty",
+  "canvas.anchor.saved": "Anchor Saved",
   "canvas.clearCanvasTitle": "Clear Canvas",
   "canvas.clearCanvasMessage": "Are you sure you want to clear the canvas? This action cannot be undone.",
   "canvas.clearCanvasConfirm": "Clear",
@@ -2583,7 +2638,8 @@ var en = {
   "settings.canvas": "Canvas",
   "settings.canvas.create": "Create New",
   "settings.canvas.placeholder": "Canvas Name",
-  "settings.canvas.deleteConfirm": "Delete this canvas?",
+  "settings.canvas.deleteConfirm": "Are you sure you want to delete this canvas?",
+  "settings.canvas.deleteTitle": "Delete Canvas",
   "settings.canvas.rename": "Rename",
   "settings.canvas.renamePlaceholder": "New Name",
   "toast.createCanvasFailed": "Failed to create canvas",
@@ -2618,15 +2674,16 @@ var zh = {
   "titleBar.window": "\u7A97\u53E3",
   "titleBar.pinTransparent": "\u7F6E\u9876\u900F\u660E",
   "titleBar.canvasOpacity": "\u753B\u5E03\u900F\u660E\u5EA6",
-  "titleBar.mouseThrough": "\u57AB\u7EB8\u6A21\u5F0F",
+  "titleBar.mouseThrough": "\u9F20\u6807\u7A7F\u900F",
   "titleBar.shortcuts": "\u5FEB\u6377\u952E",
   "titleBar.toggleWindowVisibility": "\u5207\u6362\u7A97\u53E3\u663E\u793A",
   "titleBar.canvasOpacityUp": "\u589E\u52A0\u753B\u5E03\u900F\u660E\u5EA6",
-  "titleBar.canvasOpacityDown": "\u51CF\u5C11\u753B\u5E03\u900F\u660E\u5EA6",
-  "titleBar.toggleMouseThrough": "\u5207\u6362\u57AB\u7EB8\u6A21\u5F0F",
+  "titleBar.canvasOpacityDown": "\u964D\u4F4E\u753B\u5E03\u4E0D\u900F\u660E\u5EA6",
+  "titleBar.toggleMouseThrough": "\u5207\u6362\u9F20\u6807\u7A7F\u900F",
+  "titleBar.toggleGallery": "\u5207\u6362\u56FE\u5E93\u62BD\u5C49",
   "titleBar.canvasGroup": "\u753B\u5E03\u667A\u80FD\u5E03\u5C40",
   "titleBar.shortcutClickToRecord": "\u70B9\u51FB\u5F55\u5236",
-  "titleBar.shortcutRecording": "\u8BF7\u6309\u4E0B\u5FEB\u6377\u952E\u2026",
+  "titleBar.shortcutRecording": "\u8BF7\u6309\u952E...",
   "titleBar.index": "\u7D22\u5F15",
   "titleBar.enableAiSearchVector": "\u542F\u7528 AI \u641C\u7D22",
   "titleBar.indexing": "\u7D22\u5F15\u4E2D\u2026",
@@ -2648,6 +2705,8 @@ var zh = {
   "toast.updateNameFailed": "\u66F4\u65B0\u540D\u79F0\u5931\u8D25",
   "toast.imageDeleted": "\u56FE\u7247\u5DF2\u5220\u9664",
   "toast.deleteImageFailed": "\u5220\u9664\u56FE\u7247\u5931\u8D25",
+  "toast.canvasDeleted": "\u753B\u5E03\u5DF2\u5220\u9664",
+  "toast.deleteCanvasFailed": "\u5220\u9664\u753B\u5E03\u5931\u8D25",
   "toast.vectorIndexed": "\u5411\u91CF\u5DF2\u5165\u5E93",
   "toast.vectorIndexFailed": "\u5411\u91CF\u5165\u5E93\u5931\u8D25",
   "toast.openFileFailed": "\u6253\u5F00\u6587\u4EF6\u5931\u8D25",
@@ -2717,9 +2776,16 @@ var zh = {
   "canvas.filters.trianglePixelate": "\u4E09\u89D2\u5F62\u50CF\u7D20\u5316",
   "canvas.toolbar.toggleGrayscale": "\u5207\u6362\u7070\u5EA6\u6A21\u5F0F",
   "canvas.toolbar.grayscale": "\u7070\u5EA6",
-  "canvas.toolbar.smartLayout": "\u667A\u80FD\u5E03\u5C40",
+  "canvas.toolbar.smartLayout": "\u81EA\u52A8\u5E03\u5C40",
   "canvas.toolbar.toggleMinimap": "\u5207\u6362\u5C0F\u5730\u56FE",
   "canvas.toolbar.minimap": "\u5C0F\u5730\u56FE",
+  "canvas.toolbar.anchors": "\u951A\u70B9",
+  "canvas.anchor.slot": "\u63D2\u69FD {{slot}}",
+  "canvas.anchor.save": "\u4FDD\u5B58\u951A\u70B9",
+  "canvas.anchor.restore": "\u6062\u590D\u951A\u70B9",
+  "canvas.anchor.delete": "\u5220\u9664\u951A\u70B9",
+  "canvas.anchor.empty": "\u7A7A",
+  "canvas.anchor.saved": "\u951A\u70B9\u5DF2\u4FDD\u5B58",
   "canvas.clearCanvasTitle": "\u6E05\u7A7A\u753B\u5E03",
   "canvas.clearCanvasMessage": "\u786E\u5B9A\u8981\u6E05\u7A7A\u753B\u5E03\u5417\uFF1F\u6B64\u64CD\u4F5C\u65E0\u6CD5\u64A4\u9500\u3002",
   "canvas.clearCanvasConfirm": "\u6E05\u7A7A",
@@ -2754,6 +2820,7 @@ var zh = {
   "settings.canvas.create": "\u65B0\u5EFA\u753B\u5E03",
   "settings.canvas.placeholder": "\u753B\u5E03\u540D\u79F0",
   "settings.canvas.deleteConfirm": "\u786E\u8BA4\u5220\u9664\u8BE5\u753B\u5E03\uFF1F",
+  "settings.canvas.deleteTitle": "\u5220\u9664\u753B\u5E03",
   "settings.canvas.rename": "\u91CD\u547D\u540D",
   "settings.canvas.renamePlaceholder": "\u65B0\u540D\u79F0",
   "toast.createCanvasFailed": "\u521B\u5EFA\u753B\u5E03\u5931\u8D25",
@@ -2789,9 +2856,9 @@ import_electron_log.default.transports.file.level = "info";
 import_electron_log.default.transports.file.maxSize = 5 * 1024 * 1024;
 import_electron_log.default.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
-  const info = import_path7.default.parse(filePath);
+  const info = import_path8.default.parse(filePath);
   try {
-    import_fs_extra6.default.renameSync(filePath, import_path7.default.join(info.dir, info.name + ".old" + info.ext));
+    import_fs_extra7.default.renameSync(filePath, import_path8.default.join(info.dir, info.name + ".old" + info.ext));
   } catch (e) {
     console.warn("Could not rotate log", e);
   }
@@ -2800,15 +2867,9 @@ var mainWindow = null;
 var lastGalleryDockDelta = 0;
 var localeCache = null;
 var DEFAULT_TOGGLE_WINDOW_SHORTCUT = process.platform === "darwin" ? "Command+L" : "Ctrl+L";
-var DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
-var DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 var DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = process.platform === "darwin" ? "Command+T" : "Ctrl+T";
-var DEFAULT_CANVAS_GROUP_SHORTCUT = process.platform === "darwin" ? "Command+G" : "Ctrl+G";
 var toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
-var canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
-var canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 var toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
-var canvasGroupShortcut = DEFAULT_CANVAS_GROUP_SHORTCUT;
 var isSettingsOpen = false;
 var isPinMode;
 var isPinTransparent;
@@ -2832,12 +2893,12 @@ function applyPinStateToWindow() {
 var isLocale = (value) => value === "en" || value === "zh";
 async function getLocale() {
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-    const stat = await import_fs_extra6.default.stat(settingsPath).catch(() => null);
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+    const stat = await import_fs_extra7.default.stat(settingsPath).catch(() => null);
     if (!stat) return "en";
     if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
       return localeCache.locale;
-    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
+    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
     const raw = settings && typeof settings === "object" ? settings.language : void 0;
     const locale = isLocale(raw) ? raw : "en";
     localeCache = { locale, mtimeMs: stat.mtimeMs };
@@ -2848,36 +2909,24 @@ async function getLocale() {
 }
 async function loadShortcuts() {
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const rawToggle = settings.toggleWindowShortcut;
     if (typeof rawToggle === "string" && rawToggle.trim()) {
       toggleWindowShortcut = rawToggle.trim();
     }
-    const rawOpacityUp = settings.canvasOpacityUpShortcut;
-    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
-      canvasOpacityUpShortcut = rawOpacityUp.trim();
-    }
-    const rawOpacityDown = settings.canvasOpacityDownShortcut;
-    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
-      canvasOpacityDownShortcut = rawOpacityDown.trim();
-    }
     const rawMouseThrough = settings.toggleMouseThroughShortcut;
     if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
-    }
-    const rawCanvasGroup = settings.canvasGroupShortcut;
-    if (typeof rawCanvasGroup === "string" && rawCanvasGroup.trim()) {
-      canvasGroupShortcut = rawCanvasGroup.trim();
     }
   } catch {
   }
 }
 async function loadWindowPinState() {
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const raw = settings;
     if (typeof raw.pinMode === "boolean") {
@@ -2895,7 +2944,7 @@ function loadMainWindow() {
     import_electron_log.default.info("Loading renderer from localhost");
     void mainWindow.loadURL("http://localhost:5173");
   } else {
-    const filePath = import_path7.default.join(__dirname, "../dist-renderer/index.html");
+    const filePath = import_path8.default.join(__dirname, "../dist-renderer/index.html");
     import_electron_log.default.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
   }
@@ -2943,11 +2992,11 @@ function createWindow(options) {
   mainWindow = new import_electron3.BrowserWindow({
     width: Math.floor(width * 0.6),
     height: Math.floor(height * 0.8),
-    icon: import_path7.default.join(__dirname, "../resources/icon.svg"),
+    icon: import_path8.default.join(__dirname, "../resources/icon.svg"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: import_path7.default.join(__dirname, "preload.cjs")
+      preload: import_path8.default.join(__dirname, "preload.cjs")
     },
     frame: false,
     transparent: true,
@@ -3062,12 +3111,12 @@ function createWindow(options) {
   import_electron3.ipcMain.handle("get-log-content", async () => {
     try {
       const logPath = import_electron_log.default.transports.file.getFile().path;
-      if (await import_fs_extra6.default.pathExists(logPath)) {
-        const stats = await import_fs_extra6.default.stat(logPath);
+      if (await import_fs_extra7.default.pathExists(logPath)) {
+        const stats = await import_fs_extra7.default.stat(logPath);
         const size = stats.size;
         const READ_SIZE = 50 * 1024;
         const start = Math.max(0, size - READ_SIZE);
-        const stream = import_fs_extra6.default.createReadStream(logPath, {
+        const stream = import_fs_extra7.default.createReadStream(logPath, {
           start,
           encoding: "utf8"
         });
@@ -3181,30 +3230,6 @@ function registerToggleWindowShortcut(accelerator) {
     true
   );
 }
-function registerCanvasOpacityUpShortcut(accelerator) {
-  return registerShortcut(
-    accelerator,
-    canvasOpacityUpShortcut,
-    (v) => {
-      canvasOpacityUpShortcut = v;
-    },
-    () => {
-      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-opacity-up");
-    }
-  );
-}
-function registerCanvasOpacityDownShortcut(accelerator) {
-  return registerShortcut(
-    accelerator,
-    canvasOpacityDownShortcut,
-    (v) => {
-      canvasOpacityDownShortcut = v;
-    },
-    () => {
-      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-opacity-down");
-    }
-  );
-}
 function registerToggleMouseThroughShortcut(accelerator) {
   return registerShortcut(
     accelerator,
@@ -3217,31 +3242,32 @@ function registerToggleMouseThroughShortcut(accelerator) {
     }
   );
 }
-function registerCanvasGroupShortcut(accelerator) {
-  return registerShortcut(
-    accelerator,
-    canvasGroupShortcut,
-    (v) => {
-      canvasGroupShortcut = v;
-    },
-    () => {
-      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "canvas-auto-layout");
-    }
-  );
+function registerAnchorShortcuts() {
+  const anchors = ["1", "2", "3"];
+  anchors.forEach((key) => {
+    const restoreAccel = process.platform === "darwin" ? `Command+${key}` : `Ctrl+${key}`;
+    import_electron3.globalShortcut.register(restoreAccel, () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "restore-anchor", key);
+    });
+    const saveAccel = process.platform === "darwin" ? `Command+Shift+${key}` : `Ctrl+Shift+${key}`;
+    import_electron3.globalShortcut.register(saveAccel, () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "save-anchor", key);
+    });
+  });
 }
 function getModelDir() {
-  return import_path7.default.join(getStorageDir(), "model");
+  return import_path8.default.join(getStorageDir(), "model");
 }
 async function hasRequiredModelFiles(modelDir) {
-  const hasConfig = await import_fs_extra6.default.pathExists(import_path7.default.join(modelDir, "config.json"));
-  const hasWeights = await import_fs_extra6.default.pathExists(
-    import_path7.default.join(modelDir, "model.safetensors")
+  const hasConfig = await import_fs_extra7.default.pathExists(import_path8.default.join(modelDir, "config.json"));
+  const hasWeights = await import_fs_extra7.default.pathExists(
+    import_path8.default.join(modelDir, "model.safetensors")
   );
-  const hasProcessor = await import_fs_extra6.default.pathExists(
-    import_path7.default.join(modelDir, "preprocessor_config.json")
+  const hasProcessor = await import_fs_extra7.default.pathExists(
+    import_path8.default.join(modelDir, "preprocessor_config.json")
   );
-  const hasTokenizer = await import_fs_extra6.default.pathExists(
-    import_path7.default.join(modelDir, "tokenizer.json")
+  const hasTokenizer = await import_fs_extra7.default.pathExists(
+    import_path8.default.join(modelDir, "tokenizer.json")
   );
   return hasConfig && hasWeights && hasProcessor && hasTokenizer;
 }
@@ -3250,17 +3276,17 @@ function getUvCandidates() {
   const candidates = [];
   if (import_electron3.app.isPackaged) {
     if (process.platform === "win32") {
-      candidates.push(import_path7.default.join(process.resourcesPath, "bin", "uv.exe"));
+      candidates.push(import_path8.default.join(process.resourcesPath, "bin", "uv.exe"));
     } else if (process.platform === "darwin") {
       candidates.push(
-        import_path7.default.join(process.resourcesPath, "bin", "mac", "arm64", "uv")
+        import_path8.default.join(process.resourcesPath, "bin", "mac", "arm64", "uv")
       );
     }
   } else {
     if (process.platform === "win32") {
-      candidates.push(import_path7.default.join(import_electron3.app.getAppPath(), "bin", "win32", "uv.exe"));
+      candidates.push(import_path8.default.join(import_electron3.app.getAppPath(), "bin", "win32", "uv.exe"));
     } else if (process.platform === "darwin") {
-      candidates.push(import_path7.default.join(import_electron3.app.getAppPath(), "bin", "mac", "arm64", "uv"));
+      candidates.push(import_path8.default.join(import_electron3.app.getAppPath(), "bin", "mac", "arm64", "uv"));
     }
   }
   const env = (_a = process.env.PROREF_UV_PATH) == null ? void 0 : _a.trim();
@@ -3285,7 +3311,7 @@ function spawnUvPython(args, cwd, env) {
         return;
       }
       const command = candidates[index];
-      if (import_path7.default.isAbsolute(command) && !import_fs_extra6.default.pathExistsSync(command)) {
+      if (import_path8.default.isAbsolute(command) && !import_fs_extra7.default.pathExistsSync(command)) {
         trySpawn(index + 1);
         return;
       }
@@ -3307,7 +3333,7 @@ function spawnUvPython(args, cwd, env) {
   });
 }
 function getManagedUvPath() {
-  return import_path7.default.join(
+  return import_path8.default.join(
     import_electron3.app.getPath("userData"),
     "uv",
     process.platform === "win32" ? "uv.exe" : "uv"
@@ -3457,15 +3483,15 @@ function downloadBuffer(url, onProgress) {
 }
 async function ensureUvInstalled(onProgress) {
   const existing = getUvCandidates().find(
-    (c) => import_path7.default.isAbsolute(c) && import_fs_extra6.default.pathExistsSync(c)
+    (c) => import_path8.default.isAbsolute(c) && import_fs_extra7.default.pathExistsSync(c)
   );
   if (existing) return existing;
   const uvPath = getManagedUvPath();
-  if (await import_fs_extra6.default.pathExists(uvPath)) {
+  if (await import_fs_extra7.default.pathExists(uvPath)) {
     process.env.PROREF_UV_PATH = uvPath;
     return uvPath;
   }
-  await import_fs_extra6.default.ensureDir(import_path7.default.dirname(uvPath));
+  await import_fs_extra7.default.ensureDir(import_path8.default.dirname(uvPath));
   const { url, kind } = resolveUvReleaseAsset();
   import_electron_log.default.info(`Downloading uv from: ${url}`);
   const buf = await downloadBuffer(url, (current, total) => {
@@ -3489,9 +3515,9 @@ async function ensureUvInstalled(onProgress) {
   if (!binary) {
     throw new Error("Failed to extract uv binary");
   }
-  await import_fs_extra6.default.writeFile(uvPath, binary);
+  await import_fs_extra7.default.writeFile(uvPath, binary);
   if (process.platform !== "win32") {
-    await import_fs_extra6.default.chmod(uvPath, 493);
+    await import_fs_extra7.default.chmod(uvPath, 493);
   }
   process.env.PROREF_UV_PATH = uvPath;
   return uvPath;
@@ -3506,9 +3532,9 @@ async function ensurePythonRuntime(parent) {
   const modelDir = getModelDir();
   process.env.PROREF_MODEL_DIR = modelDir;
   const scriptPath = getUnpackedPath(
-    import_path7.default.join(__dirname, "../backend/python/tagger.py")
+    import_path8.default.join(__dirname, "../backend/python/tagger.py")
   );
-  const pythonDir = import_path7.default.dirname(scriptPath);
+  const pythonDir = import_path8.default.dirname(scriptPath);
   const sendProgress = (statusKey, percentText, progress, statusParams) => {
     if (parent.isDestroyed()) return;
     parent.webContents.send("env-init-progress", {
@@ -3576,9 +3602,9 @@ async function ensureModelReady(parent, force = false) {
   const modelMissing = !await hasRequiredModelFiles(modelDir);
   if (!force) {
     try {
-      const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-      if (await import_fs_extra6.default.pathExists(settingsPath)) {
-        const settings = await import_fs_extra6.default.readJson(settingsPath);
+      const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+      if (await import_fs_extra7.default.pathExists(settingsPath)) {
+        const settings = await import_fs_extra7.default.readJson(settingsPath);
         if (!settings.enableVectorSearch && !modelMissing) {
           if (debug)
             console.log("[model] Vector search disabled, skipping model check");
@@ -3625,9 +3651,9 @@ async function ensureModelReady(parent, force = false) {
   sendProgress("model.preparingDownload", "0%", 0);
   parent.setProgressBar(0);
   const scriptPath = getUnpackedPath(
-    import_path7.default.join(__dirname, "../backend/python/tagger.py")
+    import_path8.default.join(__dirname, "../backend/python/tagger.py")
   );
-  const pythonDir = import_path7.default.dirname(scriptPath);
+  const pythonDir = import_path8.default.dirname(scriptPath);
   let percentText = "0%";
   let progress = 0;
   sendProgress("model.downloading", percentText, progress);
@@ -3793,10 +3819,8 @@ import_electron3.app.whenReady().then(async () => {
   applyPinStateToWindow();
   await loadShortcuts();
   registerToggleWindowShortcut(toggleWindowShortcut);
-  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
-  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
   registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
-  registerCanvasGroupShortcut(canvasGroupShortcut);
+  registerAnchorShortcuts();
   if (mainWindow) {
     try {
       await startServer2();
@@ -3825,27 +3849,9 @@ import_electron3.ipcMain.handle(
   }
 );
 import_electron3.ipcMain.handle(
-  "set-canvas-opacity-up-shortcut",
-  async (_event, accelerator) => {
-    return registerCanvasOpacityUpShortcut(accelerator);
-  }
-);
-import_electron3.ipcMain.handle(
-  "set-canvas-opacity-down-shortcut",
-  async (_event, accelerator) => {
-    return registerCanvasOpacityDownShortcut(accelerator);
-  }
-);
-import_electron3.ipcMain.handle(
   "set-toggle-mouse-through-shortcut",
   async (_event, accelerator) => {
     return registerToggleMouseThroughShortcut(accelerator);
-  }
-);
-import_electron3.ipcMain.handle(
-  "set-canvas-group-shortcut",
-  async (_event, accelerator) => {
-    return registerCanvasGroupShortcut(accelerator);
   }
 );
 import_electron3.ipcMain.on("set-mouse-through", (_event, enabled) => {

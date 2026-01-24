@@ -14,6 +14,7 @@ import { createImagesRouter } from "./routes/images";
 import { createTagsRouter } from "./routes/tags";
 import { createSettingsRouter } from "./routes/settings";
 import { createCanvasRouter } from "./routes/canvas";
+import { createAnchorsRouter } from "./routes/anchors";
 import { createTempRouter } from "./routes/temp";
 import { createModelRouter } from "./routes/model";
 import { lockedFs, withFileLock } from "./fileLock";
@@ -686,6 +687,11 @@ export async function startServer(sendToRenderer?: SendToRenderer) {
     createCanvasRouter({
       getCanvasesDir: () => CANVASES_DIR,
       getCanvasTempDir: () => CANVAS_TEMP_DIR,
+    })
+  );
+  server.use(
+    createAnchorsRouter({
+      getStorageDir: () => STORAGE_DIR,
     })
   );
   server.use(

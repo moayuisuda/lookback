@@ -363,15 +363,21 @@ export async function indexImages<T = unknown>(payload: {
 
 export async function localApi<TResponse>(
   endpoint: string,
-  payload: unknown,
-  options: RequestOptions = {}
+  payload?: unknown,
+  options: RequestOptions & { method?: string } = {}
 ): Promise<TResponse> {
-  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: "POST",
+  const method = options.method || (payload ? "POST" : "GET");
+  const fetchOptions: RequestInit = {
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
     signal: options.signal,
-  });
+  };
+
+  if (payload && method !== "GET" && method !== "HEAD") {
+    fetchOptions.body = JSON.stringify(payload);
+  }
+
+  const res = await fetch(`${API_BASE_URL}${endpoint}`, fetchOptions);
 
   if (!res.ok) {
     throw new Error(`Request failed with status ${res.status}`);

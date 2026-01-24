@@ -15,25 +15,11 @@ export const CanvasButton: React.FC<CanvasButtonProps> = ({
   children,
   ...props
 }) => {
-  const baseClasses = "text-xs px-2 py-1 rounded border transition-colors font-medium";
-  
-  // Normal state styles (when not active)
-  const normalClasses = variant === "danger" 
-    ? "bg-neutral-800 text-white border-neutral-700 hover:bg-red-900/50 hover:border-red-800"
-    : "bg-neutral-800 text-white border-neutral-700 hover:bg-neutral-700";
-
-  // When active, we use utility classes instead of inline styles to allow hover overrides
-  const activeClasses = isActive 
-    ? "bg-primary border-primary text-white hover:border-primary"
-    : "";
-
   return (
     <button
-      className={`
-        ${baseClasses} 
-        ${!isActive ? normalClasses : activeClasses} 
-        ${className}
-      `}
+      className={`glass-btn ${isActive ? "glass-btn--active" : ""} ${
+        variant === "danger" ? "glass-btn--danger" : ""
+      } ${className}`}
       style={style}
       {...props}
     >

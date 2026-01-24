@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useRef } from "react";
 import type { ChangeEvent } from "react";
 import Input from "rc-input";
 import { Search, X } from "lucide-react";
@@ -16,6 +16,7 @@ import { THEME, hexToRgba } from "../../theme";
 import { renameTag } from "../../service";
 import { useT } from "../../i18n/useT";
 import type { I18nKey } from "../../../shared/i18n/types";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 const POPOVER_WIDTH = 280;
 
@@ -114,6 +115,10 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
     x: number;
     y: number;
   } | null>(null);
+
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const colorButtonRef = useRef<HTMLButtonElement>(null);
+  useClickOutside<HTMLElement>([popoverRef, colorButtonRef], () => setSearchColorPicker(null));
 
   const handleRenameTag = async (oldTag: string, newTag: string) => {
     try {
@@ -215,6 +220,7 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
             )}
 
             <button
+              ref={colorButtonRef}
               type="button"
               className="w-5 h-5 rounded ring-2 transition-colors shrink-0 overflow-hidden"
               style={
@@ -248,10 +254,14 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
               }
               onClick={(e) => {
                 e.stopPropagation();
+                if (searchColorPicker) {
+                  setSearchColorPicker(null);
+                  return;
+                }
                 const rect = (
                   e.currentTarget as HTMLButtonElement
                 ).getBoundingClientRect();
-                const next = clampPopover(rect.left, rect.bottom + 16);
+                const next = clampPopover(rect.left, rect.bottom);
                 setSearchColorPicker({ x: next.x, y: next.y });
               }}
             />
@@ -302,10 +312,7 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
       {searchColorPicker && (
         <>
           <div
-            className="fixed inset-0 z-[60]"
-            onMouseDown={() => setSearchColorPicker(null)}
-          />
-          <div
+            ref={popoverRef}
             className="fixed z-[61] w-62 bg-neutral-900/95 border border-neutral-700/80 rounded-xl shadow-2xl p-3 backdrop-blur"
             style={{
               top: searchColorPicker.y,

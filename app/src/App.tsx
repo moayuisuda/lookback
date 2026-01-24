@@ -4,7 +4,6 @@ import { Gallery } from "./components/Gallery";
 import { Canvas } from "./components/Canvas";
 import { EnvInitModal } from "./components/EnvInitModal";
 import {
-  state as galleryState,
   actions as galleryActions,
 } from "./store/galleryStore";
 import { THEME } from "./theme";
@@ -17,12 +16,14 @@ import {
 } from "./store/globalStore";
 import type { ImageMeta } from "./store/galleryStore";
 import { canvasActions, canvasState } from "./store/canvasStore";
+import { anchorActions } from "./store/anchorStore";
 import { useSnapshot } from "valtio";
 import { clsx } from "clsx";
 
 import { createTempMetasFromFiles, importFiles } from "./utils/import";
 import { useT } from "./i18n/useT";
 import { isI18nKey } from "../shared/i18n/guards";
+import { useAppShortcuts } from "./hooks/useAppShortcuts";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -48,6 +49,7 @@ const isImageMeta = (value: unknown): value is ImageMeta => {
 };
 
 function App() {
+  useAppShortcuts();
   const globalSnap = useSnapshot(globalState);
   const isResizingRef = useRef(false);
   const { t } = useT();
@@ -97,11 +99,9 @@ function App() {
         : undefined;
       globalActions.pushToast({ key: data.key, params }, type);
     });
-
-    canvasActions.initCanvas((imageId) => {
-      const meta = galleryState.images.find((m) => m.id === imageId);
-      return meta ?? null;
-    });
+    
+    // 初始化加载
+    anchorActions.loadAnchors();
 
     return () => {
       cleanupNew?.();
@@ -201,7 +201,7 @@ function App() {
   return (
     <div
       className={clsx(
-        "flex flex-col h-screen text-white overflow-hidden",
+        "flex flex-col h-screen text-white overflow-hidden transition-colors",
         globalSnap.mouseThrough ? "bg-transparent" : "bg-neutral-950/85",
       )}
     >

@@ -51,20 +51,11 @@ let lastGalleryDockDelta = 0;
 let localeCache: { locale: Locale; mtimeMs: number } | null = null;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
   process.platform === "darwin" ? "Command+L" : "Ctrl+L";
-const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT =
-  process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
-const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT =
-  process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
   process.platform === "darwin" ? "Command+T" : "Ctrl+T";
-const DEFAULT_CANVAS_GROUP_SHORTCUT =
-  process.platform === "darwin" ? "Command+G" : "Ctrl+G";
 
 let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
-let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
-let canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
-let canvasGroupShortcut = DEFAULT_CANVAS_GROUP_SHORTCUT;
 
 let isSettingsOpen = false;
 let isPinMode: boolean;
@@ -124,28 +115,10 @@ async function loadShortcuts(): Promise<void> {
       toggleWindowShortcut = rawToggle.trim();
     }
 
-    const rawOpacityUp = (settings as Record<string, unknown>)
-      .canvasOpacityUpShortcut;
-    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
-      canvasOpacityUpShortcut = rawOpacityUp.trim();
-    }
-
-    const rawOpacityDown = (settings as Record<string, unknown>)
-      .canvasOpacityDownShortcut;
-    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
-      canvasOpacityDownShortcut = rawOpacityDown.trim();
-    }
-
     const rawMouseThrough = (settings as Record<string, unknown>)
       .toggleMouseThroughShortcut;
     if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
-    }
-
-    const rawCanvasGroup = (settings as Record<string, unknown>)
-      .canvasGroupShortcut;
-    if (typeof rawCanvasGroup === "string" && rawCanvasGroup.trim()) {
-      canvasGroupShortcut = rawCanvasGroup.trim();
     }
   } catch {
     // ignore
@@ -547,32 +520,6 @@ function registerToggleWindowShortcut(accelerator: string) {
   );
 }
 
-function registerCanvasOpacityUpShortcut(accelerator: string) {
-  return registerShortcut(
-    accelerator,
-    canvasOpacityUpShortcut,
-    (v) => {
-      canvasOpacityUpShortcut = v;
-    },
-    () => {
-      mainWindow?.webContents.send("renderer-event", "canvas-opacity-up");
-    },
-  );
-}
-
-function registerCanvasOpacityDownShortcut(accelerator: string) {
-  return registerShortcut(
-    accelerator,
-    canvasOpacityDownShortcut,
-    (v) => {
-      canvasOpacityDownShortcut = v;
-    },
-    () => {
-      mainWindow?.webContents.send("renderer-event", "canvas-opacity-down");
-    },
-  );
-}
-
 function registerToggleMouseThroughShortcut(accelerator: string) {
   return registerShortcut(
     accelerator,
@@ -586,17 +533,24 @@ function registerToggleMouseThroughShortcut(accelerator: string) {
   );
 }
 
-function registerCanvasGroupShortcut(accelerator: string) {
-  return registerShortcut(
-    accelerator,
-    canvasGroupShortcut,
-    (v) => {
-      canvasGroupShortcut = v;
-    },
-    () => {
-      mainWindow?.webContents.send("renderer-event", "canvas-auto-layout");
-    },
-  );
+function registerAnchorShortcuts() {
+  const anchors = ["1", "2", "3"];
+  anchors.forEach((key) => {
+    // Restore: Cmd+Key / Ctrl+Key
+    const restoreAccel =
+      process.platform === "darwin" ? `Command+${key}` : `Ctrl+${key}`;
+    globalShortcut.register(restoreAccel, () => {
+      mainWindow?.webContents.send("renderer-event", "restore-anchor", key);
+    });
+
+    // Save: Cmd+Shift+Key / Ctrl+Shift+Key
+    // Note: Cmd+Shift+3 is a system screenshot shortcut on macOS, it might be intercepted by system.
+    const saveAccel =
+      process.platform === "darwin" ? `Command+Shift+${key}` : `Ctrl+Shift+${key}`;
+    globalShortcut.register(saveAccel, () => {
+      mainWindow?.webContents.send("renderer-event", "save-anchor", key);
+    });
+  });
 }
 
 function getModelDir(): string {
@@ -1317,10 +1271,8 @@ app.whenReady().then(async () => {
   await loadShortcuts();
 
   registerToggleWindowShortcut(toggleWindowShortcut);
-  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
-  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
   registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
-  registerCanvasGroupShortcut(canvasGroupShortcut);
+  registerAnchorShortcuts();
 
   if (mainWindow) {
     try {
@@ -1360,30 +1312,9 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
-  "set-canvas-opacity-up-shortcut",
-  async (_event, accelerator: string) => {
-    return registerCanvasOpacityUpShortcut(accelerator);
-  },
-);
-
-ipcMain.handle(
-  "set-canvas-opacity-down-shortcut",
-  async (_event, accelerator: string) => {
-    return registerCanvasOpacityDownShortcut(accelerator);
-  },
-);
-
-ipcMain.handle(
   "set-toggle-mouse-through-shortcut",
   async (_event, accelerator: string) => {
     return registerToggleMouseThroughShortcut(accelerator);
-  },
-);
-
-ipcMain.handle(
-  "set-canvas-group-shortcut",
-  async (_event, accelerator: string) => {
-    return registerCanvasGroupShortcut(accelerator);
   },
 );
 

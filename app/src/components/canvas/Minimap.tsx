@@ -1,8 +1,8 @@
 import React, { useRef } from 'react';
 import Konva from 'konva';
 import { useSnapshot } from 'valtio';
-import { state, type CanvasImage } from '../../store/galleryStore';
-import { canvasState, canvasActions } from '../../store/canvasStore';
+import { state } from '../../store/galleryStore';
+import { canvasState, canvasActions, type CanvasImage } from '../../store/canvasStore';
 import { THEME } from '../../theme';
 
 interface MinimapProps {

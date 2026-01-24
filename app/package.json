@@ -37,6 +37,17 @@
         }
       ]
     },
+    "win": {
+      "extraResources": [
+        {
+          "from": "bin/win32",
+          "to": "bin",
+          "filter": [
+            "uv.exe"
+          ]
+        }
+      ]
+    },
     "publish": [
       {
         "provider": "generic",

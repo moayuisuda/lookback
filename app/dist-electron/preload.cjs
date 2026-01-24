@@ -10,10 +10,7 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   setPinTransparent: (enabled) => import_electron.ipcRenderer.send("set-pin-transparent", enabled),
   resizeWindowBy: (delta) => import_electron.ipcRenderer.send("resize-window-by", delta),
   setToggleWindowShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-window-shortcut", accelerator),
-  setCanvasOpacityUpShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-up-shortcut", accelerator),
-  setCanvasOpacityDownShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-down-shortcut", accelerator),
   setToggleMouseThroughShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-mouse-through-shortcut", accelerator),
-  setCanvasGroupShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-group-shortcut", accelerator),
   setMouseThrough: (enabled) => import_electron.ipcRenderer.send("set-mouse-through", enabled),
   setIgnoreMouseEvents: (ignore, options) => import_electron.ipcRenderer.send("set-ignore-mouse-events", ignore, options),
   onRendererEvent: (callback) => {

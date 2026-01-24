@@ -11,11 +11,75 @@ saveCanvasViewport,
 } from '../service';
 import { debounce } from 'radash';
 import type {
-  CanvasItem,
-  CanvasImage,
-  CanvasPersistedItem,
   ImageMeta,
 } from './galleryStore';
+
+export interface CanvasText {
+  type: 'text';
+  canvasId: string;
+  x: number;
+  y: number;
+  rotation: number;
+  scale: number;
+  scaleX?: number;
+  text: string;
+  fontSize: number;
+  fill: string;
+  width?: number;
+  height?: number;
+  align?: string;
+}
+
+export interface CanvasImage extends ImageMeta {
+  type: 'image';
+  canvasId: string;
+  x: number;
+  y: number;
+  scale: number;
+  scaleX?: number;
+  scaleY?: number;
+  rotation: number;
+  width?: number;
+  height?: number;
+  grayscale?: boolean; // Deprecated
+  filters?: string[];
+}
+
+export type CanvasItem = CanvasImage | CanvasText;
+
+export interface CanvasPersistedItem {
+  type: 'image' | 'text';
+  kind?: 'ref' | 'temp';
+  canvasId: string;
+  x: number;
+  y: number;
+  rotation: number;
+  scale: number;
+  scaleX?: number;
+  scaleY?: number;
+  width?: number;
+  height?: number;
+  
+  // Image specific
+  imageId?: string;
+  imagePath?: string;
+  dominantColor?: string | null;
+  tone?: string | null;
+  grayscale?: boolean; // Deprecated
+  filters?: string[];
+  
+  // Temp image specific
+  // name, localPath removed
+  pageUrl?: string;
+  tags?: string[];
+  createdAt?: number;
+
+  // Text specific
+  text?: string;
+  fontSize?: number;
+  fill?: string;
+  align?: string;
+}
 
 interface CanvasPoint {
   x: number;
@@ -273,9 +337,7 @@ export const canvasActions = {
     debouncedPersistCanvasViewport(canvasState.canvasViewport);
   },
 
-  initCanvas: async (
-    findImageMeta: (id: string) => ImageMeta | null,
-  ): Promise<void> => {
+  initCanvas: async (): Promise<void> => {
     try {
       const lastActive = await settingStorage.get<string>({
         key: 'lastActiveCanvas',
@@ -352,11 +414,24 @@ export const canvasActions = {
           const ref = item;
           if (!ref.imageId) return;
 
-          const meta = findImageMeta(ref.imageId);
-          if (!meta) return;
+          // For ref images, we construct metadata from persisted info
+          // This decouples canvas restoration from gallery state
+          let filename = 'image';
+          if (ref.imagePath) {
+            const rawName = ref.imagePath.split(/[\\/]/).pop() || ref.imagePath;
+            const dot = rawName.lastIndexOf('.');
+            filename = dot > 0 ? rawName.slice(0, dot) : rawName;
+          }
 
           const img: CanvasImage = {
-            ...meta,
+            id: ref.imageId,
+            filename,
+            imagePath: ref.imagePath || '', // Should ideally have imagePath
+            tags: [], // Tags not persisted for ref images currently
+            createdAt: 0, // CreatedAt not persisted for ref images currently
+            dominantColor: ref.dominantColor,
+            tone: ref.tone,
+            hasVector: false,
             type: 'image',
             canvasId: ref.canvasId,
             x: ref.x,
@@ -395,17 +470,16 @@ export const canvasActions = {
     }
   },
 
-  switchCanvas: async (
-    name: string,
-    findImageMeta: (id: string) => ImageMeta | null,
-  ) => {
+  switchCanvas: async (name: string, skipSave = false) => {
     if (name === canvasState.currentCanvasName) return;
 
-    // Save current viewport
-    await saveCanvasViewport(
-      canvasState.canvasViewport,
-      canvasState.currentCanvasName,
-    );
+    if (!skipSave) {
+      // Save current viewport
+      await saveCanvasViewport(
+        canvasState.canvasViewport,
+        canvasState.currentCanvasName,
+      );
+    }
 
     // Update storage
     await settingStorage.set('lastActiveCanvas', name);
@@ -416,7 +490,7 @@ export const canvasActions = {
     canvasState.canvasHistoryIndex = 0;
 
     // Init (which will read lastActiveCanvas and load)
-    await canvasActions.initCanvas(findImageMeta);
+    await canvasActions.initCanvas();
   },
 
   commitCanvasChange: () => {
@@ -822,5 +896,9 @@ export const canvasActions = {
   toggleMinimap: () => {
     canvasState.showMinimap = !canvasState.showMinimap;
     void settingStorage.set('showMinimap', canvasState.showMinimap);
+  },
+
+  cancelPendingSave: () => {
+    debouncedPersistCanvasViewport.cancel();
   },
 };

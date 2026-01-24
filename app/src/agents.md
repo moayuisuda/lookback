@@ -7,6 +7,7 @@
 - **UI 渲染**: 使用 React 构建用户界面。
 - **状态管理**: 使用 `valtio` (`store.ts`) 管理全局状态（图片列表、画布状态、搜索词、Tag 排序）。
 - **启动流程**: `main.tsx` 会在 React 挂载前先 hydrate i18n 与 settings（如 sidebarWidth / Gallery 抽屉状态），减少启动闪动并确保窗口状态可恢复；初始化 settings 使用批量接口减少请求次数。
+- **快捷键管理**: 使用 `react-hotkeys-hook` 统一管理应用内快捷键，集中在 `hooks/useAppShortcuts.ts`。
 
 - **组件结构**:
   - `components/Gallery.tsx`: 左侧瀑布流图片展示与搜索。

@@ -27,6 +27,7 @@ import { useSnapshot } from "valtio";
 import { API_BASE_URL } from "../config";
 import { indexImages } from "../service";
 import { useT } from "../i18n/useT";
+import { useClickOutside } from "../hooks/useClickOutside";
 import {
   listCanvases,
   createCanvas,
@@ -38,6 +39,7 @@ import type { I18nKey, I18nParams } from "../../shared/i18n/types";
 import { isI18nKey } from "../../shared/i18n/guards";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { ShortcutInput } from "./ShortcutInput";
+import { ConfirmModal } from "./ConfirmModal";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -89,6 +91,13 @@ export const TitleBar: React.FC = () => {
   const [indexing, setIndexing] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(false);
+
+  const canvasMenuRef = useRef<HTMLDivElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+
+  useClickOutside(canvasMenuRef, () => setCanvasMenuOpen(false));
+  useClickOutside<HTMLElement>([settingsBtnRef, settingsMenuRef], () => setSettingsOpen(false));
 
   const canvasSnap = useSnapshot(canvasState);
   const [canvases, setCanvases] = useState<CanvasMeta[]>([]);
@@ -143,28 +152,44 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleSwitchCanvas = async (name: string) => {
-    const { state: galleryState } = await import("../store/galleryStore");
-    const findImageMeta = (id: string) => {
-      const item = galleryState.images.find((img) => img.id === id);
-      return item || null;
-    };
-
-    await canvasActions.switchCanvas(name, findImageMeta);
+    await canvasActions.switchCanvas(name);
   };
 
-  const handleDeleteCanvas = async (name: string) => {
-    if (!confirm(t("settings.canvas.deleteConfirm"))) return;
+  const [deleteConfirmCanvas, setDeleteConfirmCanvas] = useState<string | null>(null);
+
+  const handleDeleteCanvas = (name: string) => {
+    setDeleteConfirmCanvas(name);
+  };
+
+  const handleConfirmDelete = async () => {
+    const name = deleteConfirmCanvas;
+    if (!name) return;
+    setDeleteConfirmCanvas(null);
+
     try {
+      canvasActions.cancelPendingSave();
+
+      if (canvasSnap.currentCanvasName === name) {
+        const list = await listCanvases();
+        const next = list.find((c) => c.name !== name);
+        if (next) {
+          await canvasActions.switchCanvas(next.name, true);
+        }
+      }
+
       await deleteCanvas(name);
+      globalActions.pushToast({ key: "toast.canvasDeleted" }, "success");
       await refreshCanvases();
+
       if (canvasSnap.currentCanvasName === name) {
         const list = await listCanvases();
         if (list.length > 0) {
-          handleSwitchCanvas(list[0].name);
+          await canvasActions.switchCanvas(list[0].name, true);
         }
       }
     } catch (e) {
       console.error(e);
+      globalActions.pushToast({ key: "toast.deleteCanvasFailed" }, "error");
     }
   };
 
@@ -176,12 +201,7 @@ export const TitleBar: React.FC = () => {
       setEditingName("");
       await refreshCanvases();
       if (canvasSnap.currentCanvasName === editingCanvas) {
-        const { state: galleryState } = await import("../store/galleryStore");
-        const findImageMeta = (id: string) => {
-          const item = galleryState.images.find((img) => img.id === id);
-          return item || null;
-        };
-        await canvasActions.switchCanvas(editingName, findImageMeta);
+        await canvasActions.switchCanvas(editingName);
       }
     } catch (e) {
       console.error(e);
@@ -501,17 +521,17 @@ export const TitleBar: React.FC = () => {
     await globalActions.setToggleMouseThroughShortcut(accelerator);
   };
 
+  const handleSetToggleGalleryShortcut = async (accelerator: string) => {
+    await globalActions.setToggleGalleryShortcut(accelerator);
+  };
+
   const handleSetCanvasGroupShortcut = async (accelerator: string) => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
 
   useEffect(() => {
     const cleanup = window.electron?.onRendererEvent?.((event: string) => {
-      if (event === "canvas-opacity-up") {
-        globalActions.setCanvasOpacity(globalState.canvasOpacity + 0.1);
-      } else if (event === "canvas-opacity-down") {
-        globalActions.setCanvasOpacity(globalState.canvasOpacity - 0.1);
-      } else if (event === "toggle-mouse-through") {
+      if (event === "toggle-mouse-through") {
         if (globalState.pinMode) {
           globalActions.setMouseThrough(!globalState.mouseThrough);
         }
@@ -566,7 +586,7 @@ export const TitleBar: React.FC = () => {
                 "p-1 hover:bg-neutral-800 rounded transition-colors no-drag",
                 snap.isGalleryOpen && "bg-neutral-800",
               )}
-              style={{ color: snap.isGalleryOpen ? THEME.primary : undefined }}
+              style={{ color: snap.isGalleryOpen ? THEME.primary : 'white' }}
               title={t("common.close")}
             >
               <Sidebar size={14} />
@@ -575,7 +595,7 @@ export const TitleBar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-1 no-drag">
-          <div className="relative">
+          <div className="relative" ref={canvasMenuRef}>
             <button
               onClick={() => setCanvasMenuOpen(!canvasMenuOpen)}
               className={clsx(
@@ -584,10 +604,10 @@ export const TitleBar: React.FC = () => {
               )}
               title={t("settings.canvas")}
             >
-              <span className="truncate text-[10px] text-neutral-300 font-medium">
+              <span className="truncate text-[10px] font-medium">
                 {canvasSnap.currentCanvasName || t("common.notSet")}
               </span>
-              <ChevronDown size={10} className="text-neutral-500 shrink-0" />
+              <ChevronDown size={10} className="shrink-0" />
             </button>
 
             {canvasMenuOpen && (
@@ -728,6 +748,7 @@ export const TitleBar: React.FC = () => {
             <>
               <div className="w-px h-4 bg-neutral-700 mx-1" />
               <button
+                ref={settingsBtnRef}
                 onClick={handleToggleSettings}
                 className={clsx(
                   "p-1 hover:bg-neutral-800 rounded transition-colors",
@@ -771,6 +792,7 @@ export const TitleBar: React.FC = () => {
 
         {settingsOpen && (
           <div
+            ref={settingsMenuRef}
             className={clsx(
               "absolute top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag flex flex-col gap-3 max-h-[85vh] overflow-y-auto custom-scrollbar",
               snap.mouseThrough ? "left-0" : "right-2",
@@ -1071,6 +1093,18 @@ export const TitleBar: React.FC = () => {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.toggleGallery")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.toggleGalleryShortcut}
+                    onChange={(accel) =>
+                      void handleSetToggleGalleryShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
                     {t("titleBar.canvasGroup")}
                   </span>
                   <ShortcutInput
@@ -1108,6 +1142,16 @@ export const TitleBar: React.FC = () => {
         )}
         onMouseEnter={handleRightAreaEnter}
         onMouseLeave={handleRightAreaLeave}
+      />
+      
+      <ConfirmModal
+        isOpen={!!deleteConfirmCanvas}
+        title={t("settings.canvas.deleteTitle")}
+        message={t("settings.canvas.deleteConfirm")}
+        confirmText={t("common.confirm")}
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteConfirmCanvas(null)}
       />
     </div>
   );

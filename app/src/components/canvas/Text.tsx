@@ -1,6 +1,5 @@
 import type Konva from "konva";
-import { type CanvasText as CanvasTextState } from "../../store/galleryStore";
-import { canvasActions } from "../../store/canvasStore";
+import { type CanvasText as CanvasTextState, canvasActions } from "../../store/canvasStore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import React from "react";
 import {

@@ -6,7 +6,8 @@ import {
 } from "react-konva";
 import useImage from "use-image";
 import Konva from "konva";
-import { type CanvasImage as CanvasImageState, getImageUrl } from "../../store/galleryStore";
+import { type CanvasImage as CanvasImageState } from "../../store/canvasStore";
+import { getImageUrl } from "../../store/galleryStore";
 import { canvasActions } from "../../store/canvasStore";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";

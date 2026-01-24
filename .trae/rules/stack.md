@@ -15,3 +15,4 @@
 11. 所有文案都需要国际化，参考 app/shared/i18n/agents.md
 12. 防抖、节流等工具函数用 radash
 13. 能在对应 valtio store 管理的，不要用 useState
+14. 文件读写操作，都要通过 fileLock 文件的方法来进行，避免并发读写导致数据损坏
