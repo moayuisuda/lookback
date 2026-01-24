@@ -584,7 +584,7 @@ async function collectImage(imageUrl, tags, nameOverride) {
     const pageUrl = window.location.href;
     const name = nameOverride || "";
 
-    const res = await fetch(`${API_BASE}/collect`, {
+    const res = await fetch(`${API_BASE}/import`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -5,12 +5,13 @@ import { useSnapshot } from "valtio";
 import { globalState } from "../../store/globalStore";
 import { CanvasButton } from "./CanvasButton";
 import { useT } from "../../i18n/useT";
+import { FilterSelector } from "./FilterSelector";
 
 interface CanvasToolbarProps {
-  canvasGrayscale: boolean;
+  canvasFilters: readonly string[];
   showMinimap: boolean;
   isExpanded: boolean;
-  onToggleGrayscale: () => void;
+  onFiltersChange: (filters: string[]) => void;
   onToggleMinimap: () => void;
   onAutoLayout: () => void;
   onRequestClear: () => void;
@@ -18,10 +19,10 @@ interface CanvasToolbarProps {
 }
 
 export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
-  canvasGrayscale,
+  canvasFilters,
   showMinimap,
   isExpanded,
-  onToggleGrayscale,
+  onFiltersChange,
   onToggleMinimap,
   onAutoLayout,
   onRequestClear,
@@ -42,17 +43,14 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
       </button>
       {!hideCanvasButtons && (
         <div
-          className={`gap-2 ml-2 overflow-hidden transition-all duration-300 ease-in-out ${
+          className={`gap-2 ml-2 transition-all duration-300 ease-in-out ${
             isExpanded ? "flex" : "hidden"
           }`}
         >
-          <CanvasButton
-            isActive={canvasGrayscale}
-            onClick={onToggleGrayscale}
-            title={t("canvas.toolbar.toggleGrayscale")}
-          >
-            {t("canvas.toolbar.grayscale")}
-          </CanvasButton>
+          <FilterSelector
+            activeFilters={canvasFilters}
+            onChange={onFiltersChange}
+          />
           <CanvasButton onClick={onAutoLayout}>
             {t("canvas.toolbar.smartLayout")}
           </CanvasButton>

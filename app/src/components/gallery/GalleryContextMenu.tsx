@@ -91,26 +91,31 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
     const rect = el.getBoundingClientRect();
     const padding = 8;
 
-    let top = value.y;
     let left = value.x;
 
-    if (top + rect.height + padding > window.innerHeight) {
-      top = window.innerHeight - rect.height - padding;
-    }
     if (left + rect.width + padding > window.innerWidth) {
       left = window.innerWidth - rect.width - padding;
     }
-
-    if (top < padding) top = padding;
     if (left < padding) left = padding;
 
-    el.style.top = `${top}px`;
     el.style.left = `${left}px`;
-    el.style.maxHeight = `calc(100vh - ${padding * 2}px)`;
-  }, [value.x, value.y, value.image.image]);
+
+    // Intelligent vertical positioning
+    // If triggered in the bottom half of the screen, open upwards (anchor bottom)
+    // Otherwise open downwards (anchor top)
+    if (value.y > window.innerHeight / 2) {
+      el.style.bottom = `${window.innerHeight - value.y}px`;
+      el.style.top = "auto";
+      el.style.maxHeight = `${value.y - padding}px`;
+    } else {
+      el.style.top = `${value.y}px`;
+      el.style.bottom = "auto";
+      el.style.maxHeight = `${window.innerHeight - value.y - padding}px`;
+    }
+  }, [value.x, value.y, value.image.id]);
 
   const [menuName, setMenuName] = useState(() =>
-    deriveNameFromFilename(value.image.image)
+    deriveNameFromFilename(value.image.filename)
   );
 
   const debouncedUpdateName = useMemo(
@@ -163,10 +168,10 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
             debouncedUpdateName.cancel();
             const trimmed = menuName.trim();
             if (!trimmed) {
-              setMenuName(deriveNameFromFilename(value.image.image));
+              setMenuName(deriveNameFromFilename(value.image.filename));
               return;
             }
-            if (trimmed !== deriveNameFromFilename(value.image.image)) {
+            if (trimmed !== deriveNameFromFilename(value.image.filename)) {
               onUpdateName(trimmed);
             }
           }}
@@ -349,7 +354,7 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
 
       <div className="border-t border-neutral-800 my-1"></div>
 
-      {enableVectorSearch && !value.image.vector && (
+      {enableVectorSearch && !value.image.hasVector && (
         <div
           className="flex items-center gap-2 px-4 py-2 text-white hover:bg-neutral-800 cursor-pointer transition-colors"
           onClick={onReindex}

@@ -1,19 +1,21 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useMemo } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import {
-  Stage,
-  Layer,
-} from "react-konva";
+import { debounce } from "radash";
+import { Stage, Layer } from "react-konva";
 import {
   actions as galleryActions,
   type ImageMeta,
   type CanvasImage as CanvasImageState,
 } from "../store/galleryStore";
-import { canvasState, canvasActions, getRenderBbox } from "../store/canvasStore";
+import {
+  canvasState,
+  canvasActions,
+  getRenderBbox,
+} from "../store/canvasStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot } from "valtio";
 import Konva from "konva";
-import { localApi, getTempDominantColor } from "../service";
+import { getTempDominantColor } from "../service";
 import { API_BASE_URL } from "../config";
 import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
@@ -23,51 +25,28 @@ import { CanvasToolbar } from "./canvas/CanvasToolbar";
 import { MultiSelectOverlay } from "./canvas/MultiSelectOverlay";
 import { SelectionRect, type SelectionBoxState } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
-
-const fileToDataUrl = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-};
-
-const uploadTempImage = async (
-  file: File
-): Promise<{ filename: string; path: string } | null> => {
-  const imageBase64 = await fileToDataUrl(file);
-  if (!imageBase64) return null;
-
-  const data = await localApi<{
-    success?: boolean;
-    filename?: string;
-    path?: string;
-  }>("/api/upload-temp", {
-    imageBase64,
-    filename: file.name,
-  });
-  if (
-    !data ||
-    !data.success ||
-    typeof data.filename !== "string" ||
-    typeof data.path !== "string"
-  )
-    return null;
-  return { filename: data.filename, path: data.path };
-};
+import { createTempMetasFromFiles } from "../utils/import";
+import { THEME } from "../theme";
 
 const acceleratorToHotkey = (accelerator: string): string | null => {
   const raw = accelerator.trim();
   if (!raw) return null;
-  const parts = raw.split("+").map((p) => p.trim()).filter(Boolean);
+  const parts = raw
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (parts.length === 0) return null;
   const mainKey = parts[parts.length - 1];
   const modifiers = parts.slice(0, -1);
   const keys: string[] = [];
   modifiers.forEach((m) => {
     const lower = m.toLowerCase();
-    if (lower === "command" || lower === "cmd" || lower === "ctrl" || lower === "control") {
+    if (
+      lower === "command" ||
+      lower === "cmd" ||
+      lower === "ctrl" ||
+      lower === "control"
+    ) {
       if (!keys.includes("mod")) keys.push("mod");
     } else if (lower === "shift") {
       keys.push("shift");
@@ -85,7 +64,6 @@ export const Canvas: React.FC = () => {
   const appSnap = useSnapshot(globalState);
   const canvasSnap = useSnapshot(canvasState);
   const { t } = useT();
-  const isPinTransparent = appSnap.pinMode && appSnap.pinTransparent;
   const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
   const selectedIds = canvasSnap.selectedIds;
   const primaryId = canvasSnap.primaryId;
@@ -100,6 +78,13 @@ export const Canvas: React.FC = () => {
   const multiSelectUnion = canvasSnap.multiSelectUnion;
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
+  const debouncedCommit = useMemo(
+    () =>
+      debounce({ delay: 500 }, () => {
+        canvasActions.commitCanvasChange();
+      }),
+    [],
+  );
   const selectionAppendRef = useRef(false);
   const multiDragRef = useRef<{
     active: boolean;
@@ -107,6 +92,30 @@ export const Canvas: React.FC = () => {
     anchor: { x: number; y: number } | null;
     snapshots: Map<string, { x: number; y: number }>;
   }>({ active: false, draggedId: null, anchor: null, snapshots: new Map() });
+  const multiScaleRef = useRef<{
+    active: boolean;
+    anchor: { x: number; y: number } | null;
+    startUnion: { x: number; y: number; width: number; height: number } | null;
+    scale: number;
+    snapshots: Map<
+      string,
+      {
+        type: "image" | "text";
+        x: number;
+        y: number;
+        scale: number;
+        scaleX?: number;
+        scaleY?: number;
+        fontSize?: number;
+      }
+    >;
+  }>({
+    active: false,
+    anchor: null,
+    startUnion: null,
+    scale: 1,
+    snapshots: new Map(),
+  });
 
   const isMouseOverCanvasRef = useRef(false);
   const isIgnoringMouseRef = useRef(false);
@@ -123,9 +132,7 @@ export const Canvas: React.FC = () => {
     canvasState.primaryId = id;
   };
 
-  const setMultiSelectUnion = (
-    rect: typeof canvasState.multiSelectUnion,
-  ) => {
+  const setMultiSelectUnion = (rect: typeof canvasState.multiSelectUnion) => {
     canvasState.multiSelectUnion = rect;
   };
 
@@ -204,7 +211,11 @@ export const Canvas: React.FC = () => {
       window.electron?.setIgnoreMouseEvents?.(false);
       isIgnoringMouseRef.current = false;
     }
-    if (shouldEnableMouseThrough && isMouseOverCanvasRef.current && !isIgnoringMouseRef.current) {
+    if (
+      shouldEnableMouseThrough &&
+      isMouseOverCanvasRef.current &&
+      !isIgnoringMouseRef.current
+    ) {
       window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
       isIgnoringMouseRef.current = true;
     }
@@ -318,7 +329,7 @@ export const Canvas: React.FC = () => {
       if (data) {
         try {
           const image = JSON.parse(data) as ImageMeta;
-          if (image && image.image) {
+          if (image && image.id && image.imagePath) {
             canvasActions.addToCanvas(image, basePoint.x, basePoint.y);
             return;
           }
@@ -365,14 +376,12 @@ export const Canvas: React.FC = () => {
               };
               if (result.success && result.filename && result.path) {
                 const dominantColor = await getTempDominantColor(result.path);
-                const meta = galleryActions.createDroppedImageMeta(
-                  {
-                    path: result.path,
-                    storedFilename: `temp-images/${result.filename}`,
-                    originalName: result.filename,
-                    dominantColor,
-                  }
-                );
+                const meta = galleryActions.createDroppedImageMeta({
+                  path: result.path,
+                  storedFilename: `temp-images/${result.filename}`,
+                  originalName: result.filename,
+                  dominantColor,
+                });
                 canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
               }
             }
@@ -386,37 +395,15 @@ export const Canvas: React.FC = () => {
       const imageFiles = files.filter((f) => f.type.startsWith("image/"));
       if (!imageFiles.length) return;
 
-      const results = await Promise.all(
-        imageFiles.map(async (file, index) => {
-          try {
-            const uploaded = await uploadTempImage(file);
-            if (!uploaded) return null;
-            const dominantColor = await getTempDominantColor(uploaded.path);
-            const meta = galleryActions.createDroppedImageMeta(
-              {
-                path: uploaded.path,
-                storedFilename: `temp-images/${uploaded.filename}`,
-                originalName: file.name,
-                dominantColor,
-              }
-            );
-            return { meta, index };
-          } catch {
-            return null;
-          }
-        })
-      );
-
-      results
-        .filter((r): r is { meta: ImageMeta; index: number } => !!r)
-        .forEach(({ meta, index }) => {
-          const offset = index * 24;
-          canvasActions.addToCanvas(
-            meta,
-            basePoint.x + offset,
-            basePoint.y + offset,
-          );
-        });
+      const metas = await createTempMetasFromFiles(imageFiles);
+      metas.forEach((meta, index) => {
+        const offset = index * 24;
+        canvasActions.addToCanvas(
+          meta,
+          basePoint.x + offset,
+          basePoint.y + offset,
+        );
+      });
     } catch (err: unknown) {
       console.error("Drop error", err);
     }
@@ -426,6 +413,84 @@ export const Canvas: React.FC = () => {
     e.evt.preventDefault();
     const stage = stageRef.current;
     if (!stage) return;
+
+    // 如果有选中内容，以选中内容的中心为基准进行元素缩放
+    if (selectedIds.size > 0) {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      let hasValidSelection = false;
+      const validItems: {
+        item: (typeof items)[0];
+      }[] = [];
+
+      const items = canvasSnap.canvasItems || [];
+      items.forEach((item) => {
+        if (selectedIds.has(item.canvasId)) {
+          const scale = item.scale || 1;
+          const rawW = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
+          const rawH =
+            (item.height || 0) *
+            scale *
+            Math.abs(item.type === "text" ? 1 : item.scaleY || 1);
+          const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+          const itemMinX = item.x + bbox.offsetX;
+          const itemMinY = item.y + bbox.offsetY;
+          const itemMaxX = itemMinX + bbox.width;
+          const itemMaxY = itemMinY + bbox.height;
+
+          if (itemMinX < minX) minX = itemMinX;
+          if (itemMinY < minY) minY = itemMinY;
+          if (itemMaxX > maxX) maxX = itemMaxX;
+          if (itemMaxY > maxY) maxY = itemMaxY;
+
+          hasValidSelection = true;
+          validItems.push({ item });
+        }
+      });
+
+      if (hasValidSelection && minX !== Infinity) {
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+
+        const scaleBy = 1.05;
+        const factor = e.evt.deltaY > 0 ? 1 / scaleBy : scaleBy;
+
+        validItems.forEach(({ item }) => {
+          const dx = item.x - centerX;
+          const dy = item.y - centerY;
+
+          const newX = centerX + dx * factor;
+          const newY = centerY + dy * factor;
+
+          if (item.type === "text") {
+            const fontSize = item.fontSize || 24;
+            canvasActions.updateCanvasImageSilent(item.canvasId, {
+              x: newX,
+              y: newY,
+              fontSize: fontSize * factor,
+            });
+          } else {
+            const scale = item.scale || 1;
+            canvasActions.updateCanvasImageSilent(item.canvasId, {
+              x: newX,
+              y: newY,
+              scale: scale * factor,
+            });
+          }
+        });
+
+        // Try to update selection box immediately for better visual feedback
+        setTimeout(() => {
+          setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
+        }, 0);
+
+        debouncedCommit();
+      }
+      return;
+    }
 
     const scaleBy = 1.1;
     const oldScale = stage.scaleX();
@@ -437,8 +502,7 @@ export const Canvas: React.FC = () => {
       y: (pointer.y - stage.y()) / oldScale,
     };
 
-    const newScale =
-      e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
+    const newScale = e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
 
     const newPos = {
       x: pointer.x - mousePointTo.x * newScale,
@@ -499,7 +563,7 @@ export const Canvas: React.FC = () => {
   }, []);
 
   const handleMouseDown = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>
+    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
   ) => {
     const stage = e.target.getStage();
     if (!stage) return;
@@ -546,8 +610,46 @@ export const Canvas: React.FC = () => {
   };
 
   const handleMouseMove = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>
+    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
   ) => {
+    if (multiScaleRef.current.active) {
+      const stage = stageRef.current;
+      const current = multiScaleRef.current;
+      if (!stage || !current.anchor || !current.startUnion) return;
+      const pos = stage.getRelativePointerPosition();
+      if (!pos) return;
+      const base = Math.max(
+        1,
+        Math.hypot(current.startUnion.width, current.startUnion.height),
+      );
+      const next = Math.hypot(
+        pos.x - current.anchor.x,
+        pos.y - current.anchor.y,
+      );
+      const scale = Math.max(0.1, next / base);
+      current.scale = scale;
+      current.snapshots.forEach((start, selectedId) => {
+        const nextX = current.anchor!.x + (start.x - current.anchor!.x) * scale;
+        const nextY = current.anchor!.y + (start.y - current.anchor!.y) * scale;
+        if (start.type === "text") {
+          const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
+          canvasActions.updateCanvasImageTransient(selectedId, {
+            x: nextX,
+            y: nextY,
+            fontSize: nextFontSize,
+          });
+        } else {
+          const nextScale = Math.max(0.05, start.scale * scale);
+          canvasActions.updateCanvasImageTransient(selectedId, {
+            x: nextX,
+            y: nextY,
+            scale: nextScale,
+          });
+        }
+      });
+      setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
+      return;
+    }
     // Panning (Space held)
     if (isPanningRef.current) {
       const stage = stageRef.current;
@@ -592,6 +694,44 @@ export const Canvas: React.FC = () => {
   };
 
   const handleMouseUp = () => {
+    if (multiScaleRef.current.active) {
+      const current = multiScaleRef.current;
+      const scale = current.scale || 1;
+      if (current.anchor) {
+        current.snapshots.forEach((start, selectedId) => {
+          const nextX =
+            current.anchor!.x + (start.x - current.anchor!.x) * scale;
+          const nextY =
+            current.anchor!.y + (start.y - current.anchor!.y) * scale;
+          if (start.type === "text") {
+            const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
+            canvasActions.updateCanvasImage(selectedId, {
+              x: nextX,
+              y: nextY,
+              fontSize: nextFontSize,
+            });
+          } else {
+            const nextScale = Math.max(0.05, start.scale * scale);
+            canvasActions.updateCanvasImage(selectedId, {
+              x: nextX,
+              y: nextY,
+              scale: nextScale,
+            });
+          }
+        });
+      }
+      multiScaleRef.current = {
+        active: false,
+        anchor: null,
+        startUnion: null,
+        scale: 1,
+        snapshots: new Map(),
+      };
+      setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
+      const stage = stageRef.current;
+      if (stage) stage.container().style.cursor = "default";
+      return;
+    }
     const stage = stageRef.current;
     if (stage) stage.container().style.cursor = "default";
 
@@ -641,10 +781,42 @@ export const Canvas: React.FC = () => {
 
   useEffect(() => {
     const handleWindowMouseUp = () => {
-      if (
-        canvasState.selectionBox.start ||
-        canvasState.selectionBox.current
-      ) {
+      if (multiScaleRef.current.active) {
+        const current = multiScaleRef.current;
+        const scale = current.scale || 1;
+        if (current.anchor) {
+          current.snapshots.forEach((start, selectedId) => {
+            const nextX =
+              current.anchor!.x + (start.x - current.anchor!.x) * scale;
+            const nextY =
+              current.anchor!.y + (start.y - current.anchor!.y) * scale;
+            if (start.type === "text") {
+              const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
+              canvasActions.updateCanvasImage(selectedId, {
+                x: nextX,
+                y: nextY,
+                fontSize: nextFontSize,
+              });
+            } else {
+              const nextScale = Math.max(0.05, start.scale * scale);
+              canvasActions.updateCanvasImage(selectedId, {
+                x: nextX,
+                y: nextY,
+                scale: nextScale,
+              });
+            }
+          });
+        }
+        multiScaleRef.current = {
+          active: false,
+          anchor: null,
+          startUnion: null,
+          scale: 1,
+          snapshots: new Map(),
+        };
+        setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
+      }
+      if (canvasState.selectionBox.start || canvasState.selectionBox.current) {
         canvasState.selectionBox = { start: null, current: null };
       }
       isPanningRef.current = false;
@@ -666,10 +838,10 @@ export const Canvas: React.FC = () => {
     if (selectedIds.size > 0) {
       const items = canvasSnap.canvasItems || [];
       const selectedItems = items.filter((item) =>
-        selectedIds.has(item.canvasId)
+        selectedIds.has(item.canvasId),
       );
       const selectedImages = selectedItems.filter(
-        (item) => item.type === "image"
+        (item) => item.type === "image",
       );
 
       if (selectedImages.length >= 2) {
@@ -679,10 +851,7 @@ export const Canvas: React.FC = () => {
         selectedImages.forEach((item) => {
           const scale = item.scale || 1;
           const rawW = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
-          const rawH =
-            (item.height || 0) *
-            scale *
-            Math.abs(item.scaleY || 1);
+          const rawH = (item.height || 0) * scale * Math.abs(item.scaleY || 1);
           const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
 
           minX = Math.min(minX, item.x + bbox.offsetX);
@@ -697,7 +866,7 @@ export const Canvas: React.FC = () => {
           {
             startX: minX,
             startY: minY,
-          }
+          },
         );
 
         setTimeout(() => {
@@ -781,9 +950,7 @@ export const Canvas: React.FC = () => {
     if (selectedIds.size === 0) return;
 
     selectedIds.forEach((id) => {
-      const item = canvasSnap.canvasItems.find(
-        (i) => i.canvasId === id,
-      );
+      const item = canvasSnap.canvasItems.find((i) => i.canvasId === id);
       if (item && item.type !== "text") {
         const currentScaleX = item.scaleX || 1;
         canvasActions.updateCanvasImage(id, {
@@ -791,9 +958,13 @@ export const Canvas: React.FC = () => {
         });
       }
     });
+    setTimeout(() => {
+      setMultiSelectUnion(computeMultiSelectUnion(selectedIds));
+    }, 0);
   }, [selectedIds, canvasSnap.canvasItems]);
 
-  const groupHotkey = acceleratorToHotkey(appSnap.canvasGroupShortcut) || "mod+g";
+  const groupHotkey =
+    acceleratorToHotkey(appSnap.canvasGroupShortcut) || "mod+g";
 
   useHotkeys(
     groupHotkey,
@@ -802,7 +973,7 @@ export const Canvas: React.FC = () => {
       handleAutoLayout();
     },
     { preventDefault: true },
-    [handleAutoLayout, groupHotkey]
+    [handleAutoLayout, groupHotkey],
   );
 
   useHotkeys(
@@ -812,7 +983,7 @@ export const Canvas: React.FC = () => {
       handleFlipSelection();
     },
     { preventDefault: true },
-    [handleFlipSelection]
+    [handleFlipSelection],
   );
 
   const handleDeleteSelection = () => {
@@ -908,6 +1079,60 @@ export const Canvas: React.FC = () => {
     };
   };
 
+  const handleGroupScaleStart = () => {
+    const union = multiSelectUnion;
+    const stage = stageRef.current;
+    const currentSelected = selectedIdsRef.current;
+    if (!union || !stage) return;
+    if (currentSelected.size <= 1) return;
+    if (union.width <= 0 || union.height <= 0) return;
+    const snapshots = new Map<
+      string,
+      {
+        type: "image" | "text";
+        x: number;
+        y: number;
+        scale: number;
+        scaleX?: number;
+        scaleY?: number;
+        fontSize?: number;
+      }
+    >();
+    currentSelected.forEach((selectedId) => {
+      const target = canvasSnap.canvasItems.find(
+        (it) => it.canvasId === selectedId,
+      );
+      if (!target) return;
+      if (target.type === "text") {
+        snapshots.set(selectedId, {
+          type: "text",
+          x: target.x,
+          y: target.y,
+          scale: target.scale || 1,
+          fontSize: target.fontSize || 24,
+        });
+        return;
+      }
+      const img = target as CanvasImageState;
+      snapshots.set(selectedId, {
+        type: "image",
+        x: img.x,
+        y: img.y,
+        scale: img.scale || 1,
+        scaleX: img.scaleX,
+        scaleY: img.scaleY,
+      });
+    });
+    multiScaleRef.current = {
+      active: true,
+      anchor: { x: union.x, y: union.y },
+      startUnion: { ...union },
+      scale: 1,
+      snapshots,
+    };
+    stage.container().style.cursor = "nwse-resize";
+  };
+
   const handleDragMove = (id: string, pos: { x: number; y: number }) => {
     const multi = multiDragRef.current;
     if (multi.active && multi.anchor) {
@@ -957,7 +1182,7 @@ export const Canvas: React.FC = () => {
 
   const handleItemSelect = (
     id: string,
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>
+    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
   ) => {
     if (selectionBox.start) return;
 
@@ -990,7 +1215,7 @@ export const Canvas: React.FC = () => {
   };
 
   const handleDblClick = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>
+    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
   ) => {
     const stage = e.target.getStage();
     if (!stage) return;
@@ -999,10 +1224,7 @@ export const Canvas: React.FC = () => {
     if (clickedOnEmpty) {
       const pointer = stage.getRelativePointerPosition();
       if (pointer) {
-        const id = canvasActions.addTextToCanvas(
-          pointer.x,
-          pointer.y,
-        );
+        const id = canvasActions.addTextToCanvas(pointer.x, pointer.y);
         setSelectedIds(new Set([id]));
         setPrimaryId(id);
         setMultiSelectUnion(null);
@@ -1014,11 +1236,7 @@ export const Canvas: React.FC = () => {
   return (
     <div
       ref={containerRef}
-      className={
-        isPinTransparent
-          ? "flex-1 h-full bg-transparent overflow-hidden relative transition-colors outline-none focus:outline-none"
-          : "flex-1 h-full bg-neutral-950 overflow-hidden relative transition-colors outline-none focus:outline-none"
-      }
+      className={`flex-1 h-full overflow-hidden relative transition-colors outline-none focus:outline-none`}
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()}
@@ -1028,20 +1246,45 @@ export const Canvas: React.FC = () => {
       onMouseLeave={handleCanvasMouseLeave}
     >
       <CanvasToolbar
-        canvasGrayscale={canvasSnap.canvasGrayscale}
+        canvasFilters={canvasSnap.canvasFilters}
         showMinimap={canvasSnap.showMinimap}
         isExpanded={canvasSnap.isCanvasToolbarExpanded}
-        onToggleGrayscale={() => canvasActions.toggleCanvasGrayscale()}
+        onFiltersChange={(filters) => canvasActions.setCanvasFilters(filters)}
         onToggleMinimap={() => canvasActions.toggleMinimap()}
         onAutoLayout={handleAutoLayout}
         onRequestClear={() => setIsClearModalOpen(true)}
-        onToggleExpanded={() =>
-          canvasActions.toggleCanvasToolbarExpanded()
-        }
+        onToggleExpanded={() => canvasActions.toggleCanvasToolbarExpanded()}
       />
+      {appSnap.mouseThrough && (
+        <div className="absolute inset-0 pointer-events-none z-50">
+          {[
+            { position: "top-1 right-1", path: "M2 2H22V22" },
+            { position: "bottom-1 right-1", path: "M2 22H22V2" },
+            { position: "bottom-1 left-1", path: "M22 22H2V2" },
+          ].map((corner) => (
+            <svg
+              key={corner.position}
+              className={`absolute pointer-events-auto draggable ${corner.position}`}
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path
+                d={corner.path}
+                stroke={THEME.primary}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ))}
+        </div>
+      )}
       <Stage
         width={dimensions.width}
         height={dimensions.height}
+        style={{ opacity: appSnap.canvasOpacity }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1088,12 +1331,9 @@ export const Canvas: React.FC = () => {
                     setMultiSelectUnion(null);
                   }}
                   onCommit={(newAttrs) => {
-                    canvasActions.updateCanvasImage(
-                      item.canvasId,
-                      newAttrs,
-                    );
+                    canvasActions.updateCanvasImage(item.canvasId, newAttrs);
                     setMultiSelectUnion(
-                      computeMultiSelectUnion(selectedIdsRef.current)
+                      computeMultiSelectUnion(selectedIdsRef.current),
                     );
                   }}
                   onDelete={() => {
@@ -1130,12 +1370,9 @@ export const Canvas: React.FC = () => {
                   );
                 }}
                 onCommit={(newAttrs) => {
-                  canvasActions.updateCanvasImage(
-                    item.canvasId,
-                    newAttrs,
-                  );
+                  canvasActions.updateCanvasImage(item.canvasId, newAttrs);
                   setMultiSelectUnion(
-                    computeMultiSelectUnion(selectedIdsRef.current)
+                    computeMultiSelectUnion(selectedIdsRef.current),
                   );
                 }}
                 onDelete={() => {
@@ -1149,6 +1386,7 @@ export const Canvas: React.FC = () => {
                   setMultiSelectUnion(computeMultiSelectUnion(newSet));
                 }}
                 globalGrayscale={canvasSnap.canvasGrayscale}
+                globalFilters={canvasSnap.canvasFilters}
               />
             );
           })}
@@ -1156,11 +1394,15 @@ export const Canvas: React.FC = () => {
             union={selectionBox.start === null ? multiSelectUnion : null}
             stageScale={stageScale}
             onDeleteSelection={handleDeleteSelection}
+            onFlipSelection={handleFlipSelection}
+            onScaleStart={handleGroupScaleStart}
           />
           <SelectionRect selectionBox={selectionBox} />
         </Layer>
       </Stage>
-      {canvasSnap.showMinimap && <Minimap stageRef={stageRef} />}
+      {canvasSnap.showMinimap && !shouldEnableMouseThrough && (
+        <Minimap stageRef={stageRef} />
+      )}
       <ConfirmModal
         isOpen={isClearModalOpen}
         title={t("canvas.clearCanvasTitle")}

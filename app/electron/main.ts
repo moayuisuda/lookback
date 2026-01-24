@@ -1,18 +1,26 @@
-import { app, BrowserWindow, ipcMain, screen, dialog, shell, globalShortcut } from 'electron';
-import path from 'path';
-import fs from 'fs-extra';
-import log from 'electron-log';
-import { autoUpdater } from 'electron-updater';
-import { spawn, type ChildProcess } from 'child_process';
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  screen,
+  dialog,
+  shell,
+  globalShortcut,
+} from "electron";
+import path from "path";
+import fs from "fs-extra";
+import log from "electron-log";
+import { autoUpdater } from "electron-updater";
+import { spawn, type ChildProcess } from "child_process";
 
 // Ensure app name is correct for log paths
 if (!app.isPackaged) {
   // In development, electron might use 'Electron' or 'app' as name
-  app.setName('LookBack');
+  app.setName("LookBack");
 }
 
 Object.assign(console, log.functions);
-log.transports.file.level = 'info';
+log.transports.file.level = "info";
 // Set max log size to 5MB
 log.transports.file.maxSize = 5 * 1024 * 1024;
 // Explicitly define archive strategy: keep only one backup file
@@ -20,32 +28,37 @@ log.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
   const info = path.parse(filePath);
   try {
-    fs.renameSync(filePath, path.join(info.dir, info.name + '.old' + info.ext));
+    fs.renameSync(filePath, path.join(info.dir, info.name + ".old" + info.ext));
   } catch (e) {
-    console.warn('Could not rotate log', e);
+    console.warn("Could not rotate log", e);
   }
 };
 
-import readline from 'readline';
-import https from 'https';
-import zlib from 'zlib';
-import { startServer as startApiServer, getStorageDir, setStorageRoot, type RendererChannel } from '../backend/server';
-import { t as translate } from '../shared/i18n/t';
-import type { I18nKey, I18nParams, Locale } from '../shared/i18n/types';
+import readline from "readline";
+import https from "https";
+import zlib from "zlib";
+import {
+  startServer as startApiServer,
+  getStorageDir,
+  setStorageRoot,
+  type RendererChannel,
+} from "../backend/server";
+import { t as translate } from "../shared/i18n/t";
+import type { I18nKey, I18nParams, Locale } from "../shared/i18n/types";
 
 let mainWindow: BrowserWindow | null = null;
 let lastGalleryDockDelta = 0;
 let localeCache: { locale: Locale; mtimeMs: number } | null = null;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
-  process.platform === 'darwin' ? 'Command+L' : 'Ctrl+L';
+  process.platform === "darwin" ? "Command+L" : "Ctrl+L";
 const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT =
-  process.platform === 'darwin' ? 'Command+Up' : 'Ctrl+Up';
+  process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT =
-  process.platform === 'darwin' ? 'Command+Down' : 'Ctrl+Down';
+  process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
-  process.platform === 'darwin' ? 'Command+T' : 'Ctrl+T';
+  process.platform === "darwin" ? "Command+T" : "Ctrl+T";
 const DEFAULT_CANVAS_GROUP_SHORTCUT =
-  process.platform === 'darwin' ? 'Command+G' : 'Ctrl+G';
+  process.platform === "darwin" ? "Command+G" : "Ctrl+G";
 
 let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
@@ -54,12 +67,12 @@ let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
 let canvasGroupShortcut = DEFAULT_CANVAS_GROUP_SHORTCUT;
 
 let isSettingsOpen = false;
-  let isPinMode: boolean;
-  let isPinTransparent: boolean;
-  
-  function syncWindowShadow() {
+let isPinMode: boolean;
+let isPinTransparent: boolean;
+
+function syncWindowShadow() {
   if (!mainWindow) return;
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== "darwin") return;
   const shouldHaveShadow = !(isPinMode && isPinTransparent);
   mainWindow.setHasShadow(shouldHaveShadow);
 }
@@ -67,7 +80,7 @@ let isSettingsOpen = false;
 function applyPinStateToWindow() {
   if (!mainWindow) return;
   if (isPinMode) {
-    mainWindow.setAlwaysOnTop(true, 'floating');
+    mainWindow.setAlwaysOnTop(true, "floating");
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   } else {
     mainWindow.setAlwaysOnTop(false);
@@ -76,52 +89,62 @@ function applyPinStateToWindow() {
   syncWindowShadow();
 }
 
-const isLocale = (value: unknown): value is Locale => value === 'en' || value === 'zh';
+const isLocale = (value: unknown): value is Locale =>
+  value === "en" || value === "zh";
 
 async function getLocale(): Promise<Locale> {
   try {
-    const settingsPath = path.join(getStorageDir(), 'settings.json');
+    const settingsPath = path.join(getStorageDir(), "settings.json");
     const stat = await fs.stat(settingsPath).catch(() => null);
-    if (!stat) return 'en';
-    if (localeCache && localeCache.mtimeMs === stat.mtimeMs) return localeCache.locale;
+    if (!stat) return "en";
+    if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
+      return localeCache.locale;
     const settings = await fs.readJson(settingsPath).catch(() => null);
-    const raw = settings && typeof settings === 'object' ? (settings as { language?: unknown }).language : undefined;
-    const locale = isLocale(raw) ? raw : 'en';
+    const raw =
+      settings && typeof settings === "object"
+        ? (settings as { language?: unknown }).language
+        : undefined;
+    const locale = isLocale(raw) ? raw : "en";
     localeCache = { locale, mtimeMs: stat.mtimeMs };
     return locale;
   } catch {
-    return 'en';
+    return "en";
   }
 }
 
 async function loadShortcuts(): Promise<void> {
   try {
-    const settingsPath = path.join(getStorageDir(), 'settings.json');
+    const settingsPath = path.join(getStorageDir(), "settings.json");
     const settings = await fs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== 'object') return;
+    if (!settings || typeof settings !== "object") return;
 
-    const rawToggle = (settings as Record<string, unknown>).toggleWindowShortcut;
-    if (typeof rawToggle === 'string' && rawToggle.trim()) {
+    const rawToggle = (settings as Record<string, unknown>)
+      .toggleWindowShortcut;
+    if (typeof rawToggle === "string" && rawToggle.trim()) {
       toggleWindowShortcut = rawToggle.trim();
     }
 
-    const rawOpacityUp = (settings as Record<string, unknown>).canvasOpacityUpShortcut;
-    if (typeof rawOpacityUp === 'string' && rawOpacityUp.trim()) {
+    const rawOpacityUp = (settings as Record<string, unknown>)
+      .canvasOpacityUpShortcut;
+    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
       canvasOpacityUpShortcut = rawOpacityUp.trim();
     }
 
-    const rawOpacityDown = (settings as Record<string, unknown>).canvasOpacityDownShortcut;
-    if (typeof rawOpacityDown === 'string' && rawOpacityDown.trim()) {
+    const rawOpacityDown = (settings as Record<string, unknown>)
+      .canvasOpacityDownShortcut;
+    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
       canvasOpacityDownShortcut = rawOpacityDown.trim();
     }
 
-    const rawMouseThrough = (settings as Record<string, unknown>).toggleMouseThroughShortcut;
-    if (typeof rawMouseThrough === 'string' && rawMouseThrough.trim()) {
+    const rawMouseThrough = (settings as Record<string, unknown>)
+      .toggleMouseThroughShortcut;
+    if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
     }
 
-    const rawCanvasGroup = (settings as Record<string, unknown>).canvasGroupShortcut;
-    if (typeof rawCanvasGroup === 'string' && rawCanvasGroup.trim()) {
+    const rawCanvasGroup = (settings as Record<string, unknown>)
+      .canvasGroupShortcut;
+    if (typeof rawCanvasGroup === "string" && rawCanvasGroup.trim()) {
       canvasGroupShortcut = rawCanvasGroup.trim();
     }
   } catch {
@@ -131,14 +154,14 @@ async function loadShortcuts(): Promise<void> {
 
 async function loadWindowPinState(): Promise<void> {
   try {
-    const settingsPath = path.join(getStorageDir(), 'settings.json');
+    const settingsPath = path.join(getStorageDir(), "settings.json");
     const settings = await fs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== 'object') return;
+    if (!settings || typeof settings !== "object") return;
     const raw = settings as { pinMode?: unknown; pinTransparent?: unknown };
-    if (typeof raw.pinMode === 'boolean') {
+    if (typeof raw.pinMode === "boolean") {
       isPinMode = raw.pinMode;
     }
-    if (typeof raw.pinTransparent === 'boolean') {
+    if (typeof raw.pinTransparent === "boolean") {
       isPinTransparent = raw.pinTransparent;
     }
   } catch {
@@ -149,11 +172,11 @@ async function loadWindowPinState(): Promise<void> {
 function loadMainWindow() {
   if (!mainWindow) return;
   if (!app.isPackaged) {
-    log.info('Loading renderer from localhost');
-    void mainWindow.loadURL('http://localhost:5173');
+    log.info("Loading renderer from localhost");
+    void mainWindow.loadURL("http://localhost:5173");
   } else {
-    const filePath = path.join(__dirname, '../dist-renderer/index.html');
-    log.info('Loading renderer from file:', filePath);
+    const filePath = path.join(__dirname, "../dist-renderer/index.html");
+    log.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
   }
 }
@@ -165,41 +188,47 @@ function setupAutoUpdater() {
   // 自动下载更新
   autoUpdater.autoDownload = true;
 
-  autoUpdater.on('checking-for-update', () => {
-    log.info('Checking for update...');
+  autoUpdater.on("checking-for-update", () => {
+    log.info("Checking for update...");
   });
 
-  autoUpdater.on('update-available', (info) => {
-    log.info('Update available.', info);
+  autoUpdater.on("update-available", (info) => {
+    log.info("Update available.", info);
     // 可以在这里通知渲染进程显示更新提示
     if (mainWindow) {
-      mainWindow.webContents.send('update-available', info);
+      mainWindow.webContents.send("update-available", info);
     }
   });
 
-  autoUpdater.on('update-not-available', (info) => {
-    log.info('Update not available.', info);
+  autoUpdater.on("update-not-available", (info) => {
+    log.info("Update not available.", info);
   });
 
-  autoUpdater.on('error', (err) => {
-    log.error('Error in auto-updater.', err);
+  autoUpdater.on("error", (err) => {
+    log.error("Error in auto-updater.", err);
   });
 
-  autoUpdater.on('download-progress', (progressObj) => {
-    let log_message = 'Download speed: ' + progressObj.bytesPerSecond;
-    log_message = log_message + ' - Downloaded ' + progressObj.percent + '%';
-    log_message = log_message + ' (' + progressObj.transferred + '/' + progressObj.total + ')';
+  autoUpdater.on("download-progress", (progressObj) => {
+    let log_message = "Download speed: " + progressObj.bytesPerSecond;
+    log_message = log_message + " - Downloaded " + progressObj.percent + "%";
+    log_message =
+      log_message +
+      " (" +
+      progressObj.transferred +
+      "/" +
+      progressObj.total +
+      ")";
     log.info(log_message);
     if (mainWindow) {
-      mainWindow.webContents.send('download-progress', progressObj);
+      mainWindow.webContents.send("download-progress", progressObj);
     }
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
-    log.info('Update downloaded', info);
+  autoUpdater.on("update-downloaded", (info) => {
+    log.info("Update downloaded", info);
     // 可以在这里通知渲染进程提示用户重启
     if (mainWindow) {
-      mainWindow.webContents.send('update-downloaded', info);
+      mainWindow.webContents.send("update-downloaded", info);
     }
     // 自动安装（可选，或者等待用户触发）
     // autoUpdater.quitAndInstall();
@@ -212,27 +241,27 @@ function setupAutoUpdater() {
 }
 
 function createWindow(options?: { load?: boolean }) {
-  log.info('Creating main window...');
+  log.info("Creating main window...");
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  
+
   mainWindow = new BrowserWindow({
     width: Math.floor(width * 0.6),
     height: Math.floor(height * 0.8),
-    icon: path.join(__dirname, '../resources/icon.svg'),
+    icon: path.join(__dirname, "../resources/icon.svg"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(__dirname, "preload.cjs"),
     },
     frame: false,
     transparent: true,
-    backgroundColor: '#00000000',
+    backgroundColor: "#00000000",
     alwaysOnTop: false,
     hasShadow: true,
   });
 
-  mainWindow.webContents.on('did-finish-load', () => {
-    log.info('Renderer process finished loading');
+  mainWindow.webContents.on("did-finish-load", () => {
+    log.info("Renderer process finished loading");
   });
 
   // Open DevTools in development
@@ -240,12 +269,20 @@ function createWindow(options?: { load?: boolean }) {
     // mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    log.error('Renderer process failed to load:', errorCode, errorDescription, validatedURL);
-  });
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (event, errorCode, errorDescription, validatedURL) => {
+      log.error(
+        "Renderer process failed to load:",
+        errorCode,
+        errorDescription,
+        validatedURL,
+      );
+    },
+  );
 
-  mainWindow.webContents.on('render-process-gone', (event, details) => {
-    log.error('Renderer process gone:', details.reason, details.exitCode);
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    log.error("Renderer process gone:", details.reason, details.exitCode);
   });
 
   if (options?.load !== false) {
@@ -255,75 +292,84 @@ function createWindow(options?: { load?: boolean }) {
   // 初始化自动更新
   setupAutoUpdater();
 
-  ipcMain.on('window-min', () => mainWindow?.minimize());
-  ipcMain.on('window-max', () => {
+  ipcMain.on("window-min", () => mainWindow?.minimize());
+  ipcMain.on("window-max", () => {
     if (mainWindow?.isMaximized()) {
       mainWindow.unmaximize();
     } else {
       mainWindow?.maximize();
     }
   });
-  ipcMain.on('window-close', () => mainWindow?.close());
-  ipcMain.on('window-focus', () => mainWindow?.focus());
-  
-  ipcMain.on('toggle-always-on-top', (_event, flag) => {
+  ipcMain.on("window-close", () => mainWindow?.close());
+  ipcMain.on("window-focus", () => mainWindow?.focus());
+
+  ipcMain.on("toggle-always-on-top", (_event, flag) => {
     if (flag) {
-      mainWindow?.setAlwaysOnTop(true, 'screen-saver');
-      mainWindow?.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      mainWindow?.setAlwaysOnTop(true, "screen-saver");
+      mainWindow?.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+      });
     } else {
       mainWindow?.setAlwaysOnTop(false);
       mainWindow?.setVisibleOnAllWorkspaces(false);
     }
   });
 
-  ipcMain.on('set-pin-mode', (_event, { enabled, widthDelta }: { enabled: boolean; widthDelta: number }) => {
-    if (!mainWindow) return;
+  ipcMain.on(
+    "set-pin-mode",
+    (
+      _event,
+      { enabled, widthDelta }: { enabled: boolean; widthDelta: number },
+    ) => {
+      if (!mainWindow) return;
 
-    const requested = Math.round(widthDelta);
-    const shouldResize = Number.isFinite(requested) && requested > 0;
+      const requested = Math.round(widthDelta);
+      const shouldResize = Number.isFinite(requested) && requested > 0;
 
-    if (shouldResize) {
-      const [w, h] = mainWindow.getSize();
-      const [x, y] = mainWindow.getPosition();
-      const right = x + w;
+      if (shouldResize) {
+        const [w, h] = mainWindow.getSize();
+        const [x, y] = mainWindow.getPosition();
+        const right = x + w;
 
-      if (enabled) {
-        const [minW] = mainWindow.getMinimumSize();
-        const nextWidth = Math.max(minW, w - requested);
-        const applied = Math.max(0, w - nextWidth);
-        lastGalleryDockDelta = applied;
+        if (enabled) {
+          const [minW] = mainWindow.getMinimumSize();
+          const nextWidth = Math.max(minW, w - requested);
+          const applied = Math.max(0, w - nextWidth);
+          lastGalleryDockDelta = applied;
 
-        mainWindow.setBounds({
-          x: right - nextWidth,
-          y,
-          width: nextWidth,
-          height: h
-        });
-      } else {
-        const applied = lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
-        lastGalleryDockDelta = 0;
-        const nextWidth = w + applied;
+          mainWindow.setBounds({
+            x: right - nextWidth,
+            y,
+            width: nextWidth,
+            height: h,
+          });
+        } else {
+          const applied =
+            lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
+          lastGalleryDockDelta = 0;
+          const nextWidth = w + applied;
 
-        mainWindow.setBounds({
-          x: right - nextWidth,
-          y,
-          width: nextWidth,
-          height: h
-        });
+          mainWindow.setBounds({
+            x: right - nextWidth,
+            y,
+            width: nextWidth,
+            height: h,
+          });
+        }
       }
-    }
 
-    isPinMode = enabled;
-    applyPinStateToWindow();
-  });
+      isPinMode = enabled;
+      applyPinStateToWindow();
+    },
+  );
 
-  ipcMain.on('set-pin-transparent', (_event, enabled: boolean) => {
+  ipcMain.on("set-pin-transparent", (_event, enabled: boolean) => {
     if (!mainWindow) return;
     isPinTransparent = enabled;
     syncWindowShadow();
   });
 
-  ipcMain.on('resize-window-by', (_event, deltaWidth) => {
+  ipcMain.on("resize-window-by", (_event, deltaWidth) => {
     if (!mainWindow) return;
     const [w, h] = mainWindow.getSize();
     const [x, y] = mainWindow.getPosition();
@@ -331,12 +377,12 @@ function createWindow(options?: { load?: boolean }) {
       x: x - Math.round(deltaWidth),
       y: y,
       width: w + Math.round(deltaWidth),
-      height: h
+      height: h,
     });
   });
 
-  ipcMain.on('log-message', (_event, level: string, ...args: unknown[]) => {
-    if (typeof log[level as keyof typeof log] === 'function') {
+  ipcMain.on("log-message", (_event, level: string, ...args: unknown[]) => {
+    if (typeof log[level as keyof typeof log] === "function") {
       // @ts-expect-error dynamic log level access
       log[level](...args);
     } else {
@@ -344,7 +390,7 @@ function createWindow(options?: { load?: boolean }) {
     }
   });
 
-  ipcMain.handle('get-log-content', async () => {
+  ipcMain.handle("get-log-content", async () => {
     try {
       const logPath = log.transports.file.getFile().path;
       if (await fs.pathExists(logPath)) {
@@ -353,24 +399,27 @@ function createWindow(options?: { load?: boolean }) {
         const size = stats.size;
         const READ_SIZE = 50 * 1024; // 50KB
         const start = Math.max(0, size - READ_SIZE);
-        
-        const stream = fs.createReadStream(logPath, { start, encoding: 'utf8' });
+
+        const stream = fs.createReadStream(logPath, {
+          start,
+          encoding: "utf8",
+        });
         const chunks: string[] = [];
-        
+
         return new Promise<string>((resolve, reject) => {
-          stream.on('data', (chunk) => chunks.push(chunk.toString()));
-          stream.on('end', () => resolve(chunks.join('')));
-          stream.on('error', reject);
+          stream.on("data", (chunk) => chunks.push(chunk.toString()));
+          stream.on("end", () => resolve(chunks.join("")));
+          stream.on("error", reject);
         });
       }
-      return 'No log file found.';
+      return "No log file found.";
     } catch (error) {
-      log.error('Failed to read log file:', error);
+      log.error("Failed to read log file:", error);
       return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
     }
   });
 
-  ipcMain.handle('ensure-model-ready', async () => {
+  ipcMain.handle("ensure-model-ready", async () => {
     if (!mainWindow) return;
     try {
       // Force check/download even if settings check passes inside ensureModelReady?
@@ -378,36 +427,37 @@ function createWindow(options?: { load?: boolean }) {
       // Frontend updates settings via API, then calls this.
       // But ensureModelReady reads settings from disk. We need to make sure disk is updated.
       // The API call to update settings awaits file write, so it should be fine.
-      
+
       // However, ensureModelReady has a check:
       // if (!settings.enableVectorSearch) return;
       // If we just updated settings to true, this check will pass.
-      
+
       // Also ensure runtime just in case
       await ensurePythonRuntime(mainWindow);
-      await ensureModelReady(mainWindow);
+      // Force check since user explicitly requested it
+      await ensureModelReady(mainWindow, true);
       return { success: true };
     } catch (e) {
-      log.error('Manual ensure model failed:', e);
+      log.error("Manual ensure model failed:", e);
       return { success: false, error: String(e) };
     }
   });
 
-  ipcMain.handle('open-external', async (_event, rawUrl: string) => {
+  ipcMain.handle("open-external", async (_event, rawUrl: string) => {
     try {
-      if (typeof rawUrl !== 'string') {
-        return { success: false, error: 'Invalid URL' };
+      if (typeof rawUrl !== "string") {
+        return { success: false, error: "Invalid URL" };
       }
       const url = new URL(rawUrl);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        return { success: false, error: 'Unsupported URL protocol' };
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return { success: false, error: "Unsupported URL protocol" };
       }
       await shell.openExternal(url.toString());
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       };
     }
   });
@@ -431,15 +481,15 @@ function registerShortcut(
   currentVar: string,
   updateVar: (val: string) => void,
   action: () => void,
-  checkSettingsOpen: boolean = false
+  checkSettingsOpen: boolean = false,
 ): { success: boolean; error?: string; accelerator: string } {
-  const next = typeof accelerator === 'string' ? accelerator.trim() : '';
+  const next = typeof accelerator === "string" ? accelerator.trim() : "";
   if (!next) {
-    return { success: false, error: 'Empty shortcut', accelerator: currentVar };
+    return { success: false, error: "Empty shortcut", accelerator: currentVar };
   }
-  
+
   const prev = currentVar;
-  
+
   // Create a handler wrapper to check for settings open
   const handler = () => {
     if (checkSettingsOpen && isSettingsOpen && mainWindow?.isFocused()) {
@@ -453,37 +503,47 @@ function registerShortcut(
     if (prev !== next) {
       globalShortcut.unregister(prev);
     } else {
-        // If same, we still might need to re-register to update handler if logic changed (unlikely here but safe)
-        globalShortcut.unregister(prev);
+      // If same, we still might need to re-register to update handler if logic changed (unlikely here but safe)
+      globalShortcut.unregister(prev);
     }
 
     const ok = globalShortcut.register(next, handler);
     if (!ok) {
       // If failed, try to restore old one
       if (prev !== next) {
-          globalShortcut.unregister(next);
-          globalShortcut.register(prev, handler); // Note: we re-register prev with SAME handler
+        globalShortcut.unregister(next);
+        globalShortcut.register(prev, handler); // Note: we re-register prev with SAME handler
       }
-      return { success: false, error: 'Shortcut registration failed', accelerator: prev };
+      return {
+        success: false,
+        error: "Shortcut registration failed",
+        accelerator: prev,
+      };
     }
     updateVar(next);
     return { success: true, accelerator: next };
   } catch (e) {
     if (prev !== next) {
-        globalShortcut.unregister(next);
-        globalShortcut.register(prev, handler);
+      globalShortcut.unregister(next);
+      globalShortcut.register(prev, handler);
     }
-    return { success: false, error: e instanceof Error ? e.message : String(e), accelerator: prev };
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+      accelerator: prev,
+    };
   }
 }
 
 function registerToggleWindowShortcut(accelerator: string) {
   return registerShortcut(
-    accelerator, 
-    toggleWindowShortcut, 
-    (v) => { toggleWindowShortcut = v; }, 
+    accelerator,
+    toggleWindowShortcut,
+    (v) => {
+      toggleWindowShortcut = v;
+    },
     toggleMainWindowVisibility,
-    true
+    true,
   );
 }
 
@@ -491,8 +551,12 @@ function registerCanvasOpacityUpShortcut(accelerator: string) {
   return registerShortcut(
     accelerator,
     canvasOpacityUpShortcut,
-    (v) => { canvasOpacityUpShortcut = v; },
-    () => { mainWindow?.webContents.send('renderer-event', 'canvas-opacity-up'); }
+    (v) => {
+      canvasOpacityUpShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "canvas-opacity-up");
+    },
   );
 }
 
@@ -500,8 +564,12 @@ function registerCanvasOpacityDownShortcut(accelerator: string) {
   return registerShortcut(
     accelerator,
     canvasOpacityDownShortcut,
-    (v) => { canvasOpacityDownShortcut = v; },
-    () => { mainWindow?.webContents.send('renderer-event', 'canvas-opacity-down'); }
+    (v) => {
+      canvasOpacityDownShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "canvas-opacity-down");
+    },
   );
 }
 
@@ -509,8 +577,12 @@ function registerToggleMouseThroughShortcut(accelerator: string) {
   return registerShortcut(
     accelerator,
     toggleMouseThroughShortcut,
-    (v) => { toggleMouseThroughShortcut = v; },
-    () => { mainWindow?.webContents.send('renderer-event', 'toggle-mouse-through'); }
+    (v) => {
+      toggleMouseThroughShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "toggle-mouse-through");
+    },
   );
 }
 
@@ -518,57 +590,50 @@ function registerCanvasGroupShortcut(accelerator: string) {
   return registerShortcut(
     accelerator,
     canvasGroupShortcut,
-    (v) => { canvasGroupShortcut = v; },
-    () => { mainWindow?.webContents.send('renderer-event', 'canvas-auto-layout'); }
+    (v) => {
+      canvasGroupShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "canvas-auto-layout");
+    },
   );
 }
 
 function getModelDir(): string {
-  return path.join(getStorageDir(), 'model');
+  return path.join(getStorageDir(), "model");
 }
 
 async function hasRequiredModelFiles(modelDir: string): Promise<boolean> {
-  const hasConfig = await fs.pathExists(path.join(modelDir, 'config.json'));
-  const hasWeights =
-    (await fs.pathExists(path.join(modelDir, 'pytorch_model.bin'))) ||
-    (await fs.pathExists(path.join(modelDir, 'model.safetensors')));
-  const hasProcessor = await fs.pathExists(path.join(modelDir, 'preprocessor_config.json'));
-  const hasTokenizer =
-    (await fs.pathExists(path.join(modelDir, 'tokenizer.json'))) || (await fs.pathExists(path.join(modelDir, 'vocab.json')));
+  const hasConfig = await fs.pathExists(path.join(modelDir, "config.json"));
+  const hasWeights = await fs.pathExists(
+    path.join(modelDir, "model.safetensors"),
+  );
+  const hasProcessor = await fs.pathExists(
+    path.join(modelDir, "preprocessor_config.json"),
+  );
+  const hasTokenizer = await fs.pathExists(
+    path.join(modelDir, "tokenizer.json"),
+  );
   return hasConfig && hasWeights && hasProcessor && hasTokenizer;
 }
 
 function getUvCandidates(): string[] {
   const candidates: string[] = [];
-  
+
   // 1. Try bundled UV (High priority)
   if (app.isPackaged) {
     if (process.platform === "win32") {
       candidates.push(path.join(process.resourcesPath, "bin", "uv.exe"));
     } else if (process.platform === "darwin") {
       candidates.push(
-        path.join(
-          process.resourcesPath,
-          "bin",
-          "mac",
-          "arm64",
-          "uv"
-        )
+        path.join(process.resourcesPath, "bin", "mac", "arm64", "uv"),
       );
     }
   } else {
     if (process.platform === "win32") {
       candidates.push(path.join(app.getAppPath(), "bin", "win32", "uv.exe"));
     } else if (process.platform === "darwin") {
-      candidates.push(
-        path.join(
-          app.getAppPath(),
-          "bin",
-          "mac",
-          "arm64",
-          "uv"
-        )
-      );
+      candidates.push(path.join(app.getAppPath(), "bin", "mac", "arm64", "uv"));
     }
   }
 
@@ -589,12 +654,16 @@ function getUvCandidates(): string[] {
   return uniq;
 }
 
-function spawnUvPython(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildProcess> {
+function spawnUvPython(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ChildProcess> {
   const candidates = getUvCandidates();
   return new Promise((resolve, reject) => {
     const trySpawn = (index: number) => {
       if (index >= candidates.length) {
-        reject(new Error('uv not found'));
+        reject(new Error("uv not found"));
         return;
       }
       const command = candidates[index];
@@ -603,9 +672,13 @@ function spawnUvPython(args: string[], cwd: string, env: NodeJS.ProcessEnv): Pro
         return;
       }
 
-      const proc = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd, env });
-      proc.once('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'ENOENT') {
+      const proc = spawn(command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd,
+        env,
+      });
+      proc.once("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
           trySpawn(index + 1);
           return;
         }
@@ -618,32 +691,43 @@ function spawnUvPython(args: string[], cwd: string, env: NodeJS.ProcessEnv): Pro
 }
 
 function getManagedUvPath(): string {
-  return path.join(app.getPath('userData'), 'uv', process.platform === 'win32' ? 'uv.exe' : 'uv');
+  return path.join(
+    app.getPath("userData"),
+    "uv",
+    process.platform === "win32" ? "uv.exe" : "uv",
+  );
 }
 
-const UV_VERSION = 'latest'; // Set to a specific tag like 'v0.5.5' to lock version
+const UV_VERSION = "latest"; // Set to a specific tag like 'v0.5.5' to lock version
 
-function resolveUvReleaseAsset(): { url: string; kind: 'tar.gz' | 'zip' } {
-  const baseUrl = 'https://xget.xi-xu.me/gh/astral-sh/uv/releases';
-  const downloadPath = UV_VERSION === 'latest' ? 'latest/download' : `download/${UV_VERSION}`;
+function resolveUvReleaseAsset(): { url: string; kind: "tar.gz" | "zip" } {
+  const baseUrl = "https://xget.xi-xu.me/gh/astral-sh/uv/releases";
+  const downloadPath =
+    UV_VERSION === "latest" ? "latest/download" : `download/${UV_VERSION}`;
   const base = `${baseUrl}/${downloadPath}`;
 
-  if (process.platform === 'darwin') {
-    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
-    return { url: `${base}/uv-${arch}-apple-darwin.tar.gz`, kind: 'tar.gz' };
+  if (process.platform === "darwin") {
+    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+    return { url: `${base}/uv-${arch}-apple-darwin.tar.gz`, kind: "tar.gz" };
   }
-  if (process.platform === 'linux') {
-    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
-    return { url: `${base}/uv-${arch}-unknown-linux-gnu.tar.gz`, kind: 'tar.gz' };
+  if (process.platform === "linux") {
+    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+    return {
+      url: `${base}/uv-${arch}-unknown-linux-gnu.tar.gz`,
+      kind: "tar.gz",
+    };
   }
-  if (process.platform === 'win32') {
-    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
-    return { url: `${base}/uv-${arch}-pc-windows-msvc.zip`, kind: 'zip' };
+  if (process.platform === "win32") {
+    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+    return { url: `${base}/uv-${arch}-pc-windows-msvc.zip`, kind: "zip" };
   }
   throw new Error(`Unsupported platform: ${process.platform}`);
 }
 
-function extractTarFile(buffer: Buffer, predicate: (name: string) => boolean): Buffer | null {
+function extractTarFile(
+  buffer: Buffer,
+  predicate: (name: string) => boolean,
+): Buffer | null {
   const block = 512;
   let offset = 0;
   while (offset + block <= buffer.length) {
@@ -658,8 +742,12 @@ function extractTarFile(buffer: Buffer, predicate: (name: string) => boolean): B
     if (allZero) return null;
 
     const nameRaw = header.subarray(0, 100);
-    const name = nameRaw.toString('utf8').replace(/\0.*$/, '');
-    const sizeRaw = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim();
+    const name = nameRaw.toString("utf8").replace(/\0.*$/, "");
+    const sizeRaw = header
+      .subarray(124, 136)
+      .toString("utf8")
+      .replace(/\0.*$/, "")
+      .trim();
     const size = sizeRaw ? Number.parseInt(sizeRaw, 8) : 0;
 
     const contentOffset = offset + block;
@@ -676,7 +764,10 @@ function extractTarFile(buffer: Buffer, predicate: (name: string) => boolean): B
   return null;
 }
 
-function extractZipFile(buffer: Buffer, predicate: (name: string) => boolean): Buffer | null {
+function extractZipFile(
+  buffer: Buffer,
+  predicate: (name: string) => boolean,
+): Buffer | null {
   const sigEOCD = 0x06054b50;
   const sigCD = 0x02014b50;
   const sigLFH = 0x04034b50;
@@ -706,7 +797,7 @@ function extractZipFile(buffer: Buffer, predicate: (name: string) => boolean): B
     const extraLen = readU16(ptr + 30);
     const commentLen = readU16(ptr + 32);
     const lfhOffset = readU32(ptr + 42);
-    const name = buffer.subarray(ptr + 46, ptr + 46 + nameLen).toString('utf8');
+    const name = buffer.subarray(ptr + 46, ptr + 46 + nameLen).toString("utf8");
     ptr += 46 + nameLen + extraLen + commentLen;
 
     if (!predicate(name)) continue;
@@ -729,16 +820,19 @@ function extractZipFile(buffer: Buffer, predicate: (name: string) => boolean): B
   return null;
 }
 
-function downloadBuffer(url: string, onProgress?: (current: number, total: number) => void): Promise<Buffer> {
+function downloadBuffer(
+  url: string,
+  onProgress?: (current: number, total: number) => void,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const visited = new Set<string>();
     const fetch = (u: string, depth: number) => {
       if (depth > 8) {
-        reject(new Error('Too many redirects'));
+        reject(new Error("Too many redirects"));
         return;
       }
       if (visited.has(u)) {
-        reject(new Error('Redirect loop'));
+        reject(new Error("Redirect loop"));
         return;
       }
       visited.add(u);
@@ -747,7 +841,9 @@ function downloadBuffer(url: string, onProgress?: (current: number, total: numbe
         const status = res.statusCode || 0;
         const loc = res.headers.location;
         if ([301, 302, 303, 307, 308].includes(status) && loc) {
-          const next = loc.startsWith('http') ? loc : new URL(loc, u).toString();
+          const next = loc.startsWith("http")
+            ? loc
+            : new URL(loc, u).toString();
           res.resume();
           fetch(next, depth + 1);
           return;
@@ -758,26 +854,30 @@ function downloadBuffer(url: string, onProgress?: (current: number, total: numbe
           return;
         }
 
-        const total = parseInt(res.headers['content-length'] || '0', 10);
+        const total = parseInt(res.headers["content-length"] || "0", 10);
         let current = 0;
         const chunks: Buffer[] = [];
-        res.on('data', (d: Buffer) => {
+        res.on("data", (d: Buffer) => {
           chunks.push(d);
           current += d.length;
           if (total > 0 && onProgress) {
             onProgress(current, total);
           }
         });
-        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on("end", () => resolve(Buffer.concat(chunks)));
       });
-      req.on('error', reject);
+      req.on("error", reject);
     };
     fetch(url, 0);
   });
 }
 
-async function ensureUvInstalled(onProgress?: (percent: number) => void): Promise<string> {
-  const existing = getUvCandidates().find((c) => path.isAbsolute(c) && fs.pathExistsSync(c));
+async function ensureUvInstalled(
+  onProgress?: (percent: number) => void,
+): Promise<string> {
+  const existing = getUvCandidates().find(
+    (c) => path.isAbsolute(c) && fs.pathExistsSync(c),
+  );
   if (existing) return existing;
 
   const uvPath = getManagedUvPath();
@@ -796,29 +896,33 @@ async function ensureUvInstalled(onProgress?: (percent: number) => void): Promis
   });
 
   let binary: Buffer | null = null;
-  if (kind === 'tar.gz') {
+  if (kind === "tar.gz") {
     const tar = zlib.gunzipSync(buf);
-    binary = extractTarFile(tar, (name) => name === 'uv' || name.endsWith('/uv'));
+    binary = extractTarFile(
+      tar,
+      (name) => name === "uv" || name.endsWith("/uv"),
+    );
   } else {
-    binary = extractZipFile(buf, (name) => name === 'uv.exe' || name.endsWith('/uv.exe'));
+    binary = extractZipFile(
+      buf,
+      (name) => name === "uv.exe" || name.endsWith("/uv.exe"),
+    );
   }
   if (!binary) {
-    throw new Error('Failed to extract uv binary');
+    throw new Error("Failed to extract uv binary");
   }
 
   await fs.writeFile(uvPath, binary);
-  if (process.platform !== 'win32') {
+  if (process.platform !== "win32") {
     await fs.chmod(uvPath, 0o755);
   }
   process.env.PROREF_UV_PATH = uvPath;
   return uvPath;
 }
 
-
-
 function getUnpackedPath(originalPath: string): string {
   if (app.isPackaged) {
-    return originalPath.replace('app.asar', 'app.asar.unpacked');
+    return originalPath.replace("app.asar", "app.asar.unpacked");
   }
   return originalPath;
 }
@@ -826,7 +930,9 @@ function getUnpackedPath(originalPath: string): string {
 async function ensurePythonRuntime(parent: BrowserWindow): Promise<void> {
   const modelDir = getModelDir();
   process.env.PROREF_MODEL_DIR = modelDir; // Ensure env is set for sync if needed
-  const scriptPath = getUnpackedPath(path.join(__dirname, '../backend/python/tagger.py'));
+  const scriptPath = getUnpackedPath(
+    path.join(__dirname, "../backend/python/tagger.py"),
+  );
   const pythonDir = path.dirname(scriptPath);
 
   // Helper to report progress
@@ -837,100 +943,111 @@ async function ensurePythonRuntime(parent: BrowserWindow): Promise<void> {
     statusParams?: I18nParams,
   ) => {
     if (parent.isDestroyed()) return;
-    parent.webContents.send('env-init-progress', { 
-      isOpen: true, 
+    parent.webContents.send("env-init-progress", {
+      isOpen: true,
       statusKey,
       statusParams,
-      percentText, 
-      progress
+      percentText,
+      progress,
     });
   };
 
   // 1. Ensure uv
-  sendProgress('envInit.checkingUv', '0%', 0);
+  sendProgress("envInit.checkingUv", "0%", 0);
   await ensureUvInstalled((percent) => {
     sendProgress(
-      'envInit.downloadingUv',
+      "envInit.downloadingUv",
       `${Math.round(percent * 100)}%`,
       percent * 0.1,
     );
   });
 
   // 2. uv sync
-  sendProgress('envInit.initializingPythonEnv', '10%', 0.1);
-  
-  const syncProc = await spawnUvPython(['sync', '--frozen'], pythonDir, {
+  sendProgress("envInit.initializingPythonEnv", "10%", 0.1);
+
+  const syncProc = await spawnUvPython(["sync", "--frozen"], pythonDir, {
     ...process.env,
     PROREF_MODEL_DIR: modelDir,
-    UV_NO_COLOR: '1',
+    UV_NO_COLOR: "1",
   });
-  
+
   if (syncProc.stderr) {
-    syncProc.stderr.on('data', (chunk: Buffer) => {
+    syncProc.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString().toLowerCase();
-      if (text.includes('resolved')) {
-        sendProgress('envInit.resolvingDependencies', '20%', 0.2);
-      } else if (text.includes('downloading')) {
-        sendProgress('envInit.downloadingPackages', '40%', 0.4);
-      } else if (text.includes('installing')) {
-        sendProgress('envInit.installingPackages', '60%', 0.6);
-      } else if (text.includes('audited')) {
-        sendProgress('envInit.verifyingEnvironment', '80%', 0.8);
+      if (text.includes("resolved")) {
+        sendProgress("envInit.resolvingDependencies", "20%", 0.2);
+      } else if (text.includes("downloading")) {
+        sendProgress("envInit.downloadingPackages", "40%", 0.4);
+      } else if (text.includes("installing")) {
+        sendProgress("envInit.installingPackages", "60%", 0.6);
+      } else if (text.includes("audited")) {
+        sendProgress("envInit.verifyingEnvironment", "80%", 0.8);
       }
     });
   }
-  
-  const syncExit: number = await new Promise((resolve) => syncProc.once('exit', resolve));
+
+  const syncExit: number = await new Promise((resolve) =>
+    syncProc.once("exit", resolve),
+  );
   if (syncExit !== 0) {
     parent.setProgressBar(-1);
-    parent.webContents.send('env-init-progress', { isOpen: false });
+    parent.webContents.send("env-init-progress", { isOpen: false });
     const locale = await getLocale();
     await dialog.showMessageBox(parent, {
-      type: 'error',
-      title: translate(locale, 'dialog.pythonSetupFailedTitle'),
-      message: translate(locale, 'dialog.pythonSetupFailedMessage'),
-      detail: translate(locale, 'dialog.pythonSetupFailedDetail', {
+      type: "error",
+      title: translate(locale, "dialog.pythonSetupFailedTitle"),
+      message: translate(locale, "dialog.pythonSetupFailedMessage"),
+      detail: translate(locale, "dialog.pythonSetupFailedDetail", {
         code: syncExit,
         dir: pythonDir,
       }),
     });
-    throw new Error('Python setup failed');
+    throw new Error("Python setup failed");
   }
-  
-  sendProgress('envInit.pythonEnvReady', '100%', 1);
-  parent.webContents.send('env-init-progress', { isOpen: false });
+
+  sendProgress("envInit.pythonEnvReady", "100%", 1);
+  parent.webContents.send("env-init-progress", { isOpen: false });
 }
 
-async function ensureModelReady(parent: BrowserWindow): Promise<void> {
+async function ensureModelReady(
+  parent: BrowserWindow,
+  force: boolean = false,
+): Promise<void> {
   const modelDir = getModelDir();
   process.env.PROREF_MODEL_DIR = modelDir;
-  const debug = process.env.PROREF_DEBUG_MODEL === '1';
-  if (debug) console.log('[model] dir:', modelDir);
+  const debug = process.env.PROREF_DEBUG_MODEL === "1";
+  if (debug) console.log("[model] dir:", modelDir);
+
+  const modelMissing = !(await hasRequiredModelFiles(modelDir));
 
   // Check if vector search is enabled
-  try {
-    const settingsPath = path.join(getStorageDir(), 'settings.json');
-    if (await fs.pathExists(settingsPath)) {
-      const settings = await fs.readJson(settingsPath);
-      if (!settings.enableVectorSearch) {
-        if (debug) console.log('[model] Vector search disabled, skipping model check');
+  if (!force) {
+    try {
+      const settingsPath = path.join(getStorageDir(), "settings.json");
+      if (await fs.pathExists(settingsPath)) {
+        const settings = await fs.readJson(settingsPath);
+        if (!settings.enableVectorSearch && !modelMissing) {
+          if (debug)
+            console.log("[model] Vector search disabled, skipping model check");
+          return;
+        }
+      } else if (!modelMissing) {
+        // Default is disabled if no settings file
+        if (debug)
+          console.log("[model] No settings file, skipping model check");
         return;
       }
-    } else {
-      // Default is disabled if no settings file
-      if (debug) console.log('[model] No settings file, skipping model check');
-      return;
+    } catch (e) {
+      console.error("[model] Failed to read settings:", e);
+      if (!modelMissing) return;
     }
-  } catch (e) {
-    console.error('[model] Failed to read settings:', e);
-    return;
   }
 
-  if (await hasRequiredModelFiles(modelDir)) {
-    if (debug) console.log('[model] ok');
+  if (!modelMissing) {
+    if (debug) console.log("[model] ok");
     return;
   }
-  if (debug) console.log('[model] missing, start download');
+  if (debug) console.log("[model] missing, start download");
 
   // Notify renderer to show modal
   const sendProgress = (
@@ -941,54 +1058,75 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
     statusParams?: I18nParams,
   ) => {
     if (parent.isDestroyed()) return;
-    parent.webContents.send('model-download-progress', { 
-      isOpen: true, 
-      statusKey, 
+    parent.webContents.send("model-download-progress", {
+      isOpen: true,
+      statusKey,
       statusParams,
-      percentText, 
+      percentText,
       progress,
-      filename
+      filename,
     });
   };
 
-  sendProgress('model.preparingDownload', '0%', 0);
+  const formatBytes = (bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+      value /= 1024;
+      index += 1;
+    }
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(precision)} ${units[index]}`;
+  };
+
+  sendProgress("model.preparingDownload", "0%", 0);
   parent.setProgressBar(0);
 
-  const scriptPath = getUnpackedPath(path.join(__dirname, '../backend/python/tagger.py'));
+  const scriptPath = getUnpackedPath(
+    path.join(__dirname, "../backend/python/tagger.py"),
+  );
   const pythonDir = path.dirname(scriptPath);
 
   // Ensure Runtime (in case it wasn't run or we need to be sure)
   // But strictly, we should assume runtime is ready if we enforce order.
   // Let's re-run ensurePythonRuntime here? No, that would close/open modal.
   // We assume ensurePythonRuntime was called before.
-  
+
   // However, for robustness, if we are in ensureModelReady, we need python.
   // So we should probably just proceed to run python.
 
-  let percentText = '0%';
+  let percentText = "0%";
   let progress = 0;
 
-  sendProgress('model.downloading', percentText, progress);
+  sendProgress("model.downloading", percentText, progress);
 
-  const proc = await spawnUvPython(['run', 'python', scriptPath, '--download-model'], pythonDir, {
-    ...process.env,
-    PROREF_MODEL_DIR: modelDir,
-  });
+  const proc = await spawnUvPython(
+    ["run", "python", scriptPath, "--download-model"],
+    pythonDir,
+    {
+      ...process.env,
+      PROREF_MODEL_DIR: modelDir,
+    },
+  );
 
   if (proc.stderr) {
-    proc.stderr.on('data', (data: Buffer) => {
+    proc.stderr.on("data", (data: Buffer) => {
       const msg = data.toString().trim();
-      if (debug && msg) console.log('[model] py:', msg);
+      if (debug && msg) console.log("[model] py:", msg);
     });
   }
 
   let lastProgress = 0;
+  let lastError = "";
+
   if (proc.stdout) {
     const rl = readline.createInterface({ input: proc.stdout });
-    rl.on('line', (line: string) => {
+    rl.on("line", (line: string) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-      if (debug) console.log('[model] evt:', trimmed);
+      if (debug) console.log("[model] evt:", trimmed);
       const evt = (() => {
         try {
           return JSON.parse(trimmed) as {
@@ -999,6 +1137,10 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
             filename?: string;
             ok?: boolean;
             message?: string;
+            currentBytes?: number;
+            totalBytes?: number;
+            stepIndex?: number;
+            totalSteps?: number;
           };
         } catch {
           return null;
@@ -1006,7 +1148,45 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
       })();
       if (!evt?.type) return;
 
-      if (evt.type === 'file' && typeof evt.current === 'number' && typeof evt.total === 'number') {
+      if (evt.type === "verify") {
+        // verify event is just for checking if existing model is ok
+        return;
+      }
+
+      if (
+        evt.type === "file-progress" &&
+        typeof evt.currentBytes === "number" &&
+        typeof evt.totalBytes === "number" &&
+        typeof evt.stepIndex === "number" &&
+        typeof evt.totalSteps === "number"
+      ) {
+        const perFile =
+          evt.totalBytes > 0 ? evt.currentBytes / evt.totalBytes : 0;
+        const mapped = Math.max(
+          0,
+          Math.min(1, (evt.stepIndex - 1 + perFile) / evt.totalSteps),
+        );
+        progress = mapped;
+        percentText = `${Math.round(mapped * 100)}%`;
+        lastProgress = mapped;
+        sendProgress(
+          "model.downloadingFraction",
+          percentText,
+          progress,
+          evt.filename,
+          {
+            current: formatBytes(evt.currentBytes),
+            total: formatBytes(evt.totalBytes),
+          },
+        );
+        return;
+      }
+
+      if (
+        evt.type === "file" &&
+        typeof evt.current === "number" &&
+        typeof evt.total === "number"
+      ) {
         const p = Math.max(0, Math.min(1, evt.current / evt.total));
         const mapped = p; // 0-1
         progress = mapped;
@@ -1014,18 +1194,23 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
         lastProgress = p;
       }
 
-      if (evt.type === 'done' && evt.ok) {
+      if (evt.type === "done" && evt.ok) {
         progress = 1;
-        percentText = '100%';
+        percentText = "100%";
       }
 
-      if (evt.type === 'error' && typeof evt.message === 'string') {
+      if (evt.type === "error" && typeof evt.message === "string") {
         progress = Math.max(progress, 0);
+        lastError = evt.message;
       }
 
-      if (evt.type === 'file' && typeof evt.current === 'number' && typeof evt.total === 'number') {
+      if (
+        evt.type === "file" &&
+        typeof evt.current === "number" &&
+        typeof evt.total === "number"
+      ) {
         sendProgress(
-          'model.downloadingFraction',
+          "model.downloadingFraction",
           percentText,
           progress,
           evt.filename,
@@ -1034,15 +1219,15 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
         return;
       }
 
-      if (evt.type === 'done' && evt.ok) {
-        sendProgress('model.ready', percentText, progress, evt.filename);
+      if (evt.type === "done" && evt.ok) {
+        sendProgress("model.ready", percentText, progress, evt.filename);
         return;
       }
 
-      if (evt.type === 'error') {
-        const reason = typeof evt.message === 'string' ? evt.message : '';
+      if (evt.type === "error") {
+        const reason = typeof evt.message === "string" ? evt.message : "";
         sendProgress(
-          reason ? 'model.downloadFailedWithReason' : 'model.downloadFailed',
+          reason ? "model.downloadFailedWithReason" : "model.downloadFailed",
           percentText,
           progress,
           evt.filename,
@@ -1051,35 +1236,44 @@ async function ensureModelReady(parent: BrowserWindow): Promise<void> {
         return;
       }
 
-      if (evt.type === 'start') {
-        sendProgress('model.preparingDownload', percentText, progress, evt.filename);
+      if (evt.type === "start") {
+        sendProgress(
+          "model.preparingDownload",
+          percentText,
+          progress,
+          evt.filename,
+        );
         return;
       }
 
-      sendProgress('model.downloading', percentText, progress, evt.filename);
+      sendProgress("model.downloading", percentText, progress, evt.filename);
     });
   }
 
-  const exitCode: number = await new Promise((resolve) => proc.once('exit', resolve));
+  const exitCode: number = await new Promise((resolve) =>
+    proc.once("exit", resolve),
+  );
   parent.setProgressBar(-1);
-  parent.webContents.send('model-download-progress', { isOpen: false });
+  parent.webContents.send("model-download-progress", { isOpen: false });
 
   const ok = await hasRequiredModelFiles(modelDir);
-  if (debug) console.log('[model] download exit:', exitCode, 'ok:', ok);
+  if (debug) console.log("[model] download exit:", exitCode, "ok:", ok);
 
   if (exitCode !== 0 || !ok) {
     const locale = await getLocale();
     await dialog.showMessageBox(parent, {
-      type: 'error',
-      title: translate(locale, 'dialog.modelDownloadFailedTitle'),
-      message: translate(locale, 'dialog.modelDownloadFailedMessage'),
-      detail: translate(locale, 'dialog.modelDownloadFailedDetail', {
-        code: exitCode,
-        progress: Math.round(lastProgress * 100),
-        dir: modelDir,
-      }),
+      type: "error",
+      title: translate(locale, "dialog.modelDownloadFailedTitle"),
+      message: translate(locale, "dialog.modelDownloadFailedMessage"),
+      detail:
+        (lastError ? `Error: ${lastError}\n\n` : "") +
+        translate(locale, "dialog.modelDownloadFailedDetail", {
+          code: exitCode,
+          progress: Math.round(lastProgress * 100),
+          dir: modelDir,
+        }),
     });
-    throw new Error('Model download failed');
+    throw new Error("Model download failed");
   }
 }
 
@@ -1089,15 +1283,15 @@ async function startServer() {
   });
 }
 
-ipcMain.handle('get-storage-dir', async () => {
+ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
 });
 
-ipcMain.handle('choose-storage-dir', async () => {
+ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();
   const result = await dialog.showOpenDialog({
-    title: translate(locale, 'dialog.chooseStorageFolderTitle'),
-    properties: ['openDirectory', 'createDirectory'],
+    title: translate(locale, "dialog.chooseStorageFolderTitle"),
+    properties: ["openDirectory", "createDirectory"],
   });
 
   if (result.canceled || result.filePaths.length === 0) {
@@ -1111,17 +1305,17 @@ ipcMain.handle('choose-storage-dir', async () => {
 });
 
 app.whenReady().then(async () => {
-  log.info('App starting...');
-  log.info('Log file location:', log.transports.file.getFile().path);
-  log.info('App path:', app.getAppPath());
-  log.info('User data:', app.getPath('userData'));
+  log.info("App starting...");
+  log.info("Log file location:", log.transports.file.getFile().path);
+  log.info("App path:", app.getAppPath());
+  log.info("User data:", app.getPath("userData"));
 
   await loadWindowPinState();
   createWindow();
   applyPinStateToWindow();
-  
+
   await loadShortcuts();
-  
+
   registerToggleWindowShortcut(toggleWindowShortcut);
   registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
   registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
@@ -1131,26 +1325,26 @@ app.whenReady().then(async () => {
   if (mainWindow) {
     try {
       await startServer();
-      
+
       // Always ensure Python environment is ready (uv + sync)
       // This is fast if already done, but necessary for basic features like color/tone.
       // We do this BEFORE ensuring model.
-      log.info('Ensuring Python runtime...');
+      log.info("Ensuring Python runtime...");
       await ensurePythonRuntime(mainWindow);
-      
-      log.info('Ensuring model ready...');
+
+      log.info("Ensuring model ready...");
       await ensureModelReady(mainWindow);
-      log.info('Model ready.');
+      log.info("Model ready.");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      console.error('[model] ensure failed:', message);
-      log.error('[model] ensure failed:', message);
+      console.error("[model] ensure failed:", message);
+      log.error("[model] ensure failed:", message);
       // app.quit();
       // return;
     }
   }
-  
-  app.on('activate', () => {
+
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
       applyPinStateToWindow();
@@ -1158,48 +1352,66 @@ app.whenReady().then(async () => {
   });
 });
 
-ipcMain.handle('set-toggle-window-shortcut', async (_event, accelerator: string) => {
-  return registerToggleWindowShortcut(accelerator);
-});
+ipcMain.handle(
+  "set-toggle-window-shortcut",
+  async (_event, accelerator: string) => {
+    return registerToggleWindowShortcut(accelerator);
+  },
+);
 
-ipcMain.handle('set-canvas-opacity-up-shortcut', async (_event, accelerator: string) => {
-  return registerCanvasOpacityUpShortcut(accelerator);
-});
+ipcMain.handle(
+  "set-canvas-opacity-up-shortcut",
+  async (_event, accelerator: string) => {
+    return registerCanvasOpacityUpShortcut(accelerator);
+  },
+);
 
-ipcMain.handle('set-canvas-opacity-down-shortcut', async (_event, accelerator: string) => {
-  return registerCanvasOpacityDownShortcut(accelerator);
-});
+ipcMain.handle(
+  "set-canvas-opacity-down-shortcut",
+  async (_event, accelerator: string) => {
+    return registerCanvasOpacityDownShortcut(accelerator);
+  },
+);
 
-ipcMain.handle('set-toggle-mouse-through-shortcut', async (_event, accelerator: string) => {
-  return registerToggleMouseThroughShortcut(accelerator);
-});
+ipcMain.handle(
+  "set-toggle-mouse-through-shortcut",
+  async (_event, accelerator: string) => {
+    return registerToggleMouseThroughShortcut(accelerator);
+  },
+);
 
-ipcMain.handle('set-canvas-group-shortcut', async (_event, accelerator: string) => {
-  return registerCanvasGroupShortcut(accelerator);
-});
+ipcMain.handle(
+  "set-canvas-group-shortcut",
+  async (_event, accelerator: string) => {
+    return registerCanvasGroupShortcut(accelerator);
+  },
+);
 
-ipcMain.on('set-mouse-through', (_event, enabled: boolean) => {
+ipcMain.on("set-mouse-through", (_event, enabled: boolean) => {
   // If disabling, ensure we reset ignore mouse events (just in case)
   if (!enabled && mainWindow) {
     mainWindow.setIgnoreMouseEvents(false);
   }
 });
 
-ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean, options?: { forward: boolean }) => {
-  if (mainWindow) {
-    mainWindow.setIgnoreMouseEvents(ignore, options);
-  }
-});
+ipcMain.on(
+  "set-ignore-mouse-events",
+  (_event, ignore: boolean, options?: { forward: boolean }) => {
+    if (mainWindow) {
+      mainWindow.setIgnoreMouseEvents(ignore, options);
+    }
+  },
+);
 
-ipcMain.on('settings-open-changed', (_event, open: boolean) => {
+ipcMain.on("settings-open-changed", (_event, open: boolean) => {
   isSettingsOpen = Boolean(open);
 });
 
-app.on('will-quit', () => {
+app.on("will-quit", () => {
   globalShortcut.unregisterAll();
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
 });
 // restart trigger 3

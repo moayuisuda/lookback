@@ -34,7 +34,6 @@ export const zh: I18nDict = {
   'titleBar.shortcutRecording': '请按下快捷键…',
   'titleBar.index': '索引',
   'titleBar.enableAiSearchVector': '启用 AI 搜索',
-  'titleBar.threshold': '阈值',
   'titleBar.indexing': '索引中…',
   'titleBar.indexUnindexedImages': '索引未入库图片',
   'titleBar.processing': '处理中…',
@@ -105,6 +104,7 @@ export const zh: I18nDict = {
   'gallery.toneFilter.title': '色调筛选',
   'gallery.referenceAlt': '参考图',
   'gallery.notIndexed': '未入库',
+  'gallery.vectorResult': 'AI 搜索结果',
   'gallery.contextMenu.nameLabel': '名称',
   'gallery.contextMenu.imageNamePlaceholder': '图片名称',
   'gallery.contextMenu.linkLabel': '链接',
@@ -124,6 +124,10 @@ export const zh: I18nDict = {
 
   'canvas.toolbar.expand': '展开工具栏',
   'canvas.toolbar.collapse': '收起工具栏',
+  'canvas.toolbar.filters': '滤镜',
+  'canvas.filters.grayscale': '灰度',
+  'canvas.filters.posterize': '油画色块',
+  'canvas.filters.trianglePixelate': '三角形像素化',
   'canvas.toolbar.toggleGrayscale': '切换灰度模式',
   'canvas.toolbar.grayscale': '灰度',
   'canvas.toolbar.smartLayout': '智能布局',
@@ -171,4 +175,11 @@ export const zh: I18nDict = {
   'settings.canvas.rename': '重命名',
   'settings.canvas.renamePlaceholder': '新名称',
   'toast.createCanvasFailed': '创建画布失败',
+  'toast.llmTranslationFailed': 'LLM 翻译失败：{{error}}',
+
+  'settings.llm.title': 'LLM 设置',
+  'settings.llm.enable': '启用 LLM 翻译',
+  'settings.llm.baseUrl': '基础地址 (Base URL)',
+  'settings.llm.key': 'API 密钥',
+  'settings.llm.model': '模型名称',
 };

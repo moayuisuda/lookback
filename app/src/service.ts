@@ -1,13 +1,57 @@
 import { API_BASE_URL } from "./config";
 import type { Locale } from "../shared/i18n/types";
 
-export interface FileStorageGetOptions<T> {
+export interface settingStorageGetOptions<T> {
   key: string;
   fallback: T;
 }
 
-export const fileStorage = {
-  async get<T>({ key, fallback }: FileStorageGetOptions<T>): Promise<T> {
+export type SettingsSnapshot = Record<string, unknown>;
+
+let settingsSnapshot: SettingsSnapshot | null = null;
+let settingsSnapshotPromise: Promise<SettingsSnapshot> | null = null;
+
+export const getSettingsSnapshot = async (): Promise<SettingsSnapshot> => {
+  if (settingsSnapshot) return settingsSnapshot;
+  if (!settingsSnapshotPromise) {
+    settingsSnapshotPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/settings`);
+        if (!res.ok) return {};
+        const data = (await res.json()) as unknown;
+        if (data && typeof data === "object") {
+          return data as SettingsSnapshot;
+        }
+      } catch {
+        return {};
+      }
+      return {};
+    })();
+  }
+  const result = await settingsSnapshotPromise;
+  settingsSnapshot = result;
+  return result;
+};
+
+export const readSetting = <T>(
+  settings: SettingsSnapshot,
+  key: string,
+  fallback: T
+): T => {
+  if (Object.prototype.hasOwnProperty.call(settings, key)) {
+    return (settings as Record<string, unknown>)[key] as T;
+  }
+  return fallback;
+};
+
+export const settingStorage = {
+  async get<T>({ key, fallback }: settingStorageGetOptions<T>): Promise<T> {
+    if (settingsSnapshot) {
+      if (Object.prototype.hasOwnProperty.call(settingsSnapshot, key)) {
+        return (settingsSnapshot as Record<string, unknown>)[key] as T;
+      }
+      return fallback;
+    }
     try {
       const res = await fetch(
         `${API_BASE_URL}/api/settings/${encodeURIComponent(key)}`
@@ -30,6 +74,9 @@ export const fileStorage = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value }),
       });
+      if (settingsSnapshot) {
+        settingsSnapshot = { ...settingsSnapshot, [key]: value };
+      }
     } catch (error) {
       void error;
     }
@@ -39,12 +86,13 @@ export const fileStorage = {
 const isLocale = (value: unknown): value is Locale => value === "en" || value === "zh";
 
 export async function getLanguage(): Promise<Locale> {
-  const raw = await fileStorage.get<unknown>({ key: "language", fallback: "en" });
+  const settings = await getSettingsSnapshot();
+  const raw = readSetting<unknown>(settings, "language", "en");
   return isLocale(raw) ? raw : "en";
 }
 
 export async function setLanguage(locale: Locale): Promise<void> {
-  await fileStorage.set("language", locale);
+  await settingStorage.set("language", locale);
 }
 
 export interface CanvasViewport {
@@ -153,14 +201,176 @@ export async function saveGalleryOrder(order: string[]): Promise<void> {
   }
 }
 
+export async function moveGalleryOrder(activeId: string, overId: string): Promise<void> {
+  try {
+    await localApi<{ success?: boolean }>("/api/order-move", { activeId, overId });
+  } catch (error) {
+    void error;
+  }
+}
+
+export type ImageSearchParams = {
+  query?: string;
+  tags?: string[];
+  color?: string | null;
+  tone?: string | null;
+  limit?: number;
+  offset?: number;
+};
+
+export type RequestOptions = {
+  signal?: AbortSignal;
+};
+
+export async function fetchImages<T = unknown[]>(
+  params: ImageSearchParams = {},
+  options: RequestOptions = {}
+): Promise<T> {
+  const searchParams = new URLSearchParams();
+  if (params.query) searchParams.set("query", params.query);
+  if (params.tags && params.tags.length > 0) {
+    searchParams.set("tags", params.tags.join(","));
+  }
+  if (params.color) searchParams.set("color", params.color);
+  if (params.tone) searchParams.set("tone", params.tone);
+  if (typeof params.limit === "number") {
+    searchParams.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    searchParams.set("offset", String(params.offset));
+  }
+  const url = `${API_BASE_URL}/api/images${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+  const res = await fetch(url, { signal: options.signal });
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch images: ${res.status}`);
+    (error as Error & { status?: number }).status = res.status;
+    throw error;
+  }
+  const data = (await res.json()) as T;
+  return data;
+}
+
+export async function fetchVectorImages<T = unknown[]>(
+  params: ImageSearchParams = {},
+  options: RequestOptions = {}
+): Promise<T> {
+  const searchParams = new URLSearchParams();
+  if (params.query) searchParams.set("query", params.query);
+  if (params.tags && params.tags.length > 0) {
+    searchParams.set("tags", params.tags.join(","));
+  }
+  if (params.color) searchParams.set("color", params.color);
+  if (params.tone) searchParams.set("tone", params.tone);
+  if (typeof params.limit === "number") {
+    searchParams.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    searchParams.set("offset", String(params.offset));
+  }
+  const url = `${API_BASE_URL}/api/images/vector${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+  const res = await fetch(url, { signal: options.signal });
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch vector images: ${res.status}`);
+    (error as Error & { status?: number }).status = res.status;
+    throw error;
+  }
+  const data = (await res.json()) as T;
+  return data;
+}
+
+export type ImageUpdatePayload = {
+  filename?: string;
+  tags?: string[];
+  dominantColor?: string | null;
+  tone?: string | null;
+  pageUrl?: string | null;
+};
+
+export async function updateImage<T = unknown>(
+  id: string,
+  payload: ImageUpdatePayload
+): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}/api/image/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to update image: ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function deleteImage(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/image/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to delete image: ${res.status}`);
+  }
+}
+
+export type ImportImagePayload = {
+  imageBase64?: string;
+  imageUrl?: string;
+  type?: "url" | "path" | "buffer";
+  data?: string;
+  filename?: string;
+  name?: string;
+  pageUrl?: string;
+  tags?: string[];
+};
+
+export async function importImage<T = unknown>(
+  payload: ImportImagePayload
+): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}/api/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to import image: ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function renameTag(oldTag: string, newTag: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/tag/${encodeURIComponent(oldTag)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ newName: newTag }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to rename tag: ${res.status}`);
+  }
+}
+
+export async function indexImages<T = unknown>(payload: {
+  imageId?: string;
+  mode?: string;
+}): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}/api/index`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to index images: ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
+
 export async function localApi<TResponse>(
   endpoint: string,
-  payload: unknown
+  payload: unknown,
+  options: RequestOptions = {}
 ): Promise<TResponse> {
   const res = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: options.signal,
   });
 
   if (!res.ok) {

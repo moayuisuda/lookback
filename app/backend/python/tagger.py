@@ -41,14 +41,10 @@ def _has_required_model_files(model_dir: str) -> bool:
     if not os.path.isdir(model_dir):
         return False
     has_config = os.path.isfile(os.path.join(model_dir, "config.json"))
-    has_weights = os.path.isfile(os.path.join(model_dir, "pytorch_model.bin")) or os.path.isfile(
-        os.path.join(model_dir, "model.safetensors")
-    )
+    has_weights_safe = os.path.isfile(os.path.join(model_dir, "model.safetensors"))
     has_processor = os.path.isfile(os.path.join(model_dir, "preprocessor_config.json"))
-    has_tokenizer = os.path.isfile(os.path.join(model_dir, "tokenizer.json")) or os.path.isfile(
-        os.path.join(model_dir, "vocab.json")
-    )
-    return has_config and has_weights and has_processor and has_tokenizer
+    has_tokenizer_json = os.path.isfile(os.path.join(model_dir, "tokenizer.json"))
+    return has_config and has_weights_safe and has_processor and has_tokenizer_json
 
 
 def _emit(event: dict) -> None:
@@ -62,23 +58,39 @@ def _download_model_with_progress(model_dir: str) -> None:
     except Exception as e:
         raise RuntimeError(f"huggingface_hub import failed: {e}")
     import time
+    import urllib.request
+    from huggingface_hub.file_download import hf_hub_url, get_hf_file_metadata
 
     os.makedirs(model_dir, exist_ok=True)
-    base_files = [
+    required_files = [
         "config.json",
         "preprocessor_config.json",
         "tokenizer.json",
-        "tokenizer_config.json",
-        "special_tokens_map.json",
-        "merges.txt",
-        "vocab.json",
     ]
 
-    weights_candidates = ["model.safetensors", "pytorch_model.bin"]
-    targets = base_files + weights_candidates
-    total = len(targets)
+    weights_candidates = ["model.safetensors"]
+    total = len(required_files) + len(weights_candidates)
 
-    def download_file(filename: str, current: int, total: int) -> None:
+    def _is_not_found(err: Exception) -> bool:
+        message = str(err)
+        return "404" in message or "Entry Not Found" in message
+
+    def download_file(filename: str, current: int, total: int, optional: bool = False) -> bool:
+        # Check if file already exists locally
+        final_path = os.path.join(model_dir, filename)
+        if os.path.isfile(final_path):
+             _emit(
+                {
+                    "type": "file",
+                    "filename": filename,
+                    "current": current,
+                    "total": total,
+                    "attempt": 1,
+                    "maxAttempts": 5,
+                }
+            )
+             return True
+
         max_attempts = 5
         attempt = 1
         while True:
@@ -97,9 +109,18 @@ def _download_model_with_progress(model_dir: str) -> None:
                     repo_id=_MODEL_ID,
                     filename=filename,
                     local_dir=model_dir,
+                    force_download=False, # Use cache if available
+                    resume_download=True  # Resume if possible
                 )
-                return
+                return True
             except Exception as e:
+                # If download failed, try to clean up potential lock files or temp files if accessible
+                # huggingface_hub manages its own locks, but we can catch errors
+                pass
+
+                if optional and _is_not_found(e):
+                    _emit({"type": "optional-missing", "filename": filename, "message": str(e)})
+                    return False
                 if attempt >= max_attempts:
                     raise
                 wait_s = min(60, 2**attempt)
@@ -117,17 +138,182 @@ def _download_model_with_progress(model_dir: str) -> None:
 
     _emit({"type": "start", "model": _MODEL_ID, "modelDir": model_dir, "totalFiles": total})
 
-    for idx, filename in enumerate(base_files, start=1):
-        download_file(filename, idx, total)
+    current_index = 1
+    for filename in required_files:
+        download_file(filename, current_index, total)
+        current_index += 1
+    for filename in optional_files:
+        download_file(filename, current_index, total, optional=True)
+        current_index += 1
+
+    def download_weight_with_progress(filename: str, step_index: int, total_steps: int) -> bool:
+        # Check if file already exists locally
+        final_path = os.path.join(model_dir, filename)
+        if os.path.isfile(final_path):
+             _emit(
+                {
+                    "type": "file",
+                    "filename": filename,
+                    "current": step_index,
+                    "total": total_steps,
+                    "attempt": 1,
+                    "maxAttempts": 5,
+                }
+            )
+             return True
+
+        max_attempts = 5
+        attempt = 1
+        while True:
+            temp_path = ""
+            try:
+                url = hf_hub_url(repo_id=_MODEL_ID, filename=filename)
+                total_bytes: Optional[int] = None
+                try:
+                    meta = get_hf_file_metadata(url)
+                    total_bytes = getattr(meta, "size", None)
+                except Exception as meta_err:
+                    if _is_not_found(meta_err):
+                        _emit({"type": "weight-missing", "filename": filename, "message": str(meta_err)})
+                        return False
+                final_path = os.path.join(model_dir, filename)
+                temp_path = final_path + ".download"
+                if os.path.isfile(final_path):
+                    _emit(
+                        {
+                            "type": "file",
+                            "filename": filename,
+                            "current": step_index,
+                            "total": total_steps,
+                            "attempt": attempt,
+                            "maxAttempts": max_attempts,
+                        }
+                    )
+                    return True
+                
+                # If temp file exists (from interrupted download), remove it to restart fresh
+                # or we could implement resume, but for now let's ensure we don't get stuck
+                resume_bytes = 0
+                headers = {}
+                mode = 'wb'
+                if os.path.isfile(temp_path):
+                     resume_bytes = os.path.getsize(temp_path)
+                     if resume_bytes > 0:
+                         headers['Range'] = f"bytes={resume_bytes}-"
+                         mode = 'ab'
+
+                req = urllib.request.Request(url, headers=headers)
+                current_bytes = resume_bytes
+                last_emit = 0.0
+                
+                try:
+                    resp = urllib.request.urlopen(req)
+                except urllib.error.HTTPError as e:
+                    # Handle 416 Range Not Satisfiable (e.g. file changed or fully downloaded)
+                    if e.code == 416:
+                        if os.path.isfile(temp_path):
+                            os.remove(temp_path)
+                        resume_bytes = 0
+                        headers = {}
+                        mode = 'wb'
+                        req = urllib.request.Request(url, headers=headers)
+                        resp = urllib.request.urlopen(req)
+                    else:
+                        raise e
+
+                # Check if server accepted range
+                if resp.getcode() == 206:
+                    pass # Resuming
+                else:
+                    # Server sent full file or ignored range
+                    resume_bytes = 0
+                    mode = 'wb'
+                    current_bytes = 0
+
+                with resp, open(temp_path, mode) as f:
+                    if total_bytes is None:
+                        header_len = resp.headers.get("Content-Length")
+                        if header_len:
+                            try:
+                                total_bytes = int(header_len) + resume_bytes
+                            except Exception:
+                                total_bytes = None
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        current_bytes += len(chunk)
+                        if total_bytes:
+                            now = time.time()
+                            if now - last_emit >= 0.2:
+                                _emit(
+                                    {
+                                        "type": "file-progress",
+                                        "filename": filename,
+                                        "currentBytes": current_bytes,
+                                        "totalBytes": total_bytes,
+                                        "stepIndex": step_index,
+                                        "totalSteps": total_steps,
+                                    }
+                                )
+                                last_emit = now
+                if total_bytes:
+                    _emit(
+                        {
+                            "type": "file-progress",
+                            "filename": filename,
+                            "currentBytes": current_bytes,
+                            "totalBytes": total_bytes,
+                            "stepIndex": step_index,
+                            "totalSteps": total_steps,
+                        }
+                    )
+                os.replace(temp_path, final_path)
+                _emit(
+                    {
+                        "type": "file",
+                        "filename": filename,
+                        "current": step_index,
+                        "total": total_steps,
+                        "attempt": attempt,
+                        "maxAttempts": max_attempts,
+                    }
+                )
+                return True
+            except Exception as e:
+                if temp_path and os.path.isfile(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+                if _is_not_found(e):
+                    _emit({"type": "weight-missing", "filename": filename, "message": str(e)})
+                    return False
+                if attempt >= max_attempts:
+                    _emit({"type": "weight-failed", "filename": filename, "message": str(e)})
+                    return False
+                wait_s = min(60, 2**attempt)
+                _emit(
+                    {
+                        "type": "retry",
+                        "filename": filename,
+                        "attempt": attempt,
+                        "nextWaitSeconds": wait_s,
+                        "message": str(e),
+                    }
+                )
+                time.sleep(wait_s)
+                attempt += 1
 
     weight_ok = False
-    for w_index, filename in enumerate(weights_candidates, start=len(base_files) + 1):
-        try:
-            download_file(filename, w_index, total)
+    weight_index = current_index
+    for filename in weights_candidates:
+        if download_weight_with_progress(filename, weight_index, total):
             weight_ok = True
             break
-        except Exception as e:
-            _emit({"type": "weight-failed", "filename": filename, "message": str(e)})
+    if weight_ok:
+        current_index += 1
 
     if not weight_ok:
         raise RuntimeError("failed to download model weights")
@@ -345,6 +531,8 @@ def main() -> None:
             _emit({"type": "verify", "ok": ok})
             sys.exit(0 if ok else 2)
         except Exception as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             _emit({"type": "error", "message": str(e)})
             sys.exit(1)
 

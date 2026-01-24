@@ -1,6 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { Minus, Square, X, Pin, Settings, Plus, Trash2, Edit2, Check, ChevronDown } from 'lucide-react';
-import { clsx } from 'clsx';
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Minus,
+  Square,
+  X,
+  Settings,
+  Ghost,
+  Plus,
+  Trash2,
+  Edit2,
+  Check,
+  ChevronDown,
+  Sidebar,
+} from "lucide-react";
+import { clsx } from "clsx";
 import {
   globalActions,
   globalState,
@@ -8,26 +20,61 @@ import {
   indexingState,
   modelProgressActions,
   modelProgressState,
-} from '../store/globalStore';
-import { canvasActions, canvasState } from '../store/canvasStore';
-import { THEME } from '../theme';
-import { useSnapshot } from 'valtio';
-import { API_BASE_URL } from '../config';
-import { useT } from '../i18n/useT';
+} from "../store/globalStore";
+import { canvasActions, canvasState } from "../store/canvasStore";
+import { THEME } from "../theme";
+import { useSnapshot } from "valtio";
+import { API_BASE_URL } from "../config";
+import { indexImages } from "../service";
+import { useT } from "../i18n/useT";
 import {
   listCanvases,
   createCanvas,
   renameCanvas,
   deleteCanvas,
   type CanvasMeta,
-} from '../service';
-import type { I18nKey, I18nParams } from '../../shared/i18n/types';
-import { isI18nKey } from '../../shared/i18n/guards';
-import { ToggleSwitch } from './ToggleSwitch';
-import { ShortcutInput } from './ShortcutInput';
+} from "../service";
+import type { I18nKey, I18nParams } from "../../shared/i18n/types";
+import { isI18nKey } from "../../shared/i18n/guards";
+import { ToggleSwitch } from "./ToggleSwitch";
+import { ShortcutInput } from "./ShortcutInput";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
+  typeof value === "object" && value !== null;
+
+const SettingInput: React.FC<{
+  value: string;
+  onChange: (val: string) => void;
+  type?: string;
+  placeholder?: string;
+  className?: string;
+}> = ({ value, onChange, type = "text", placeholder, className }) => {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  return (
+    <input
+      type={type}
+      className={className}
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      onBlur={() => {
+        if (localValue !== value) {
+          onChange(localValue);
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
+      placeholder={placeholder}
+    />
+  );
+};
 
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
@@ -36,27 +83,27 @@ export const TitleBar: React.FC = () => {
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
-  const [storageDir, setStorageDir] = useState('');
+  const [storageDir, setStorageDir] = useState("");
   const [loadingStorageDir, setLoadingStorageDir] = useState(false);
   const [updatingStorageDir, setUpdatingStorageDir] = useState(false);
   const [indexing, setIndexing] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
-  const [enableVectorSearch, setEnableVectorSearch] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(false);
-  
+
   const canvasSnap = useSnapshot(canvasState);
   const [canvases, setCanvases] = useState<CanvasMeta[]>([]);
   const [newCanvasName, setNewCanvasName] = useState("");
   const [isCreatingCanvas, setIsCreatingCanvas] = useState(false);
   const [editingCanvas, setEditingCanvas] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
+  const isIgnoringRightAreaRef = useRef(false);
 
   const refreshCanvases = async () => {
     try {
-        const list = await listCanvases();
-        setCanvases(list);
+      const list = await listCanvases();
+      setCanvases(list);
     } catch (e) {
-        console.error(e);
+      console.error(e);
     }
   };
 
@@ -73,63 +120,72 @@ export const TitleBar: React.FC = () => {
     }
   }, [canvasMenuOpen]);
 
-  const handleCreateCanvas = async () => {
-      if (!newCanvasName.trim()) return;
-      try {
-          await createCanvas(newCanvasName);
-          setNewCanvasName("");
-          setIsCreatingCanvas(false);
-          await refreshCanvases();
-      } catch (e) {
-          console.error(e);
-          globalActions.pushToast({ key: 'toast.createCanvasFailed' }, 'error');
+  useEffect(() => {
+    return () => {
+      if (isIgnoringRightAreaRef.current) {
+        window.electron?.setIgnoreMouseEvents?.(false);
+        isIgnoringRightAreaRef.current = false;
       }
+    };
+  }, []);
+
+  const handleCreateCanvas = async () => {
+    if (!newCanvasName.trim()) return;
+    try {
+      await createCanvas(newCanvasName);
+      setNewCanvasName("");
+      setIsCreatingCanvas(false);
+      await refreshCanvases();
+    } catch (e) {
+      console.error(e);
+      globalActions.pushToast({ key: "toast.createCanvasFailed" }, "error");
+    }
   };
 
   const handleSwitchCanvas = async (name: string) => {
-    const { state: galleryState } = await import('../store/galleryStore');
+    const { state: galleryState } = await import("../store/galleryStore");
     const findImageMeta = (id: string) => {
-        const item = galleryState.images.find(img => img.image === id);
-        return item || null;
+      const item = galleryState.images.find((img) => img.id === id);
+      return item || null;
     };
-    
+
     await canvasActions.switchCanvas(name, findImageMeta);
   };
 
   const handleDeleteCanvas = async (name: string) => {
-      if (!confirm(t('settings.canvas.deleteConfirm'))) return;
-      try {
-          await deleteCanvas(name);
-          await refreshCanvases();
-          if (canvasSnap.currentCanvasName === name) {
-              const list = await listCanvases();
-              if (list.length > 0) {
-                   handleSwitchCanvas(list[0].name);
-              }
-          }
-      } catch (e) {
-          console.error(e);
+    if (!confirm(t("settings.canvas.deleteConfirm"))) return;
+    try {
+      await deleteCanvas(name);
+      await refreshCanvases();
+      if (canvasSnap.currentCanvasName === name) {
+        const list = await listCanvases();
+        if (list.length > 0) {
+          handleSwitchCanvas(list[0].name);
+        }
       }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleRenameCanvas = async () => {
-      if (!editingCanvas || !editingName.trim()) return;
-      try {
-          await renameCanvas(editingCanvas, editingName);
-          setEditingCanvas(null);
-          setEditingName("");
-          await refreshCanvases();
-          if (canvasSnap.currentCanvasName === editingCanvas) {
-               const { state: galleryState } = await import('../store/galleryStore');
-                const findImageMeta = (id: string) => {
-                    const item = galleryState.images.find(img => img.image === id);
-                    return item || null;
-                };
-              await canvasActions.switchCanvas(editingName, findImageMeta);
-          }
-      } catch (e) {
-          console.error(e);
+    if (!editingCanvas || !editingName.trim()) return;
+    try {
+      await renameCanvas(editingCanvas, editingName);
+      setEditingCanvas(null);
+      setEditingName("");
+      await refreshCanvases();
+      if (canvasSnap.currentCanvasName === editingCanvas) {
+        const { state: galleryState } = await import("../store/galleryStore");
+        const findImageMeta = (id: string) => {
+          const item = galleryState.images.find((img) => img.id === id);
+          return item || null;
+        };
+        await canvasActions.switchCanvas(editingName, findImageMeta);
       }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // const [downloadingModel, setDownloadingModel] = useState(false);
@@ -147,91 +203,102 @@ export const TitleBar: React.FC = () => {
   // } | null>(null);
 
   useEffect(() => {
-    const removeListener = window.electron?.onModelDownloadProgress?.((data: unknown) => {
-      if (!isRecord(data)) return;
+    const removeListener = window.electron?.onModelDownloadProgress?.(
+      (data: unknown) => {
+        if (!isRecord(data)) return;
 
-      if (data.isOpen === false) {
-        modelProgressActions.reset();
-        return;
-      }
+        if (data.isOpen === false) {
+          modelProgressActions.reset();
+          return;
+        }
 
-      if (typeof data.progress === 'number') {
-        if (!isI18nKey(data.statusKey)) return;
-        const statusParams = isRecord(data.statusParams)
-          ? (data.statusParams as I18nParams)
-          : undefined;
-        modelProgressActions.update({
-          isDownloading: true,
-          current: Math.round(Math.max(0, Math.min(1, data.progress)) * 100),
-          total: 100,
-          statusKey: data.statusKey as I18nKey,
-          statusParams,
-          filename: typeof data.filename === 'string' ? data.filename : undefined,
-        });
-        return;
-      }
+        if (typeof data.progress === "number") {
+          if (!isI18nKey(data.statusKey)) return;
+          const statusParams = isRecord(data.statusParams)
+            ? (data.statusParams as I18nParams)
+            : undefined;
+          modelProgressActions.update({
+            isDownloading: true,
+            current: Math.round(Math.max(0, Math.min(1, data.progress)) * 100),
+            total: 100,
+            statusKey: data.statusKey as I18nKey,
+            statusParams,
+            filename:
+              typeof data.filename === "string" ? data.filename : undefined,
+          });
+          return;
+        }
 
-      if (data.type === 'start') {
-        modelProgressActions.update({
-          isDownloading: true,
-          current: 0,
-          total: 100,
-          statusKey: 'model.preparingDownload',
-          statusParams: undefined,
-          filename: undefined,
-        });
-        return;
-      }
+        if (data.type === "start") {
+          modelProgressActions.update({
+            isDownloading: true,
+            current: 0,
+            total: 100,
+            statusKey: "model.preparingDownload",
+            statusParams: undefined,
+            filename: undefined,
+          });
+          return;
+        }
 
-      if (
-        data.type === 'file' &&
-        typeof data.current === 'number' &&
-        typeof data.total === 'number'
-      ) {
-        const p = data.total > 0 ? data.current / data.total : 0;
-        modelProgressActions.update({
-          isDownloading: true,
-          current: Math.round(Math.max(0, Math.min(1, p)) * 100),
-          total: 100,
-          statusKey: 'model.downloadingFraction',
-          statusParams: { current: data.current, total: data.total },
-          filename: typeof data.filename === 'string' ? data.filename : undefined,
-        });
-        return;
-      }
+        if (
+          data.type === "file" &&
+          typeof data.current === "number" &&
+          typeof data.total === "number"
+        ) {
+          const p = data.total > 0 ? data.current / data.total : 0;
+          modelProgressActions.update({
+            isDownloading: true,
+            current: Math.round(Math.max(0, Math.min(1, p)) * 100),
+            total: 100,
+            statusKey: "model.downloadingFraction",
+            statusParams: { current: data.current, total: data.total },
+            filename:
+              typeof data.filename === "string" ? data.filename : undefined,
+          });
+          return;
+        }
 
-      if (data.type === 'retry') {
-        modelProgressActions.update({
-          isDownloading: true,
-          statusKey: 'model.retrying',
-          statusParams: undefined,
-          filename: typeof data.filename === 'string' ? data.filename : undefined,
-        });
-        return;
-      }
+        if (data.type === "retry") {
+          modelProgressActions.update({
+            isDownloading: true,
+            statusKey: "model.retrying",
+            statusParams: undefined,
+            filename:
+              typeof data.filename === "string" ? data.filename : undefined,
+          });
+          return;
+        }
 
-      if (data.type === 'done' || (data.type === 'verify' && data.ok === true)) {
-        modelProgressActions.update({
-          isDownloading: true,
-          current: 100,
-          total: 100,
-          statusKey: 'model.ready',
-          statusParams: undefined,
-        });
-        window.setTimeout(() => modelProgressActions.reset(), 800);
-        return;
-      }
+        if (
+          data.type === "done" ||
+          (data.type === "verify" && data.ok === true)
+        ) {
+          modelProgressActions.update({
+            isDownloading: true,
+            current: 100,
+            total: 100,
+            statusKey: "model.ready",
+            statusParams: undefined,
+          });
+          window.setTimeout(() => modelProgressActions.reset(), 800);
+          return;
+        }
 
-      if (data.type === 'error' || data.type === 'weight-failed') {
-        const reason = typeof data.reason === 'string' ? data.reason : undefined;
-        modelProgressActions.update({
-          isDownloading: true,
-          statusKey: reason ? 'model.downloadFailedWithReason' : 'model.downloadFailed',
-          statusParams: reason ? { reason } : undefined,
-        });
-        window.setTimeout(() => modelProgressActions.reset(), 1600);
-      }
-    });
+        if (data.type === "error" || data.type === "weight-failed") {
+          const reason =
+            typeof data.reason === "string" ? data.reason : undefined;
+          modelProgressActions.update({
+            isDownloading: true,
+            statusKey: reason
+              ? "model.downloadFailedWithReason"
+              : "model.downloadFailed",
+            statusParams: reason ? { reason } : undefined,
+          });
+          window.setTimeout(() => modelProgressActions.reset(), 1600);
+        }
+      },
+    );
 
     return () => {
       removeListener?.();
@@ -241,13 +308,15 @@ export const TitleBar: React.FC = () => {
   // Use the global event listener in App.tsx to update store
   // Here we rely on useSnapshot(indexingState) to render UI
   useEffect(() => {
-    const removeListener = window.electron?.onIndexingProgress?.((data: unknown) => {
-      if (!isRecord(data)) return;
-      if (typeof data.current !== 'number' || typeof data.total !== 'number') return;
-      if (!isI18nKey(data.statusKey)) return;
-      const statusParams = isRecord(data.statusParams)
-        ? (data.statusParams as I18nParams)
-        : undefined;
+    const removeListener = window.electron?.onIndexingProgress?.(
+      (data: unknown) => {
+        if (!isRecord(data)) return;
+        if (typeof data.current !== "number" || typeof data.total !== "number")
+          return;
+        if (!isI18nKey(data.statusKey)) return;
+        const statusParams = isRecord(data.statusParams)
+          ? (data.statusParams as I18nParams)
+          : undefined;
         indexingActions.update({
           isIndexing: true,
           current: data.current,
@@ -256,18 +325,12 @@ export const TitleBar: React.FC = () => {
           statusParams,
           filename: undefined,
         });
-    });
+      },
+    );
     return () => {
       removeListener?.();
     };
   }, []);
-
-  const toggleAlwaysOnTop = () => {
-    const newState = !globalState.pinMode;
-    const widthDelta = globalState.sidebarWidth;
-    globalActions.setPinMode(newState);
-    window.electron?.setPinMode?.(newState, widthDelta);
-  };
 
   const loadStorageDir = async () => {
     if (!window.electron?.getStorageDir) return;
@@ -286,7 +349,7 @@ export const TitleBar: React.FC = () => {
       const resp = await fetch(`${API_BASE_URL}/api/settings`);
       if (resp.ok) {
         const data = await resp.json();
-        setEnableVectorSearch(Boolean(data.enableVectorSearch));
+        globalActions.setEnableVectorSearch(Boolean(data.enableVectorSearch));
       }
     } catch (e) {
       console.error(e);
@@ -302,15 +365,15 @@ export const TitleBar: React.FC = () => {
       setIsWindowActive(!document.hidden);
     };
 
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('blur', handleBlur);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     handleVisibilityChange();
 
     return () => {
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('blur', handleBlur);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -346,36 +409,29 @@ export const TitleBar: React.FC = () => {
       isIndexing: true,
       current: 0,
       total: 0,
-      statusKey: 'indexing.starting',
+      statusKey: "indexing.starting",
       statusParams: undefined,
     });
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/index-missing`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!resp.ok) {
-        globalActions.pushToast({ key: 'toast.indexFailed' }, 'error');
-        return;
-      }
-      const data = (await resp.json().catch(() => ({}))) as {
+      const data = await indexImages<{
         created?: number;
         updated?: number;
-      };
-      const created = typeof data.created === 'number' ? data.created : 0;
-      const updated = typeof data.updated === 'number' ? data.updated : 0;
-      const total = created + updated;
+        total?: number;
+      }>({ mode: "missing" });
+      const created = typeof data.created === "number" ? data.created : 0;
+      const updated = typeof data.updated === "number" ? data.updated : 0;
+      const total = typeof data.total === "number" ? data.total : 0;
       if (total === 0) {
-        globalActions.pushToast({ key: 'toast.noUnindexedImages' }, 'info');
+        globalActions.pushToast({ key: "toast.noUnindexedImages" }, "info");
         return;
       }
       globalActions.pushToast(
-        { key: 'toast.indexCompleted', params: { created, updated } },
-        'success',
+        { key: "toast.indexCompleted", params: { created, updated } },
+        "success",
       );
     } catch (e) {
       console.error(e);
-      globalActions.pushToast({ key: 'toast.indexFailed' }, 'error');
+      globalActions.pushToast({ key: "toast.indexFailed" }, "error");
     } finally {
       setIndexing(false);
       indexingActions.reset();
@@ -383,12 +439,13 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleToggleVectorSearch = async () => {
-    const newValue = !enableVectorSearch;
-    setEnableVectorSearch(newValue);
+    const prevValue = snap.enableVectorSearch;
+    const newValue = !prevValue;
+    globalActions.setEnableVectorSearch(newValue);
     try {
       await fetch(`${API_BASE_URL}/api/settings/enableVectorSearch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: newValue }),
       });
 
@@ -397,29 +454,26 @@ export const TitleBar: React.FC = () => {
         if (window.electron?.ensureModelReady) {
           const res = await window.electron.ensureModelReady();
           if (res.success) {
-            globalActions.pushToast({ key: 'toast.modelReady' }, 'success');
+            globalActions.pushToast({ key: "toast.modelReady" }, "success");
           } else {
             globalActions.pushToast(
-              { key: 'toast.modelCheckFailed', params: { error: res.error ?? '' } },
-              'error',
+              {
+                key: "toast.modelCheckFailed",
+                params: { error: res.error ?? "" },
+              },
+              "error",
             );
           }
         } else {
           // Fallback to API
-          await fetch(`${API_BASE_URL}/api/download-model`, { method: 'POST' });
+          await fetch(`${API_BASE_URL}/api/download-model`, { method: "POST" });
         }
       }
     } catch (e) {
       console.error(e);
-      globalActions.pushToast({ key: 'toast.settingsUpdateFailed' }, 'error');
-      setEnableVectorSearch(!newValue); // revert
+      globalActions.pushToast({ key: "toast.settingsUpdateFailed" }, "error");
+      globalActions.setEnableVectorSearch(prevValue);
     }
-  };
-
-  const handleTogglePinTransparent = () => {
-    const next = !snap.pinTransparent;
-    globalActions.setPinTransparent(next);
-    window.electron?.setPinTransparent?.(next);
   };
 
   const handleToggleMouseThrough = () => {
@@ -428,7 +482,7 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleShortcutInvalid = () => {
-    globalActions.pushToast({ key: 'toast.shortcutInvalid' }, 'error');
+    globalActions.pushToast({ key: "toast.shortcutInvalid" }, "error");
   };
 
   const handleSetToggleWindowShortcut = async (accelerator: string) => {
@@ -453,11 +507,11 @@ export const TitleBar: React.FC = () => {
 
   useEffect(() => {
     const cleanup = window.electron?.onRendererEvent?.((event: string) => {
-      if (event === 'canvas-opacity-up') {
+      if (event === "canvas-opacity-up") {
         globalActions.setCanvasOpacity(globalState.canvasOpacity + 0.1);
-      } else if (event === 'canvas-opacity-down') {
+      } else if (event === "canvas-opacity-down") {
         globalActions.setCanvasOpacity(globalState.canvasOpacity - 0.1);
-      } else if (event === 'toggle-mouse-through') {
+      } else if (event === "toggle-mouse-through") {
         if (globalState.pinMode) {
           globalActions.setMouseThrough(!globalState.mouseThrough);
         }
@@ -466,273 +520,326 @@ export const TitleBar: React.FC = () => {
     return cleanup;
   }, []);
 
-  const [localThreshold, setLocalThreshold] = useState<number | null>(null);
-
-  const handleCanvasOpacityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCanvasOpacityChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const val = parseFloat(e.target.value);
     globalActions.setCanvasOpacity(val);
   };
 
-  const handleVectorSearchThresholdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setLocalThreshold(val);
+  const handleRightAreaEnter = () => {
+    if (isIgnoringRightAreaRef.current) return;
+    window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
+    isIgnoringRightAreaRef.current = true;
   };
 
-  const handleVectorSearchThresholdCommit = async () => {
-    if (localThreshold === null) return;
-    const val = localThreshold;
-    globalActions.setVectorSearchThreshold(val);
-    setLocalThreshold(null);
-    try {
-      await fetch(`${API_BASE_URL}/api/settings/vectorSearchThreshold`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: val }),
-      });
-    } catch (err) {
-      console.error(err);
-    }
+  const handleRightAreaLeave = () => {
+    if (!isIgnoringRightAreaRef.current) return;
+    window.electron?.setIgnoreMouseEvents?.(false);
+    isIgnoringRightAreaRef.current = false;
   };
 
   return (
-    <div
-      className={clsx(
-        'relative z-[100] h-8 flex items-center justify-between pr-2 pl-2 select-none draggable border-b border-neutral-800',
-        'bg-neutral-900'
-      )}
-    >
-      <div className="flex items-center gap-2 text-neutral-400 text-xs font-bold">
-        <span
-          style={{
-            color: isWindowActive ? THEME.primary : '#6b7280',
-          }}
-        >
-          LookBack
-        </span>
-      </div>
-      
-      <div className="flex items-center gap-1 no-drag">
-        <div className="relative">
-             <button
-                onClick={() => setCanvasMenuOpen(!canvasMenuOpen)}
-                className={clsx(
-                  "flex items-center gap-1 px-2 py-1 hover:bg-neutral-800 rounded transition-colors max-w-[160px]",
-                  canvasMenuOpen && "bg-neutral-800"
-                )}
-                title={t('settings.canvas')}
+    <div className="flex w-full">
+      <div
+        className={clsx(
+          "relative draggable z-[100] bg-neutral-900 h-8 transition-all inline-flex items-center select-none border-b border-neutral-800",
+          snap.mouseThrough
+            ? "justify-start rounded-tr-xl w-auto flex-none"
+            : "justify-between w-auto flex-1 pr-2 pl-2",
+          // Padding adjustment for visual consistency
+          snap.mouseThrough ? "px-2" : "",
+        )}
+      >
+        <div className="flex items-center gap-2 text-neutral-400 text-xs font-bold mr-2">
+          <span
+            style={{
+              color: isWindowActive ? THEME.primary : "#6b7280",
+            }}
+          >
+            LookBack
+          </span>
+          {!snap.mouseThrough && (
+            <button
+              onClick={() => globalActions.setGalleryOpen(!snap.isGalleryOpen)}
+              className={clsx(
+                "p-1 hover:bg-neutral-800 rounded transition-colors no-drag",
+                snap.isGalleryOpen && "bg-neutral-800",
+              )}
+              style={{ color: snap.isGalleryOpen ? THEME.primary : undefined }}
+              title={t("common.close")}
             >
-                <span className="truncate text-[10px] text-neutral-300 font-medium">
-                  {canvasSnap.currentCanvasName || t('common.notSet')}
-                </span>
-                <ChevronDown size={10} className="text-neutral-500 shrink-0" />
+              <Sidebar size={14} />
             </button>
-            
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 no-drag">
+          <div className="relative">
+            <button
+              onClick={() => setCanvasMenuOpen(!canvasMenuOpen)}
+              className={clsx(
+                "flex items-center gap-1 px-2 py-1 hover:bg-neutral-800 rounded transition-colors max-w-[160px]",
+                canvasMenuOpen && "bg-neutral-800",
+              )}
+              title={t("settings.canvas")}
+            >
+              <span className="truncate text-[10px] text-neutral-300 font-medium">
+                {canvasSnap.currentCanvasName || t("common.notSet")}
+              </span>
+              <ChevronDown size={10} className="text-neutral-500 shrink-0" />
+            </button>
+
             {canvasMenuOpen && (
-                <div className="absolute right-0 top-8 mt-1 w-64 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag z-[110]">
-                     <div className="space-y-1">
-            <div className="text-[11px] text-neutral-400 flex justify-between items-center">
-                <span>{t('settings.canvas')}</span>
-                <button 
-                    onClick={() => setIsCreatingCanvas(true)}
-                    className="p-1 hover:bg-neutral-800 rounded"
-                    title={t('settings.canvas.create')}
-                >
-                    <Plus size={12} />
-                </button>
-            </div>
-            
-            {isCreatingCanvas && (
-                <div className="flex gap-1 mb-2">
-                    <input 
+              <div
+                className={clsx(
+                  "absolute top-8 mt-1 w-64 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag z-[110]",
+                  snap.mouseThrough ? "left-0" : "right-0",
+                )}
+              >
+                <div className="space-y-1">
+                  <div className="text-[11px] text-neutral-400 flex justify-between items-center">
+                    <span>{t("settings.canvas")}</span>
+                    <button
+                      onClick={() => setIsCreatingCanvas(true)}
+                      className="p-1 hover:bg-neutral-800 rounded"
+                      title={t("settings.canvas.create")}
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
+
+                  {isCreatingCanvas && (
+                    <div className="flex gap-1 mb-2">
+                      <input
                         className="flex-1 bg-neutral-800 text-[10px] px-2 py-1 rounded border border-neutral-700 outline-none focus:border-blue-500"
                         value={newCanvasName}
-                        onChange={e => setNewCanvasName(e.target.value)}
-                        placeholder={t('settings.canvas.placeholder')}
-                        onKeyDown={e => e.key === 'Enter' && handleCreateCanvas()}
+                        onChange={(e) => setNewCanvasName(e.target.value)}
+                        placeholder={t("settings.canvas.placeholder")}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleCreateCanvas()
+                        }
                         autoFocus
-                    />
-                    <button onClick={handleCreateCanvas} className="p-1 hover:bg-neutral-700 rounded text-green-500">
+                      />
+                      <button
+                        onClick={handleCreateCanvas}
+                        className="p-1 hover:bg-neutral-700 rounded text-green-500"
+                      >
                         <Check size={12} />
-                    </button>
-                    <button onClick={() => setIsCreatingCanvas(false)} className="p-1 hover:bg-neutral-700 rounded text-neutral-400">
+                      </button>
+                      <button
+                        onClick={() => setIsCreatingCanvas(false)}
+                        className="p-1 hover:bg-neutral-700 rounded text-neutral-400"
+                      >
                         <X size={12} />
-                    </button>
-                </div>
-            )}
-
-            <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
-                {canvases.map(c => (
-                    <div key={c.name} 
-                        className={clsx(
-                            "flex items-center justify-between p-1 rounded group",
-                            canvasSnap.currentCanvasName === c.name ? "bg-neutral-800" : "hover:bg-neutral-800/50 text-neutral-300"
-                        )}
-                        style={{ color: canvasSnap.currentCanvasName === c.name ? THEME.primary : undefined }}
-                    >
-                        {editingCanvas === c.name ? (
-                            <div className="flex flex-1 gap-1 items-center">
-                                <input 
-                                    className="flex-1 bg-neutral-900 text-[10px] px-1 rounded border border-neutral-700 outline-none"
-                                    value={editingName}
-                                    onChange={e => setEditingName(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && handleRenameCanvas()}
-                                    autoFocus
-                                    onClick={e => e.stopPropagation()}
-                                />
-                                <button onClick={handleRenameCanvas} className="text-green-500 hover:text-green-400">
-                                    <Check size={10} />
-                                </button>
-                                <button onClick={() => setEditingCanvas(null)} className="text-neutral-500 hover:text-neutral-400">
-                                    <X size={10} />
-                                </button>
-                            </div>
-                        ) : (
-                            <>
-                                <div 
-                                    className="flex-1 truncate text-[10px] cursor-pointer"
-                                    onClick={() => { handleSwitchCanvas(c.name); setCanvasMenuOpen(false); }}
-                                >
-                                    {c.name}
-                                </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); setEditingCanvas(c.name); setEditingName(c.name); }}
-                                        className="p-0.5 hover:text-white text-neutral-500"
-                                        title={t('settings.canvas.rename')}
-                                    >
-                                        <Edit2 size={10} />
-                                    </button>
-                                    {canvases.length > 1 && (
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); handleDeleteCanvas(c.name); }}
-                                            className="p-0.5 hover:text-red-400 text-neutral-500"
-                                            title={t('settings.canvas.deleteConfirm')}
-                                        >
-                                            <Trash2 size={10} />
-                                        </button>
-                                    )}
-                                </div>
-                            </>
-                        )}
+                      </button>
                     </div>
-                ))}
-            </div>
-          </div>
+                  )}
+
+                  <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                    {canvases.map((c) => (
+                      <div
+                        key={c.name}
+                        className={clsx(
+                          "flex items-center justify-between p-1 rounded group",
+                          canvasSnap.currentCanvasName === c.name
+                            ? "bg-neutral-800"
+                            : "hover:bg-neutral-800/50 text-neutral-300",
+                        )}
+                        style={{
+                          color:
+                            canvasSnap.currentCanvasName === c.name
+                              ? THEME.primary
+                              : undefined,
+                        }}
+                      >
+                        {editingCanvas === c.name ? (
+                          <div className="flex flex-1 gap-1 items-center">
+                            <input
+                              className="flex-1 bg-neutral-900 text-[10px] px-1 rounded border border-neutral-700 outline-none"
+                              value={editingName}
+                              onChange={(e) => setEditingName(e.target.value)}
+                              onKeyDown={(e) =>
+                                e.key === "Enter" && handleRenameCanvas()
+                              }
+                              autoFocus
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <button
+                              onClick={handleRenameCanvas}
+                              className="text-green-500 hover:text-green-400"
+                            >
+                              <Check size={10} />
+                            </button>
+                            <button
+                              onClick={() => setEditingCanvas(null)}
+                              className="text-neutral-500 hover:text-neutral-400"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className="flex-1 truncate text-[10px] cursor-pointer"
+                              onClick={() => {
+                                handleSwitchCanvas(c.name);
+                                setCanvasMenuOpen(false);
+                              }}
+                            >
+                              {c.name}
+                            </div>
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingCanvas(c.name);
+                                  setEditingName(c.name);
+                                }}
+                                className="p-0.5 hover:text-white text-neutral-500"
+                                title={t("settings.canvas.rename")}
+                              >
+                                <Edit2 size={10} />
+                              </button>
+                              {canvases.length > 1 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCanvas(c.name);
+                                  }}
+                                  className="p-0.5 hover:text-red-400 text-neutral-500"
+                                  title={t("settings.canvas.deleteConfirm")}
+                                >
+                                  <Trash2 size={10} />
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              </div>
             )}
-        </div>
-        
-        <div className="w-px h-4 bg-neutral-700 mx-1" />
-        <button
-          onClick={handleToggleSettings}
-          className={clsx(
-            'p-1 hover:bg-neutral-800 rounded transition-colors',
-            settingsOpen && 'bg-neutral-800'
+          </div>
+
+          {!snap.mouseThrough && (
+            <>
+              <div className="w-px h-4 bg-neutral-700 mx-1" />
+              <button
+                onClick={handleToggleSettings}
+                className={clsx(
+                  "p-1 hover:bg-neutral-800 rounded transition-colors",
+                  settingsOpen && "bg-neutral-800",
+                )}
+                style={{ color: settingsOpen ? THEME.primary : undefined }}
+                title={t("titleBar.settings")}
+              >
+                <Settings size={14} />
+              </button>
+            </>
           )}
-          style={{ color: settingsOpen ? THEME.primary : undefined }}
-          title={t('titleBar.settings')}
-        >
-          <Settings size={14} />
-        </button>
-        <button 
-            onClick={toggleAlwaysOnTop}
+          <button
+            onClick={handleToggleMouseThrough}
+            className="p-1 hover:bg-neutral-800 rounded transition-colors"
+            style={{ color: snap.mouseThrough ? THEME.primary : undefined }}
+            title={t("titleBar.mouseThrough")}
+          >
+            <Ghost size={14} />
+          </button>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <button
+            onClick={() => window.electron?.min()}
+            className="p-1 hover:bg-neutral-800 rounded transition-colors"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            onClick={() => window.electron?.max()}
+            className="p-1 hover:bg-neutral-800 rounded transition-colors"
+          >
+            <Square size={14} />
+          </button>
+          <button
+            onClick={() => window.electron?.close()}
+            className="p-1 hover:bg-red-900 hover:text-red-200 rounded transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {settingsOpen && (
+          <div
             className={clsx(
-              'p-1 hover:bg-neutral-800 rounded transition-colors'
+              "absolute top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag flex flex-col gap-3 max-h-[85vh] overflow-y-auto custom-scrollbar",
+              snap.mouseThrough ? "left-0" : "right-2",
             )}
-            style={{ color: snap.pinMode ? THEME.primary : undefined }}
-            title={t('titleBar.alwaysOnTop')}
-        >
-          <Pin size={14} />
-        </button>
-        <div className="w-px h-4 bg-neutral-700 mx-1" />
-        <button onClick={() => window.electron?.min()} className="p-1 hover:bg-neutral-800 rounded transition-colors">
-          <Minus size={14} />
-        </button>
-        <button onClick={() => window.electron?.max()} className="p-1 hover:bg-neutral-800 rounded transition-colors">
-          <Square size={14} />
-        </button>
-        <button onClick={() => window.electron?.close()} className="p-1 hover:bg-red-900 hover:text-red-200 rounded transition-colors">
-          <X size={14} />
-        </button>
-      </div>
+          >
+            <div className="font-semibold px-1">{t("titleBar.settings")}</div>
 
-      {settingsOpen && (
-        <div className="absolute right-2 top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag flex flex-col gap-3 max-h-[85vh] overflow-y-auto custom-scrollbar">
-          <div className="font-semibold px-1">{t('titleBar.settings')}</div>
-
-          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
-            <div className="text-[11px] text-neutral-400 mb-1">{t('titleBar.dataFolder')}</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 truncate text-[10px] text-neutral-300" title={storageDir || t('titleBar.dataFolder.default')}>
-                {loadingStorageDir
-                  ? t('common.loading')
-                  : storageDir || t('titleBar.dataFolder.default')}
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
+              <div className="text-[11px] text-neutral-400 mb-1">
+                {t("titleBar.dataFolder")}
               </div>
-              <button
-                onClick={handleChangeStorageDir}
-                disabled={updatingStorageDir}
-                className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 border border-neutral-700 transition-colors"
-              >
-                {t('titleBar.change')}
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
-            <div className="text-[11px] text-neutral-400 mb-1">{t('common.language')}</div>
-            <div className="flex gap-1">
-              <button
-                type="button"
-                onClick={() => setLocale('en')}
-                className={clsx(
-                  'flex-1 py-1 rounded text-[10px] transition-colors border',
-                  locale === 'en'
-                    ? 'bg-neutral-700 text-white border-neutral-600'
-                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700',
-                )}
-              >
-                {t('common.language.en')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setLocale('zh')}
-                className={clsx(
-                  'flex-1 py-1 rounded text-[10px] transition-colors border',
-                  locale === 'zh'
-                    ? 'bg-neutral-700 text-white border-neutral-600'
-                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700',
-                )}
-              >
-                {t('common.language.zh')}
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-            <div className="text-[11px] text-neutral-400">{t('titleBar.window')}</div>
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-neutral-300">
-                {t('titleBar.pinTransparent')}
-              </span>
-              <ToggleSwitch
-                checked={snap.pinTransparent}
-                onToggle={handleTogglePinTransparent}
-              />
-            </div>
-            {snap.pinMode && (
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-neutral-300">
-                  {t('titleBar.mouseThrough')}
-                </span>
-                <ToggleSwitch
-                  checked={snap.mouseThrough}
-                  onToggle={handleToggleMouseThrough}
-                />
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex-1 truncate text-[10px] text-neutral-300"
+                  title={storageDir || t("titleBar.dataFolder.default")}
+                >
+                  {loadingStorageDir
+                    ? t("common.loading")
+                    : storageDir || t("titleBar.dataFolder.default")}
+                </div>
+                <button
+                  onClick={handleChangeStorageDir}
+                  disabled={updatingStorageDir}
+                  className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 border border-neutral-700 transition-colors"
+                >
+                  {t("titleBar.change")}
+                </button>
               </div>
-            )}
-            <div className="flex flex-col gap-1 pt-1 border-t border-neutral-800/50">
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
+              <div className="text-[11px] text-neutral-400 mb-1">
+                {t("common.language")}
+              </div>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLocale("en")}
+                  className={clsx(
+                    "flex-1 py-1 rounded text-[10px] transition-colors border",
+                    locale === "en"
+                      ? "bg-neutral-700 text-white border-neutral-600"
+                      : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700",
+                  )}
+                >
+                  {t("common.language.en")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLocale("zh")}
+                  className={clsx(
+                    "flex-1 py-1 rounded text-[10px] transition-colors border",
+                    locale === "zh"
+                      ? "bg-neutral-700 text-white border-neutral-600"
+                      : "bg-neutral-800 hover:bg-neutral-700 text-neutral-400 border-transparent hover:border-neutral-700",
+                  )}
+                >
+                  {t("common.language.zh")}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
+              <div className="text-[11px] text-neutral-400">
+                {t("titleBar.window")}
+              </div>
+              <div className="flex flex-col gap-1 pt-1 border-t border-neutral-800/50">
                 <div className="flex justify-between text-[10px]">
-                  <span>{t('titleBar.canvasOpacity')}</span>
+                  <span>{t("titleBar.canvasOpacity")}</span>
                   <span>{snap.canvasOpacity.toFixed(1)}</span>
                 </div>
                 <input
@@ -742,206 +849,266 @@ export const TitleBar: React.FC = () => {
                   step="0.1"
                   value={snap.canvasOpacity}
                   onChange={handleCanvasOpacityChange}
-                  style={{
-                      '--thumb-color': THEME.primary,
-                  } as React.CSSProperties}
+                  style={
+                    {
+                      "--thumb-color": THEME.primary,
+                    } as React.CSSProperties
+                  }
                   className={clsx(
                     "w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer",
                     "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full",
-                    "[&::-webkit-slider-thumb]:bg-[var(--thumb-color)]"
-                  )}
-                />
-            </div>
-          </div>
-
-          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-            <div className="text-[11px] text-neutral-400">{t('titleBar.index')}</div>
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-neutral-300">
-                {t('titleBar.enableAiSearchVector')}
-              </span>
-              <ToggleSwitch
-                checked={enableVectorSearch}
-                onToggle={() => void handleToggleVectorSearch()}
-                disabled={loadingSettings}
-              />
-            </div>
-            {enableVectorSearch && (
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-[10px]">
-                  <span>{t('titleBar.threshold')}</span>
-                  <span>{(localThreshold ?? snap.vectorSearchThreshold).toFixed(2)}</span>
-                </div>
-                <input
-                  type="range"
-                  min="0.15"
-                  max="0.25"
-                  step="0.01"
-                  value={localThreshold ?? snap.vectorSearchThreshold}
-                  onChange={handleVectorSearchThresholdChange}
-                  onMouseUp={handleVectorSearchThresholdCommit}
-                  onTouchEnd={handleVectorSearchThresholdCommit}
-                  style={{
-                      '--thumb-color': THEME.primary,
-                  } as React.CSSProperties}
-                  className={clsx(
-                    "w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer",
-                    "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full",
-                    "[&::-webkit-slider-thumb]:bg-[var(--thumb-color)]"
+                    "[&::-webkit-slider-thumb]:bg-[var(--thumb-color)]",
                   )}
                 />
               </div>
-            )}
-            
-            {(modelSnap.isDownloading || indexingSnap.isIndexing) && (
-                 <div className="pt-2 border-t border-neutral-800/50 space-y-2">
-                    {modelSnap.isDownloading && (
-                      <div>
-                        <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                          <span>
-                            {modelSnap.statusKey
-                              ? t(modelSnap.statusKey, modelSnap.statusParams)
-                              : t('model.downloading')}
-                          </span>
-                          <span>
-                            {modelSnap.total > 0
-                              ? `${Math.round((modelSnap.current / modelSnap.total) * 100)}%`
-                              : ''}
-                          </span>
-                        </div>
-                        {modelSnap.filename && (
-                          <div className="text-[9px] text-neutral-500 truncate mb-1">
-                            {modelSnap.filename}
-                          </div>
-                        )}
-                        <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                          <div
-                            className="h-full bg-blue-600 transition-all duration-300"
-                            style={{
-                              width:
-                                modelSnap.total > 0
-                                  ? `${(modelSnap.current / modelSnap.total) * 100}%`
-                                  : '0%',
-                            }}
-                          />
-                        </div>
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
+              <div className="text-[11px] text-neutral-400">
+                {t("titleBar.index")}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-neutral-300">
+                  {t("titleBar.enableAiSearchVector")}
+                </span>
+                <ToggleSwitch
+                  checked={snap.enableVectorSearch}
+                  onToggle={() => void handleToggleVectorSearch()}
+                  disabled={loadingSettings}
+                />
+              </div>
+
+              {(modelSnap.isDownloading || indexingSnap.isIndexing) && (
+                <div className="pt-2 border-t border-neutral-800/50 space-y-2">
+                  {modelSnap.isDownloading && (
+                    <div>
+                      <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
+                        <span>
+                          {modelSnap.statusKey
+                            ? t(modelSnap.statusKey, modelSnap.statusParams)
+                            : t("model.downloading")}
+                        </span>
+                        <span>
+                          {modelSnap.total > 0
+                            ? `${Math.round((modelSnap.current / modelSnap.total) * 100)}%`
+                            : ""}
+                        </span>
                       </div>
-                    )}
-                    
-                    {indexingSnap.isIndexing && (
-                        <div>
-                           <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                             <span>
-                               {indexingSnap.statusKey
-                                 ? t(indexingSnap.statusKey, indexingSnap.statusParams)
-                                 : t('titleBar.processing')}
-                             </span>
-                             <span>{indexingSnap.total > 0 ? `${Math.round((indexingSnap.current / indexingSnap.total) * 100)}%` : ''}</span>
-                           </div>
-                           {indexingSnap.filename && (
-                             <div className="text-[9px] text-neutral-500 truncate mb-1">
-                               {indexingSnap.filename}
-                             </div>
-                           )}
-                           <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                             <div 
-                               className="h-full bg-blue-600 transition-all duration-300"
-                               style={{ 
-                                 width: indexingSnap.total > 0 
-                                   ? `${(indexingSnap.current / indexingSnap.total) * 100}%` 
-                                   : '0%'
-                               }} 
-                             />
-                           </div>
+                      {modelSnap.filename && (
+                        <div className="text-[9px] text-neutral-500 truncate mb-1">
+                          {modelSnap.filename}
                         </div>
-                    )}
-                 </div>
-            )}
-            
-            <button
+                      )}
+                      <div className="h-1 bg-neutral-800 rounded overflow-hidden">
+                        <div
+                          className="h-full bg-blue-600 transition-all duration-300"
+                          style={{
+                            width:
+                              modelSnap.total > 0
+                                ? `${(modelSnap.current / modelSnap.total) * 100}%`
+                                : "0%",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {indexingSnap.isIndexing && (
+                    <div>
+                      <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
+                        <span>
+                          {indexingSnap.statusKey
+                            ? t(
+                                indexingSnap.statusKey,
+                                indexingSnap.statusParams,
+                              )
+                            : t("titleBar.processing")}
+                        </span>
+                        <span>
+                          {indexingSnap.total > 0
+                            ? `${Math.round((indexingSnap.current / indexingSnap.total) * 100)}%`
+                            : ""}
+                        </span>
+                      </div>
+                      {indexingSnap.filename && (
+                        <div className="text-[9px] text-neutral-500 truncate mb-1">
+                          {indexingSnap.filename}
+                        </div>
+                      )}
+                      <div className="h-1 bg-neutral-800 rounded overflow-hidden">
+                        <div
+                          className="h-full bg-blue-600 transition-all duration-300"
+                          style={{
+                            width:
+                              indexingSnap.total > 0
+                                ? `${(indexingSnap.current / indexingSnap.total) * 100}%`
+                                : "0%",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button
                 onClick={handleIndexMissing}
                 disabled={indexing}
                 className="w-full px-2 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 text-center border border-neutral-700 transition-colors"
               >
-                {indexing ? t('titleBar.indexing') : t('titleBar.indexUnindexedImages')}
-            </button>
-          </div>
+                {indexing
+                  ? t("titleBar.indexing")
+                  : t("titleBar.indexUnindexedImages")}
+              </button>
+            </div>
 
-          <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-            <div className="text-[11px] text-neutral-400">{t('titleBar.shortcuts')}</div>
-            <div className="space-y-1.5">
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
+              <div className="text-[11px] text-neutral-400">
+                {t("settings.llm.title")}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-neutral-300">
+                  {t("settings.llm.enable")}
+                </span>
+                <ToggleSwitch
+                  checked={snap.llmSettings.enabled}
+                  onToggle={() =>
+                    globalActions.setLlmSettings({
+                      enabled: !snap.llmSettings.enabled,
+                    })
+                  }
+                />
+              </div>
+
+              {snap.llmSettings.enabled && (
+                <div className="space-y-2 pt-2 border-t border-neutral-800/50">
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-neutral-400">
+                      {t("settings.llm.baseUrl")}
+                    </div>
+                    <SettingInput
+                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
+                      value={snap.llmSettings.baseUrl}
+                      onChange={(val) =>
+                        globalActions.setLlmSettings({ baseUrl: val })
+                      }
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-neutral-400">
+                      {t("settings.llm.key")}
+                    </div>
+                    <SettingInput
+                      type="password"
+                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
+                      value={snap.llmSettings.key}
+                      onChange={(val) =>
+                        globalActions.setLlmSettings({ key: val })
+                      }
+                      placeholder="sk-..."
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-neutral-400">
+                      {t("settings.llm.model")}
+                    </div>
+                    <SettingInput
+                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
+                      value={snap.llmSettings.model}
+                      onChange={(val) =>
+                        globalActions.setLlmSettings({ model: val })
+                      }
+                      placeholder="gpt-3.5-turbo"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
+              <div className="text-[11px] text-neutral-400">
+                {t("titleBar.shortcuts")}
+              </div>
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">
-                    {t('titleBar.toggleWindowVisibility')}
+                    {t("titleBar.toggleWindowVisibility")}
                   </span>
                   <div className="flex items-center gap-1">
                     <ShortcutInput
                       value={snap.toggleWindowShortcut}
-                      onChange={(accel) => void handleSetToggleWindowShortcut(accel)}
+                      onChange={(accel) =>
+                        void handleSetToggleWindowShortcut(accel)
+                      }
                       onInvalid={handleShortcutInvalid}
                     />
-                    <button
-                      type="button"
-                      className="h-6 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-200 transition-colors border border-neutral-700"
-                      onClick={() => {
-                        const isMac =
-                          typeof navigator !== 'undefined' &&
-                          /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
-                        const fallback = isMac ? 'Command+L' : 'Ctrl+L';
-                        void handleSetToggleWindowShortcut(fallback);
-                      }}
-                      title={t('common.reset')}
-                    >
-                      {t('common.reset')}
-                    </button>
                   </div>
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">
-                    {t('titleBar.canvasOpacityUp')}
+                    {t("titleBar.canvasOpacityUp")}
                   </span>
                   <ShortcutInput
-                      value={snap.canvasOpacityUpShortcut}
-                      onChange={(accel) => void handleSetCanvasOpacityUpShortcut(accel)}
-                      onInvalid={handleShortcutInvalid}
+                    value={snap.canvasOpacityUpShortcut}
+                    onChange={(accel) =>
+                      void handleSetCanvasOpacityUpShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
                   />
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">
-                    {t('titleBar.canvasOpacityDown')}
+                    {t("titleBar.canvasOpacityDown")}
                   </span>
                   <ShortcutInput
-                      value={snap.canvasOpacityDownShortcut}
-                      onChange={(accel) => void handleSetCanvasOpacityDownShortcut(accel)}
-                      onInvalid={handleShortcutInvalid}
+                    value={snap.canvasOpacityDownShortcut}
+                    onChange={(accel) =>
+                      void handleSetCanvasOpacityDownShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
                   />
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">
-                    {t('titleBar.canvasGroup')}
+                    {t("titleBar.canvasGroup")}
                   </span>
                   <ShortcutInput
-                      value={snap.canvasGroupShortcut}
-                      onChange={(accel) => void handleSetCanvasGroupShortcut(accel)}
-                      onInvalid={handleShortcutInvalid}
+                    value={snap.canvasGroupShortcut}
+                    onChange={(accel) =>
+                      void handleSetCanvasGroupShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
                   />
                 </div>
                 {snap.pinMode && (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] text-neutral-300">
-                      {t('titleBar.toggleMouseThrough')}
+                      {t("titleBar.toggleMouseThrough")}
                     </span>
                     <ShortcutInput
-                        value={snap.toggleMouseThroughShortcut}
-                        onChange={(accel) => void handleSetToggleMouseThroughShortcut(accel)}
-                        onInvalid={handleShortcutInvalid}
+                      value={snap.toggleMouseThroughShortcut}
+                      onChange={(accel) =>
+                        void handleSetToggleMouseThroughShortcut(accel)
+                      }
+                      onInvalid={handleShortcutInvalid}
                     />
                   </div>
                 )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
+
+      <div
+        className={clsx(
+          "h-full no-drag ease-in-out",
+          snap.mouseThrough ? "flex-1" : "flex-none w-0",
+        )}
+        onMouseEnter={handleRightAreaEnter}
+        onMouseLeave={handleRightAreaLeave}
+      />
     </div>
   );
 };

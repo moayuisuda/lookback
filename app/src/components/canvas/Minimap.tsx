@@ -38,10 +38,8 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
   const viewW = viewport.width / viewport.scale;
   const viewH = viewport.height / viewport.scale;
 
-  const findImageMeta = (imagePath: string) =>
-    appSnap.allImages.find((img) => img.image === imagePath) ||
-    appSnap.images.find((img) => img.image === imagePath) ||
-    null;
+  const findImageMeta = (imageId: string) =>
+    appSnap.images.find((img) => img.id === imageId) || null;
 
   // If no images, center on view
   if (!isFinite(minX)) {
@@ -133,7 +131,7 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
           let dominantColor = '#6b7280';
           if (item.type === 'image') {
             const img = item as CanvasImage;
-            const meta = findImageMeta(img.image);
+            const meta = findImageMeta(img.id);
             if (meta?.dominantColor) {
               dominantColor = meta.dominantColor;
             } else if (img.dominantColor) {

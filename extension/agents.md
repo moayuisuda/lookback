@@ -23,6 +23,6 @@
 1. 用户拖拽网页图片。
 2. 插件显示悬浮菜单。
 3. 用户将图片拖入菜单项。
-4. 插件发送 HTTP POST 请求到 Electron 本地服务器（端口由扩展内 `API_PORT` 常量指定，例如 `http://localhost:30001/api/collect`）。
+4. 插件发送 HTTP POST 请求到 Electron 本地服务器（端口由扩展内 `API_PORT` 常量指定，例如 `http://localhost:30001/api/import`）。
 5. Electron 服务下载图片、保存 Tag 并通知前端更新。
 6. 插件在网页显示采集结果提示。

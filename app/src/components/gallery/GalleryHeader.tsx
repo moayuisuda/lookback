@@ -13,7 +13,7 @@ import { globalActions, globalState } from "../../store/globalStore";
 import { state, actions } from "../../store/galleryStore";
 import type { ImageMeta } from "../../store/galleryStore";
 import { THEME, hexToRgba } from "../../theme";
-import { localApi } from "../../service";
+import { renameTag } from "../../service";
 import { useT } from "../../i18n/useT";
 import type { I18nKey } from "../../../shared/i18n/types";
 
@@ -86,6 +86,20 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
   const appSnap = useSnapshot(globalState);
   const { t } = useT();
 
+  const [showLoading, setShowLoading] = useState(false);
+
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    if (loading) {
+      timer = setTimeout(() => {
+        setShowLoading(true);
+      }, 200);
+    } else {
+      setShowLoading(false);
+    }
+    return () => clearTimeout(timer);
+  }, [loading]);
+
   const [searchText, setSearchText] = useState(snap.searchQuery);
 
   const debouncedSetSearchQuery = useMemo(
@@ -103,12 +117,9 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
 
   const handleRenameTag = async (oldTag: string, newTag: string) => {
     try {
-      await localApi<unknown>("/api/rename-tag", {
-        oldTag,
-        newTag,
-      });
+      await renameTag(oldTag, newTag);
 
-      const nextAllImages = snap.allImages.map((img) => {
+      const nextImages = snap.images.map((img) => {
         if (img.tags && img.tags.includes(oldTag)) {
           const nextTags = img.tags.map((t) => (t === oldTag ? newTag : t));
           const uniqueTags = Array.from(new Set(nextTags));
@@ -116,7 +127,7 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
         }
         return img;
       });
-      actions.setAllImages(nextAllImages as ImageMeta[]);
+      actions.setImages(nextImages as ImageMeta[]);
 
       if (snap.searchTags.includes(oldTag)) {
         const nextSearchTags = snap.searchTags.map((t) =>
@@ -191,7 +202,7 @@ export const GalleryHeader: React.FC<GalleryHeaderProps> = ({
               />
             </div>
 
-            {loading && (
+            {showLoading && (
               <div
                 className="w-4 h-4 rounded-full animate-spin shrink-0"
                 style={

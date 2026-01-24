@@ -22,9 +22,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // electron/main.ts
-var import_electron2 = require("electron");
-var import_path2 = __toESM(require("path"), 1);
-var import_fs_extra2 = __toESM(require("fs-extra"), 1);
+var import_electron3 = require("electron");
+var import_path7 = __toESM(require("path"), 1);
+var import_fs_extra6 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
 var import_electron_updater = require("electron-updater");
 var import_child_process2 = require("child_process");
@@ -33,111 +33,1928 @@ var import_https2 = __toESM(require("https"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
 
 // backend/server.ts
-var import_electron = require("electron");
-var import_path = __toESM(require("path"), 1);
-var import_express = __toESM(require("express"), 1);
+var import_electron2 = require("electron");
+var import_path6 = __toESM(require("path"), 1);
+var import_express7 = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
 var import_body_parser = __toESM(require("body-parser"), 1);
-var import_fs_extra = __toESM(require("fs-extra"), 1);
+var import_fs_extra5 = __toESM(require("fs-extra"), 1);
 var import_https = __toESM(require("https"), 1);
 var import_http = __toESM(require("http"), 1);
-var import_crypto = __toESM(require("crypto"), 1);
 var import_child_process = require("child_process");
 var import_readline = __toESM(require("readline"), 1);
-var SERVER_PORT = 30001;
-var CONFIG_FILE = import_path.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
-var loadStorageRoot = () => {
+
+// backend/db.ts
+var import_path = __toESM(require("path"), 1);
+var import_better_sqlite3 = __toESM(require("better-sqlite3"), 1);
+var import_sqlite_vss = require("sqlite-vss");
+var schema = `
+CREATE TABLE IF NOT EXISTS images (
+  id TEXT PRIMARY KEY,
+  filename TEXT UNIQUE NOT NULL,
+  imagePath TEXT UNIQUE NOT NULL,
+  createdAt INTEGER NOT NULL,
+  pageUrl TEXT,
+  dominantColor TEXT,
+  tone TEXT,
+  galleryOrder INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_images_created ON images(createdAt DESC);
+CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename);
+CREATE INDEX IF NOT EXISTS idx_images_path ON images(imagePath);
+CREATE INDEX IF NOT EXISTS idx_images_gallery_order ON images(galleryOrder ASC);
+
+CREATE TABLE IF NOT EXISTS tags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS image_tags (
+  imageId TEXT NOT NULL,
+  tagId INTEGER NOT NULL,
+  PRIMARY KEY (imageId, tagId),
+  FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE,
+  FOREIGN KEY (tagId) REFERENCES tags(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_image_tags_tag_image ON image_tags(tagId, imageId);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS images_vss USING vss0(
+  vector(768)
+);
+`;
+var normalizeTags = (tags) => {
+  const normalized = tags.map((tag) => typeof tag === "string" ? tag.trim() : "").filter((tag) => tag.length > 0);
+  return Array.from(new Set(normalized));
+};
+var buildTagsMap = (rows) => {
+  const map = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const list = map.get(row.imageId) ?? [];
+    list.push(row.name);
+    map.set(row.imageId, list);
+  }
+  return map;
+};
+var resolveHasVector = (db, rowids) => {
+  if (rowids.length === 0) return /* @__PURE__ */ new Set();
+  const placeholders = rowids.map(() => "?").join(",");
+  const rows = db.prepare(`SELECT rowid FROM images_vss WHERE rowid IN (${placeholders})`).all(...rowids);
+  return new Set(rows.map((row) => row.rowid));
+};
+var loadTags = (db, imageIds) => {
+  if (imageIds.length === 0) return /* @__PURE__ */ new Map();
+  const placeholders = imageIds.map(() => "?").join(",");
+  const rows = db.prepare(
+    `SELECT it.imageId, t.name FROM image_tags it JOIN tags t ON t.id = it.tagId WHERE it.imageId IN (${placeholders})`
+  ).all(...imageIds);
+  return buildTagsMap(rows);
+};
+var mapImages = (db, rows) => {
+  if (rows.length === 0) return [];
+  const ids = rows.map((row) => row.id);
+  const rowids = rows.map((row) => row.rowid);
+  const tagsMap = loadTags(db, ids);
+  const vectorSet = resolveHasVector(db, rowids);
+  return rows.map((row) => ({
+    id: row.id,
+    filename: row.filename,
+    imagePath: row.imagePath,
+    createdAt: row.createdAt,
+    pageUrl: row.pageUrl,
+    dominantColor: row.dominantColor,
+    tone: row.tone,
+    tags: tagsMap.get(row.id) ?? [],
+    hasVector: vectorSet.has(row.rowid)
+  }));
+};
+var createImageDb = (db) => {
+  const insertImageStmt = db.prepare(
+    `INSERT INTO images (id, filename, imagePath, createdAt, pageUrl, dominantColor, tone)
+     VALUES (@id, @filename, @imagePath, @createdAt, @pageUrl, @dominantColor, @tone)`
+  );
+  const updateImageStmt = db.prepare(
+    `UPDATE images SET
+      filename = COALESCE(@filename, filename),
+      imagePath = COALESCE(@imagePath, imagePath),
+      pageUrl = COALESCE(@pageUrl, pageUrl),
+      dominantColor = COALESCE(@dominantColor, dominantColor),
+      tone = COALESCE(@tone, tone)
+     WHERE id = @id`
+  );
+  const getImageRowById = (id) => {
+    const row = db.prepare(
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id = ?`
+    ).get(id);
+    return row ?? null;
+  };
+  const getImageRowByFilename = (filename) => {
+    const row = db.prepare(
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE filename = ?`
+    ).get(filename);
+    return row ?? null;
+  };
+  const getImageRowidById = (id) => {
+    const row = db.prepare(`SELECT rowid FROM images WHERE id = ?`).get(id);
+    return typeof (row == null ? void 0 : row.rowid) === "number" ? row.rowid : null;
+  };
+  const getImageById = (id) => {
+    const row = getImageRowById(id);
+    if (!row) return null;
+    return mapImages(db, [row])[0] ?? null;
+  };
+  const listImages = () => {
+    const rows = db.prepare(
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images ORDER BY galleryOrder ASC, createdAt DESC`
+    ).all();
+    return mapImages(db, rows);
+  };
+  const listImagesByIds = (ids) => {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.prepare(
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id IN (${placeholders})`
+    ).all(...ids);
+    const map = new Map(rows.map((row) => [row.id, row]));
+    const orderedRows = ids.map((id) => map.get(id)).filter((row) => Boolean(row));
+    return mapImages(db, orderedRows);
+  };
+  const insertImage = (data) => {
+    const info = insertImageStmt.run({
+      ...data,
+      dominantColor: null,
+      tone: null
+    });
+    return { rowid: Number(info.lastInsertRowid) };
+  };
+  const updateImage = (data) => {
+    updateImageStmt.run({
+      id: data.id,
+      filename: data.filename ?? null,
+      imagePath: data.imagePath ?? null,
+      pageUrl: data.pageUrl ?? null,
+      dominantColor: data.dominantColor ?? null,
+      tone: data.tone ?? null
+    });
+  };
+  const deleteImage = (id) => {
+    const row = getImageRowById(id);
+    if (!row) return null;
+    db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(row.rowid);
+    db.prepare(`DELETE FROM images WHERE id = ?`).run(id);
+    db.prepare(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tagId FROM image_tags)`).run();
+    return { imagePath: row.imagePath };
+  };
+  const resolveTagIds = (names) => {
+    const normalized = normalizeTags(names);
+    if (normalized.length === 0) return [];
+    const insertStmt = db.prepare(`INSERT INTO tags (name) VALUES (?) ON CONFLICT(name) DO NOTHING`);
+    const getStmt = db.prepare(`SELECT id FROM tags WHERE name = ?`);
+    const tx = db.transaction(() => {
+      normalized.forEach((name) => insertStmt.run(name));
+      return normalized.map((name) => {
+        const row = getStmt.get(name);
+        return row == null ? void 0 : row.id;
+      }).filter((id) => typeof id === "number");
+    });
+    return tx();
+  };
+  const getTagIdsByNames = (names) => {
+    const normalized = normalizeTags(names);
+    if (normalized.length === 0) return [];
+    const placeholders = normalized.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT id, name FROM tags WHERE name IN (${placeholders})`).all(...normalized);
+    const map = new Map(rows.map((row) => [row.name, row.id]));
+    return normalized.map((name) => map.get(name)).filter((id) => typeof id === "number");
+  };
+  const setImageTags = (id, tags) => {
+    const normalized = normalizeTags(tags);
+    const tx = db.transaction(() => {
+      db.prepare(`DELETE FROM image_tags WHERE imageId = ?`).run(id);
+      const tagIds = resolveTagIds(normalized);
+      const insertStmt = db.prepare(
+        `INSERT OR IGNORE INTO image_tags (imageId, tagId) VALUES (?, ?)`
+      );
+      tagIds.forEach((tagId) => insertStmt.run(id, tagId));
+      db.prepare(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tagId FROM image_tags)`).run();
+    });
+    tx();
+  };
+  const setImageVector = (rowid, vector) => {
+    const tx = db.transaction(() => {
+      db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(rowid);
+      const normalizedVector = new Float32Array(vector);
+      db.prepare(
+        `INSERT INTO images_vss (rowid, vector) VALUES (@rowid, @vector)`
+      ).run({
+        rowid,
+        vector: normalizedVector
+      });
+    });
+    tx();
+  };
+  const setGalleryOrder = (order) => {
+    const resetStmt = db.prepare(`UPDATE images SET galleryOrder = NULL WHERE galleryOrder IS NOT NULL`);
+    const updateStmt = db.prepare(`UPDATE images SET galleryOrder = ? WHERE id = ?`);
+    const tx = db.transaction(() => {
+      resetStmt.run();
+      order.forEach((id, index) => updateStmt.run(index, id));
+    });
+    tx();
+  };
+  const moveGalleryOrder = (activeId, overId) => {
+    const tx = db.transaction(() => {
+      const hasNull = db.prepare("SELECT 1 FROM images WHERE galleryOrder IS NULL LIMIT 1").get();
+      if (hasNull) {
+        const allImages = db.prepare("SELECT id FROM images ORDER BY galleryOrder ASC, createdAt DESC").all();
+        const updateStmt = db.prepare("UPDATE images SET galleryOrder = ? WHERE id = ?");
+        allImages.forEach((row, index) => {
+          updateStmt.run(index, row.id);
+        });
+      }
+      const getOrderStmt = db.prepare("SELECT galleryOrder FROM images WHERE id = ?");
+      const activeRow = getOrderStmt.get(activeId);
+      const overRow = getOrderStmt.get(overId);
+      if (!activeRow || !overRow || activeRow.galleryOrder === null || overRow.galleryOrder === null) {
+        return;
+      }
+      const oldOrder = activeRow.galleryOrder;
+      const newOrder = overRow.galleryOrder;
+      if (oldOrder === newOrder) return;
+      if (oldOrder < newOrder) {
+        db.prepare(
+          "UPDATE images SET galleryOrder = galleryOrder - 1 WHERE galleryOrder > ? AND galleryOrder <= ?"
+        ).run(oldOrder, newOrder);
+      } else {
+        db.prepare(
+          "UPDATE images SET galleryOrder = galleryOrder + 1 WHERE galleryOrder >= ? AND galleryOrder < ?"
+        ).run(newOrder, oldOrder);
+      }
+      db.prepare("UPDATE images SET galleryOrder = ? WHERE id = ?").run(newOrder, activeId);
+    });
+    tx();
+  };
+  const listTags = () => {
+    const rows = db.prepare(`SELECT name FROM tags ORDER BY name ASC`).all();
+    return rows.map((row) => row.name);
+  };
+  const renameTag = (oldName, newName) => {
+    const trimmedOld = oldName.trim();
+    const trimmedNew = newName.trim();
+    if (!trimmedOld || !trimmedNew || trimmedOld === trimmedNew) return;
+    const oldRow = db.prepare(`SELECT id FROM tags WHERE name = ?`).get(trimmedOld);
+    if (!(oldRow == null ? void 0 : oldRow.id)) return;
+    const newRow = db.prepare(`SELECT id FROM tags WHERE name = ?`).get(trimmedNew);
+    const tx = db.transaction(() => {
+      if (newRow == null ? void 0 : newRow.id) {
+        db.prepare(`UPDATE OR IGNORE image_tags SET tagId = ? WHERE tagId = ?`).run(
+          newRow.id,
+          oldRow.id
+        );
+        db.prepare(`DELETE FROM tags WHERE id = ?`).run(oldRow.id);
+      } else {
+        db.prepare(`UPDATE tags SET name = ? WHERE id = ?`).run(trimmedNew, oldRow.id);
+      }
+      db.prepare(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tagId FROM image_tags)`).run();
+    });
+    tx();
+  };
+  const searchImages = (params) => {
+    const { vector, limit, offset, tagIds, tagCount, tone } = params;
+    if (!vector || vector.length === 0) return [];
+    const idsJson = JSON.stringify(tagIds ?? []);
+    const stmt = db.prepare(
+      `
+      WITH tag_ids AS (
+        SELECT DISTINCT value AS tagId
+        FROM json_each(@tagIds)
+      ),
+      vss_matches AS (
+        SELECT rowid, distance
+        FROM images_vss
+        WHERE vss_search(vector, @vector)
+        LIMIT @vssLimit
+      )
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder, v.distance
+      FROM vss_matches v
+      JOIN images i ON v.rowid = i.rowid
+      WHERE (@tone IS NULL OR i.tone = @tone)
+        AND (
+          @hasTags = 0 OR EXISTS (
+            SELECT 1 FROM image_tags it
+            WHERE it.imageId = i.id
+            AND it.tagId IN (SELECT tagId FROM tag_ids)
+            GROUP BY it.imageId
+            HAVING COUNT(DISTINCT it.tagId) = @tagCount
+          )
+        )
+      ORDER BY v.distance ASC
+      LIMIT @limit OFFSET @offset
+    `
+    );
+    const normalizedVector = new Float32Array(vector);
+    const effectiveLimit = typeof limit === "number" && limit > 0 ? limit : 100;
+    const effectiveOffset = typeof offset === "number" && offset >= 0 ? offset : 0;
+    const rows = stmt.all({
+      vector: normalizedVector,
+      tagIds: idsJson,
+      hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
+      tagCount: tagCount ?? 0,
+      limit: effectiveLimit,
+      offset: effectiveOffset,
+      vssLimit: effectiveLimit + effectiveOffset,
+      // VSS search needs to find enough candidates
+      tone: tone ?? null
+    });
+    const metas = mapImages(db, rows);
+    const scores = new Map(rows.map((row) => [row.id, row.distance]));
+    return metas.map((meta) => {
+      const distance = scores.get(meta.id);
+      const score = typeof distance === "number" ? 1 - distance : void 0;
+      return score !== void 0 ? { ...meta, score } : meta;
+    });
+  };
+  const searchImagesByText = (params) => {
+    const { query, limit, offset, tagIds, tagCount, tone } = params;
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+    const idsJson = JSON.stringify(tagIds ?? []);
+    const textConditions = tokens.map(
+      (_, i) => `(lower(i.filename) LIKE @token${i} OR lower(i.imagePath) LIKE @token${i})`
+    ).join(" AND ");
+    const sql = `
+      WITH tag_ids AS (
+        SELECT DISTINCT value AS tagId
+        FROM json_each(@tagIds)
+      )
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder
+      FROM images i
+      WHERE (@tone IS NULL OR i.tone = @tone)
+        AND (
+          @hasTags = 0 OR EXISTS (
+            SELECT 1 FROM image_tags it
+            WHERE it.imageId = i.id
+            AND it.tagId IN (SELECT tagId FROM tag_ids)
+            GROUP BY it.imageId
+            HAVING COUNT(DISTINCT it.tagId) = @tagCount
+          )
+        )
+        AND (${textConditions})
+      ORDER BY i.createdAt DESC
+      LIMIT @limit OFFSET @offset
+    `;
+    const stmt = db.prepare(sql);
+    const queryParams = {
+      tagIds: idsJson,
+      hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
+      tagCount: tagCount ?? 0,
+      limit: typeof limit === "number" && limit > 0 ? limit : 100,
+      offset: typeof offset === "number" && offset >= 0 ? offset : 0,
+      tone: tone ?? null
+    };
+    tokens.forEach((token, i) => {
+      queryParams[`token${i}`] = `%${token}%`;
+    });
+    const rows = stmt.all(queryParams);
+    return mapImages(db, rows);
+  };
+  return {
+    getImageById,
+    listImages,
+    listImagesByIds,
+    setGalleryOrder,
+    moveGalleryOrder,
+    searchImages,
+    searchImagesByText,
+    insertImage,
+    updateImage,
+    deleteImage,
+    setImageTags,
+    setImageVector,
+    getImageRowById,
+    getImageRowidById,
+    getImageRowByFilename,
+    listTags,
+    renameTag,
+    resolveTagIds,
+    getTagIdsByNames
+  };
+};
+var createDatabase = (storageDir) => {
+  const dbPath = import_path.default.join(storageDir, "meta.sqlite");
+  const db = new import_better_sqlite3.default(dbPath);
+  (0, import_sqlite_vss.load)(db);
+  db.pragma("journal_mode = WAL");
+  db.exec(schema);
+  return { db, imageDb: createImageDb(db), incompatibleError: null };
+};
+
+// backend/server.ts
+var import_radash = require("radash");
+
+// backend/routes/images.ts
+var import_path3 = __toESM(require("path"), 1);
+var import_express = __toESM(require("express"), 1);
+var import_electron = require("electron");
+var import_uuid = require("uuid");
+var import_fs_extra2 = __toESM(require("fs-extra"), 1);
+
+// backend/fileLock.ts
+var import_fs_extra = __toESM(require("fs-extra"), 1);
+var import_path2 = __toESM(require("path"), 1);
+var KeyedMutex = class {
+  locks = /* @__PURE__ */ new Map();
+  async run(key, task) {
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release = () => {
+    };
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    const chain = previous.then(() => current);
+    this.locks.set(key, chain);
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.locks.get(key) === chain) {
+        this.locks.delete(key);
+      }
+    }
+  }
+};
+var mutex = new KeyedMutex();
+var normalizeKey = (target) => {
+  if (!target) return "unknown";
   try {
-    if (import_fs_extra.default.pathExistsSync(CONFIG_FILE)) {
-      const raw = import_fs_extra.default.readJsonSync(CONFIG_FILE);
+    return import_path2.default.resolve(target);
+  } catch {
+    return target;
+  }
+};
+var withFileLock = async (target, task) => {
+  return mutex.run(normalizeKey(target), task);
+};
+var withFileLocks = async (targets, task) => {
+  const keys = Array.from(new Set(targets.map(normalizeKey))).sort();
+  const run = async (index) => {
+    if (index >= keys.length) return task();
+    return mutex.run(keys[index], () => run(index + 1));
+  };
+  return run(0);
+};
+var lockedFs = {
+  pathExists: (target) => withFileLock(target, () => import_fs_extra.default.pathExists(target)),
+  ensureDir: (target) => withFileLock(target, () => import_fs_extra.default.ensureDir(target)),
+  ensureFile: (target) => withFileLock(target, () => import_fs_extra.default.ensureFile(target)),
+  readJson: (target) => withFileLock(target, () => import_fs_extra.default.readJson(target)),
+  writeJson: (target, data) => withFileLock(target, () => import_fs_extra.default.writeJson(target, data)),
+  readFile: (target, options) => withFileLock(target, () => import_fs_extra.default.readFile(target, options)),
+  writeFile: (target, data, options) => withFileLock(
+    target,
+    () => import_fs_extra.default.writeFile(target, data, options)
+  ),
+  appendFile: (target, data) => withFileLock(target, () => import_fs_extra.default.appendFile(target, data)),
+  readdir: (target, options) => withFileLock(target, () => import_fs_extra.default.readdir(target, options)),
+  stat: (target) => withFileLock(target, () => import_fs_extra.default.stat(target)),
+  rename: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.rename(src, dest)),
+  copy: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.copy(src, dest)),
+  remove: (target) => withFileLock(target, () => import_fs_extra.default.remove(target)),
+  unlink: (target) => withFileLock(target, () => import_fs_extra.default.unlink(target))
+};
+
+// backend/routes/images.ts
+var ensureTags = (tags) => {
+  if (!Array.isArray(tags)) return [];
+  return tags.filter((tag) => typeof tag === "string");
+};
+var sanitizeBase = (raw) => {
+  const trimmed = raw.trim();
+  if (!trimmed) return "image";
+  let withoutControls = "";
+  for (const ch of trimmed) {
+    const code = ch.charCodeAt(0);
+    withoutControls += code < 32 || code === 127 ? "_" : ch;
+  }
+  const withoutReserved = withoutControls.replace(/[\\/:*?"<>|]/g, "_");
+  const collapsedWs = withoutReserved.replace(/\s+/g, " ").trim();
+  const noTrailing = collapsedWs.replace(/[ .]+$/g, "");
+  const normalized = noTrailing || "image";
+  const maxLen = 80;
+  return normalized.length > maxLen ? normalized.slice(0, maxLen) : normalized;
+};
+var normalizeExt = (raw) => {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withDot = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+  if (!/^\.[a-zA-Z0-9]{1,10}$/.test(withDot)) return null;
+  return withDot.toLowerCase();
+};
+var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".gif",
+  ".bmp",
+  ".tiff",
+  ".tif",
+  ".heic",
+  ".heif",
+  ".avif"
+]);
+var isImageFilename = (filename) => IMAGE_EXTENSIONS.has(import_path3.default.extname(filename).toLowerCase());
+var listImageFiles = async (dir) => {
+  if (!await lockedFs.pathExists(dir)) return [];
+  const entries = await lockedFs.readdir(dir, {
+    withFileTypes: true
+  });
+  return entries.filter((entry) => entry.isFile() && isImageFilename(entry.name)).map((entry) => entry.name);
+};
+var parseTags = (raw) => {
+  if (Array.isArray(raw)) {
+    return raw.filter((tag) => typeof tag === "string");
+  }
+  if (typeof raw === "string") {
+    return raw.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+  }
+  return [];
+};
+var normalizeHexColor = (raw) => {
+  if (typeof raw !== "string") return null;
+  const val = raw.trim();
+  if (!val) return null;
+  const withHash = val.startsWith("#") ? val : `#${val}`;
+  if (!/^#[0-9a-fA-F]{6}$/.test(withHash)) return null;
+  return withHash.toLowerCase();
+};
+var hexToRgb = (hex) => {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return null;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) return null;
+  return { r, g, b };
+};
+var srgbToLinear = (x) => {
+  const v = x / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+var rgbToOklab = (rgb) => {
+  const r = srgbToLinear(rgb.r);
+  const g = srgbToLinear(rgb.g);
+  const b = srgbToLinear(rgb.b);
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+  const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+  const s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+  const l_ = Math.cbrt(l);
+  const m_ = Math.cbrt(m);
+  const s_ = Math.cbrt(s);
+  return {
+    L: 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_,
+    a: 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_,
+    b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_
+  };
+};
+var COLOR_MATCH_DELTA_E = 0.17;
+var COLOR_MATCH_MAX_HUE_DIFF = 0.55;
+var oklabToOklch = (lab) => {
+  const C = Math.hypot(lab.a, lab.b);
+  const h = Math.atan2(lab.b, lab.a);
+  return { L: lab.L, C, h };
+};
+var isSimilarColor = (a, b) => {
+  if (!a) return false;
+  const aNorm = normalizeHexColor(a);
+  if (!aNorm) return false;
+  const rgbA = hexToRgb(aNorm);
+  const rgbB = hexToRgb(b);
+  if (!rgbA || !rgbB) return false;
+  const labA = rgbToOklab(rgbA);
+  const labB = rgbToOklab(rgbB);
+  const lchA = oklabToOklch(labA);
+  const lchB = oklabToOklch(labB);
+  const dL = lchA.L - lchB.L;
+  const dC = lchA.C - lchB.C;
+  const avgC = (lchA.C + lchB.C) / 2;
+  const rawHueDiff = Math.abs(lchA.h - lchB.h);
+  const hueDiff = rawHueDiff > Math.PI ? 2 * Math.PI - rawHueDiff : rawHueDiff;
+  if (avgC > 0.04 && hueDiff > COLOR_MATCH_MAX_HUE_DIFF) return false;
+  const dH = avgC < 0.02 ? 0 : 2 * Math.sqrt(lchA.C * lchB.C) * Math.sin(hueDiff / 2);
+  const deltaE = Math.sqrt(dL * dL + dC * dC + dH * dH);
+  return deltaE <= COLOR_MATCH_DELTA_E;
+};
+var createImagesRouter = (deps) => {
+  const router = import_express.default.Router();
+  const guardStorage = (res) => {
+    const incompatibleError2 = deps.getIncompatibleError();
+    if (!incompatibleError2) return false;
+    res.status(409).json({
+      error: "Storage is incompatible",
+      details: incompatibleError2.message,
+      code: "STORAGE_INCOMPATIBLE"
+    });
+    return true;
+  };
+  router.get("/api/images", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+      const tags = parseTags(req.query.tags);
+      const tone = typeof req.query.tone === "string" && req.query.tone.trim() ? req.query.tone.trim() : null;
+      const color = normalizeHexColor(req.query.color);
+      const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : void 0;
+      const offset = typeof req.query.offset === "string" ? Number(req.query.offset) : void 0;
+      const effectiveLimit = typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? limit : void 0;
+      const effectiveOffset = typeof offset === "number" && Number.isFinite(offset) && offset >= 0 ? offset : 0;
+      const hasFilters = Boolean(query || tags.length || color || tone);
+      if (!hasFilters) {
+        const items = imageDb2.listImages();
+        if (typeof effectiveLimit === "number") {
+          res.json(items.slice(effectiveOffset, effectiveOffset + effectiveLimit));
+        } else {
+          res.json(items.slice(effectiveOffset));
+        }
+        return;
+      }
+      const tagIds = imageDb2.getTagIdsByNames(tags);
+      const tagCount = tags.length;
+      let results = [];
+      if (!query && tags.length === 0) {
+        const items = imageDb2.listImages();
+        const filteredByTone = tone ? items.filter((item) => item.tone === tone) : items;
+        const filteredByColor = color ? filteredByTone.filter((item) => isSimilarColor(item.dominantColor, color)) : filteredByTone;
+        if (typeof effectiveLimit === "number") {
+          res.json(
+            filteredByColor.slice(effectiveOffset, effectiveOffset + effectiveLimit)
+          );
+        } else {
+          res.json(filteredByColor.slice(effectiveOffset));
+        }
+        return;
+      }
+      if (query) {
+        results = imageDb2.searchImagesByText({
+          query,
+          limit,
+          offset,
+          tagIds,
+          tagCount,
+          tone
+        });
+      } else {
+        results = imageDb2.searchImagesByText({
+          query: tags.join(" "),
+          limit,
+          offset,
+          tagIds,
+          tagCount,
+          tone
+        });
+      }
+      const filtered = color ? results.filter((item) => isSimilarColor(item.dominantColor, color)) : results;
+      res.json(filtered);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/images/vector", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+      if (!query) {
+        res.json([]);
+        return;
+      }
+      const tags = parseTags(req.query.tags);
+      const tone = typeof req.query.tone === "string" && req.query.tone.trim() ? req.query.tone.trim() : null;
+      const color = normalizeHexColor(req.query.color);
+      const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : void 0;
+      const offset = typeof req.query.offset === "string" ? Number(req.query.offset) : void 0;
+      const tagIds = imageDb2.getTagIdsByNames(tags);
+      const tagCount = tags.length;
+      const vector = await deps.runPythonVector("encode-text", query);
+      if (!vector) {
+        res.json([]);
+        return;
+      }
+      const results = imageDb2.searchImages({
+        vector,
+        limit,
+        offset,
+        tagIds,
+        tagCount,
+        tone
+      });
+      const filtered = color ? results.filter((item) => isSimilarColor(item.dominantColor, color)) : results;
+      res.json(filtered);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/image/:id", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const { id } = req.params;
+      if (!id) {
+        res.status(400).json({ error: "Image id is required" });
+        return;
+      }
+      const meta = imageDb2.getImageById(id);
+      if (!meta) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      res.json(meta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.patch("/api/image/:id", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const { id } = req.params;
+      if (!id) {
+        res.status(400).json({ error: "Image id is required" });
+        return;
+      }
+      const current = imageDb2.getImageRowById(id);
+      if (!current) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      const body = req.body;
+      let nextFilename = current.filename;
+      let nextImagePath = current.imagePath;
+      if (typeof body.filename === "string" && body.filename.trim()) {
+        const raw = body.filename.trim();
+        const ext = import_path3.default.extname(current.filename);
+        const base = raw.replace(/[/\\:*?"<>|]+/g, "_").trim() || "image";
+        let candidate = `${base}${ext}`;
+        let counter = 1;
+        while (await lockedFs.pathExists(import_path3.default.join(deps.getImageDir(), candidate))) {
+          if (candidate === current.filename) break;
+          candidate = `${base}_${counter}${ext}`;
+          counter += 1;
+        }
+        if (candidate !== current.filename) {
+          const existing = imageDb2.getImageRowByFilename(candidate);
+          if (existing && existing.id !== id) {
+            res.status(409).json({ error: "Filename already exists" });
+            return;
+          }
+          const oldLocalPath = import_path3.default.join(deps.getStorageDir(), current.imagePath);
+          const newRelPath = import_path3.default.join("images", candidate);
+          const newLocalPath = import_path3.default.join(deps.getStorageDir(), newRelPath);
+          imageDb2.updateImage({ id, filename: candidate, imagePath: newRelPath });
+          try {
+            await withFileLocks([oldLocalPath, newLocalPath], async () => {
+              await import_fs_extra2.default.rename(oldLocalPath, newLocalPath);
+            });
+          } catch (err) {
+            imageDb2.updateImage({
+              id,
+              filename: current.filename,
+              imagePath: current.imagePath
+            });
+            throw err;
+          }
+          nextFilename = candidate;
+          nextImagePath = newRelPath;
+        }
+      }
+      let nextDominantColor = current.dominantColor;
+      if (body.dominantColor !== void 0) {
+        if (body.dominantColor === null) {
+          nextDominantColor = null;
+        } else if (typeof body.dominantColor === "string") {
+          const trimmed = body.dominantColor.trim();
+          if (!trimmed) {
+            nextDominantColor = null;
+          } else if (/^#[0-9a-fA-F]{6}$/.test(trimmed) || /^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+            nextDominantColor = trimmed;
+          } else {
+            res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
+            return;
+          }
+        } else {
+          res.status(400).json({ error: "dominantColor must be a string or null" });
+          return;
+        }
+      }
+      let nextTone = current.tone;
+      if (body.tone !== void 0) {
+        if (body.tone === null) {
+          nextTone = null;
+        } else if (typeof body.tone === "string") {
+          const trimmed = body.tone.trim();
+          nextTone = trimmed || null;
+        } else {
+          res.status(400).json({ error: "tone must be a string or null" });
+          return;
+        }
+      }
+      let nextPageUrl = current.pageUrl;
+      if (body.pageUrl !== void 0) {
+        if (body.pageUrl === null) {
+          nextPageUrl = null;
+        } else if (typeof body.pageUrl === "string") {
+          nextPageUrl = body.pageUrl.trim() || null;
+        } else {
+          res.status(400).json({ error: "pageUrl must be a string or null" });
+          return;
+        }
+      }
+      imageDb2.updateImage({
+        id,
+        dominantColor: nextDominantColor,
+        tone: nextTone,
+        pageUrl: nextPageUrl
+      });
+      if (body.tags !== void 0) {
+        imageDb2.setImageTags(id, ensureTags(body.tags));
+      }
+      const updated = imageDb2.getImageById(id);
+      if (!updated) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      res.json({ success: true, meta: updated, filename: nextFilename, imagePath: nextImagePath });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.delete("/api/image/:id", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const { id } = req.params;
+      if (!id) {
+        res.status(400).json({ error: "Image id is required" });
+        return;
+      }
+      const record = imageDb2.getImageRowById(id);
+      if (!record) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      imageDb2.deleteImage(id);
+      const localPath = import_path3.default.join(deps.getStorageDir(), record.imagePath);
+      await withFileLock(localPath, async () => {
+        if (await import_fs_extra2.default.pathExists(localPath)) {
+          await import_fs_extra2.default.remove(localPath);
+        }
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/save-gallery-order", async (req, res) => {
+    try {
+      const { order } = req.body;
+      if (!Array.isArray(order)) {
+        res.status(400).json({ error: "Order must be an array of IDs" });
+        return;
+      }
+      const normalized = order.filter((id) => typeof id === "string");
+      deps.getImageDb().setGalleryOrder(normalized);
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/order-move", async (req, res) => {
+    try {
+      const { activeId, overId } = req.body;
+      if (typeof activeId !== "string" || typeof overId !== "string") {
+        res.status(400).json({ error: "activeId and overId are required" });
+        return;
+      }
+      deps.getImageDb().moveGalleryOrder(activeId, overId);
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/import", async (req, res) => {
+    var _a;
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const payload = req.body;
+      const tags = ensureTags(payload.tags);
+      const timestamp = Date.now();
+      let sourceType = null;
+      let sourceData = null;
+      if (payload.imageBase64) {
+        const base64Data = payload.imageBase64.replace(/^data:image\/\w+;base64,/, "");
+        sourceType = "buffer";
+        sourceData = Buffer.from(base64Data, "base64");
+      } else if (payload.type && payload.data) {
+        sourceType = payload.type;
+        sourceData = payload.data;
+      } else if (payload.imageUrl) {
+        const imageUrl = payload.imageUrl;
+        sourceType = imageUrl.startsWith("file://") || imageUrl.startsWith("/") ? "path" : "url";
+        sourceData = imageUrl;
+      }
+      if (!sourceType || sourceData === null) {
+        res.status(400).json({ error: "No image data" });
+        return;
+      }
+      const sourceFilename = sourceType === "path" ? import_path3.default.basename(sourceData).split("?")[0] : "";
+      const metaFilename = typeof payload.filename === "string" ? payload.filename.trim() : "";
+      const metaName = typeof payload.name === "string" ? payload.name.trim() : "";
+      const extFromMetaFilename = normalizeExt(import_path3.default.extname(metaFilename));
+      const extFromSource = normalizeExt(import_path3.default.extname(sourceFilename));
+      const extFromMetaName = normalizeExt(import_path3.default.extname(metaName));
+      const ext = extFromMetaFilename || extFromSource || extFromMetaName || (sourceType === "buffer" ? ".png" : ".jpg");
+      const baseNameFromMetaFilename = metaFilename ? import_path3.default.basename(metaFilename, import_path3.default.extname(metaFilename)) : "";
+      const baseNameFromMetaName = metaName ? import_path3.default.basename(metaName, import_path3.default.extname(metaName)) : "";
+      const baseNameFromSource = sourceFilename ? import_path3.default.basename(sourceFilename, import_path3.default.extname(sourceFilename)) : "";
+      const rawBase = baseNameFromMetaFilename || baseNameFromMetaName || baseNameFromSource || `EMPTY_NAME_${timestamp}`;
+      const safeName = sanitizeBase(rawBase);
+      let filename = `${safeName}${ext}`;
+      let counter = 1;
+      while (await lockedFs.pathExists(import_path3.default.join(deps.getImageDir(), filename))) {
+        if (imageDb2.getImageRowByFilename(filename)) {
+          filename = `${safeName}_${counter}${ext}`;
+          counter += 1;
+          continue;
+        }
+        break;
+      }
+      const imagePath = import_path3.default.join("images", filename);
+      const localPath = import_path3.default.join(deps.getStorageDir(), imagePath);
+      if (sourceType === "buffer") {
+        await withFileLock(localPath, async () => {
+          await import_fs_extra2.default.writeFile(localPath, sourceData);
+        });
+      } else if (sourceType === "path") {
+        let srcPath = sourceData;
+        if (srcPath.startsWith("file://")) {
+          srcPath = new URL(srcPath).pathname;
+          if (process.platform === "win32" && srcPath.startsWith("/") && srcPath.includes(":")) {
+            srcPath = srcPath.substring(1);
+          }
+        }
+        srcPath = decodeURIComponent(srcPath);
+        await withFileLocks([srcPath, localPath], async () => {
+          await import_fs_extra2.default.copy(srcPath, localPath);
+        });
+      } else {
+        await deps.downloadImage(sourceData, localPath);
+      }
+      const id = (0, import_uuid.v4)();
+      const createdAt = timestamp;
+      const pageUrl = typeof payload.pageUrl === "string" ? payload.pageUrl : null;
+      const { rowid } = imageDb2.insertImage({
+        id,
+        filename,
+        imagePath,
+        createdAt,
+        pageUrl
+      });
+      imageDb2.setImageTags(id, tags);
+      const meta = {
+        id,
+        filename,
+        imagePath,
+        pageUrl,
+        tags,
+        createdAt,
+        dominantColor: null,
+        tone: null,
+        hasVector: false
+      };
+      res.json({ success: true, meta });
+      (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "new-collection", meta);
+      void (async () => {
+        var _a2;
+        const settings = await deps.readSettings();
+        const enableVectorSearch = Boolean(settings.enableVectorSearch);
+        console.log("[VectorIndex] start import", {
+          id,
+          rowid,
+          enableVectorSearch,
+          imagePath: localPath
+        });
+        if (enableVectorSearch) {
+          const vector = await deps.runPythonVector("encode-image", localPath);
+          if (vector) {
+            imageDb2.setImageVector(rowid, vector);
+            console.log("[VectorIndex] stored import", {
+              id,
+              rowid,
+              length: vector.length
+            });
+            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, hasVector: true });
+          } else {
+            console.error("[VectorIndex] vector missing import", { id, rowid });
+          }
+        }
+      })();
+      void (async () => {
+        var _a2;
+        try {
+          const dominantColor = await deps.runPythonDominantColor(localPath);
+          if (dominantColor) {
+            imageDb2.updateImage({ id, dominantColor });
+            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, dominantColor });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("Async dominant color update failed:", message);
+        }
+      })();
+      void (async () => {
+        var _a2;
+        try {
+          const tone = await deps.runPythonTone(localPath);
+          if (tone) {
+            imageDb2.updateImage({ id, tone });
+            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, tone });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("Async tone update failed:", message);
+        }
+      })();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/index", async (req, res) => {
+    var _a, _b, _c, _d, _e, _f;
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const { imageId, mode } = req.body;
+      const settings = await deps.readSettings();
+      const enableVectorSearch = Boolean(settings.enableVectorSearch);
+      if (!enableVectorSearch && !imageId && mode !== "missing") {
+        res.json({ success: true, created: 0, updated: 0 });
+        return;
+      }
+      if (imageId) {
+        const row = imageDb2.getImageRowById(imageId);
+        if (!row) {
+          res.status(404).json({ error: "Image not found" });
+          return;
+        }
+        const localPath = import_path3.default.join(deps.getStorageDir(), row.imagePath);
+        console.log("[VectorIndex] start single", {
+          id: imageId,
+          rowid: row.rowid,
+          imagePath: localPath
+        });
+        const vector = await deps.runPythonVector("encode-image", localPath);
+        if (vector) {
+          imageDb2.setImageVector(row.rowid, vector);
+          console.log("[VectorIndex] stored single", {
+            id: imageId,
+            rowid: row.rowid,
+            length: vector.length
+          });
+          (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "image-updated", { id: imageId, hasVector: true });
+          const meta = imageDb2.getImageById(imageId);
+          res.json({ success: true, meta });
+          return;
+        }
+        console.error("[VectorIndex] vector missing single", {
+          id: imageId,
+          rowid: row.rowid
+        });
+        res.json({ success: true });
+        return;
+      }
+      if (mode === "missing") {
+        const items = imageDb2.listImages();
+        const existingNames = new Set(items.map((item) => item.filename));
+        const files = await listImageFiles(deps.getImageDir());
+        let created = 0;
+        const newItems = [];
+        for (const filename of files) {
+          if (existingNames.has(filename)) continue;
+          const imagePath = import_path3.default.join("images", filename);
+          const localPath = import_path3.default.join(deps.getStorageDir(), imagePath);
+          const stat = await withFileLock(
+            localPath,
+            () => import_fs_extra2.default.stat(localPath).catch(() => null)
+          );
+          const createdAt = stat && typeof stat.mtimeMs === "number" ? Math.floor(stat.mtimeMs) : Date.now();
+          const id = (0, import_uuid.v4)();
+          imageDb2.insertImage({
+            id,
+            filename,
+            imagePath,
+            createdAt,
+            pageUrl: null
+          });
+          imageDb2.setImageTags(id, []);
+          const meta = {
+            id,
+            filename,
+            imagePath,
+            pageUrl: null,
+            tags: [],
+            createdAt,
+            dominantColor: null,
+            tone: null,
+            hasVector: false
+          };
+          newItems.push(meta);
+          existingNames.add(filename);
+          created += 1;
+          (_b = deps.sendToRenderer) == null ? void 0 : _b.call(deps, "new-collection", meta);
+          void (async () => {
+            var _a2;
+            try {
+              const dominantColor = await deps.runPythonDominantColor(localPath);
+              if (dominantColor) {
+                imageDb2.updateImage({ id, dominantColor });
+                (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, dominantColor });
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error("Async dominant color update failed:", message);
+            }
+          })();
+          void (async () => {
+            var _a2;
+            try {
+              const tone = await deps.runPythonTone(localPath);
+              if (tone) {
+                imageDb2.updateImage({ id, tone });
+                (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, tone });
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error("Async tone update failed:", message);
+            }
+          })();
+        }
+        const candidates = [...items, ...newItems].filter(
+          (item) => !item.hasVector
+        );
+        let current = 0;
+        const total = candidates.length;
+        if (!enableVectorSearch) {
+          res.json({ success: true, created, updated: 0, total });
+          return;
+        }
+        (_c = deps.sendToRenderer) == null ? void 0 : _c.call(deps, "indexing-progress", {
+          current: 0,
+          total,
+          statusKey: "indexing.starting"
+        });
+        let updated = 0;
+        for (const item of candidates) {
+          current += 1;
+          if (current % 2 === 0 || current === total || current === 1) {
+            (_d = deps.sendToRenderer) == null ? void 0 : _d.call(deps, "indexing-progress", {
+              current,
+              total,
+              statusKey: "indexing.progress",
+              statusParams: { current, total }
+            });
+          }
+          const rowid = imageDb2.getImageRowidById(item.id);
+          if (!rowid) {
+            console.error("[VectorIndex] rowid missing batch", { id: item.id });
+            continue;
+          }
+          const localPath = import_path3.default.join(deps.getStorageDir(), item.imagePath);
+          console.log("[VectorIndex] start batch", {
+            id: item.id,
+            rowid,
+            current,
+            total,
+            imagePath: localPath
+          });
+          const vector = await deps.runPythonVector("encode-image", localPath);
+          if (vector) {
+            imageDb2.setImageVector(rowid, vector);
+            updated += 1;
+            (_e = deps.sendToRenderer) == null ? void 0 : _e.call(deps, "image-updated", { id: item.id, hasVector: true });
+            console.log("[VectorIndex] stored batch", {
+              id: item.id,
+              rowid,
+              length: vector.length
+            });
+          } else {
+            console.error("[VectorIndex] vector missing batch", {
+              id: item.id,
+              rowid
+            });
+          }
+        }
+        (_f = deps.sendToRenderer) == null ? void 0 : _f.call(deps, "indexing-progress", {
+          current: total,
+          total,
+          statusKey: "indexing.completed"
+        });
+        res.json({ success: true, created, updated, total });
+        return;
+      }
+      res.status(400).json({ error: "Invalid request" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/open-in-folder", async (req, res) => {
+    try {
+      const imageDb2 = deps.getImageDb();
+      const { id } = req.body;
+      if (!id) {
+        res.status(400).json({ error: "Image id is required" });
+        return;
+      }
+      const meta = imageDb2.getImageRowById(id);
+      if (!meta) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      const targetPath = import_path3.default.join(deps.getStorageDir(), meta.imagePath);
+      const dir = import_path3.default.dirname(targetPath);
+      await import_electron.shell.openPath(dir);
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/open-with-default", async (req, res) => {
+    try {
+      const imageDb2 = deps.getImageDb();
+      const { id } = req.body;
+      if (!id) {
+        res.status(400).json({ error: "Image id is required" });
+        return;
+      }
+      const meta = imageDb2.getImageRowById(id);
+      if (!meta) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      const targetPath = import_path3.default.join(deps.getStorageDir(), meta.imagePath);
+      await import_electron.shell.openPath(targetPath);
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/tags.ts
+var import_express2 = __toESM(require("express"), 1);
+var createTagsRouter = (deps) => {
+  const router = import_express2.default.Router();
+  const guardStorage = (res) => {
+    const incompatibleError2 = deps.getIncompatibleError();
+    if (!incompatibleError2) return false;
+    res.status(409).json({
+      error: "Storage is incompatible",
+      details: incompatibleError2.message,
+      code: "STORAGE_INCOMPATIBLE"
+    });
+    return true;
+  };
+  router.get("/api/tags", async (_req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const tags = imageDb2.listTags();
+      const settings = await deps.readSettings();
+      const tagColors = settings.tagColors || {};
+      const result = tags.map((tag) => ({
+        name: tag,
+        color: tagColors[tag] || null
+      }));
+      res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.patch("/api/tag/:name", async (req, res) => {
+    try {
+      if (guardStorage(res)) return;
+      const imageDb2 = deps.getImageDb();
+      const oldName = req.params.name;
+      const { newName } = req.body;
+      if (!oldName || !newName) {
+        res.status(400).json({ error: "Tag names are required" });
+        return;
+      }
+      const trimmedOld = oldName.trim();
+      const trimmedNew = newName.trim();
+      if (!trimmedOld || !trimmedNew) {
+        res.status(400).json({ error: "Tags cannot be empty" });
+        return;
+      }
+      imageDb2.renameTag(trimmedOld, trimmedNew);
+      const settings = await deps.readSettings();
+      const tagColors = settings.tagColors || {};
+      if (Object.prototype.hasOwnProperty.call(tagColors, trimmedOld)) {
+        const color = tagColors[trimmedOld];
+        const nextTagColors = { ...tagColors };
+        delete nextTagColors[trimmedOld];
+        nextTagColors[trimmedNew] = color;
+        await deps.writeSettings({ ...settings, tagColors: nextTagColors });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/settings.ts
+var import_express3 = __toESM(require("express"), 1);
+var createSettingsRouter = (deps) => {
+  const router = import_express3.default.Router();
+  router.get("/settings", async (_req, res) => {
+    try {
+      const settings = await deps.readSettings();
+      res.json(settings);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/settings", async (_req, res) => {
+    try {
+      const settings = await deps.readSettings();
+      res.json(settings);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/settings/:key", async (req, res) => {
+    try {
+      const key = req.params.key;
+      if (!key) {
+        res.status(400).json({ error: "Key is required" });
+        return;
+      }
+      const settings = await deps.readSettings();
+      const value = Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : null;
+      res.json({ value });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/settings/:key", async (req, res) => {
+    try {
+      const key = req.params.key;
+      if (!key) {
+        res.status(400).json({ error: "Key is required" });
+        return;
+      }
+      const { value } = req.body;
+      const settings = await deps.readSettings();
+      const next = { ...settings, [key]: value };
+      await deps.writeSettings(next);
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/canvas.ts
+var import_path4 = __toESM(require("path"), 1);
+var import_express4 = __toESM(require("express"), 1);
+var import_fs_extra3 = __toESM(require("fs-extra"), 1);
+var getCanvasPaths = (dir, name) => {
+  const safeName = name.replace(/[/\\:*?"<>|]/g, "_") || "Default";
+  const canvasDir = import_path4.default.join(dir, safeName);
+  return {
+    dir: canvasDir,
+    dataFile: import_path4.default.join(canvasDir, "canvas.json"),
+    viewportFile: import_path4.default.join(canvasDir, "canvas_viewport.json")
+  };
+};
+var ensureDefaultCanvas = async (dir) => {
+  const defaultCanvasPath = import_path4.default.join(dir, "Default");
+  const canvases = await lockedFs.readdir(dir).catch(() => []);
+  if (canvases.length === 0) {
+    await lockedFs.ensureDir(defaultCanvasPath);
+  }
+};
+var createCanvasRouter = (deps) => {
+  const router = import_express4.default.Router();
+  router.get("/api/canvases", async (_req, res) => {
+    try {
+      const canvasesDir = deps.getCanvasesDir();
+      await ensureDefaultCanvas(canvasesDir);
+      const dirs = await lockedFs.readdir(canvasesDir);
+      const canvases = [];
+      for (const dir of dirs) {
+        const fullPath = import_path4.default.join(canvasesDir, dir);
+        try {
+          const stat = await lockedFs.stat(fullPath);
+          if (stat.isDirectory()) {
+            canvases.push({ name: dir, lastModified: stat.mtimeMs });
+          }
+        } catch {
+        }
+      }
+      res.json(canvases.sort((a, b) => b.lastModified - a.lastModified));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/canvases", async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name) {
+        res.status(400).json({ error: "Canvas name is required" });
+        return;
+      }
+      const paths = getCanvasPaths(deps.getCanvasesDir(), name);
+      await withFileLock(paths.dir, async () => {
+        if (await import_fs_extra3.default.pathExists(paths.dir)) {
+          res.status(409).json({ error: "Canvas already exists" });
+          return;
+        }
+        await import_fs_extra3.default.ensureDir(paths.dir);
+      });
+      if (res.headersSent) return;
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/canvases/rename", async (req, res) => {
+    try {
+      const { oldName, newName } = req.body;
+      if (!oldName || !newName) {
+        res.status(400).json({ error: "Both oldName and newName are required" });
+        return;
+      }
+      const canvasesDir = deps.getCanvasesDir();
+      const oldPaths = getCanvasPaths(canvasesDir, oldName);
+      const newPaths = getCanvasPaths(canvasesDir, newName);
+      await withFileLocks([oldPaths.dir, newPaths.dir], async () => {
+        if (!await import_fs_extra3.default.pathExists(oldPaths.dir)) {
+          res.status(404).json({ error: "Canvas not found" });
+          return;
+        }
+        if (await import_fs_extra3.default.pathExists(newPaths.dir)) {
+          res.status(409).json({ error: "Target canvas name already exists" });
+          return;
+        }
+        await import_fs_extra3.default.rename(oldPaths.dir, newPaths.dir);
+      });
+      if (res.headersSent) return;
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/canvases/delete", async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name) {
+        res.status(400).json({ error: "Canvas name is required" });
+        return;
+      }
+      const paths = getCanvasPaths(deps.getCanvasesDir(), name);
+      await withFileLock(paths.dir, async () => {
+        if (await import_fs_extra3.default.pathExists(paths.dir)) {
+          await import_fs_extra3.default.remove(paths.dir);
+        }
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/save-canvas", async (req, res) => {
+    try {
+      const { images, canvasName } = req.body;
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+      await withFileLocks([paths.dir, paths.dataFile], async () => {
+        await import_fs_extra3.default.ensureDir(paths.dir);
+        await import_fs_extra3.default.writeJson(paths.dataFile, images);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/canvas-viewport", async (req, res) => {
+    try {
+      const { viewport, canvasName } = req.body;
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+      await withFileLocks([paths.dir, paths.viewportFile], async () => {
+        await import_fs_extra3.default.ensureDir(paths.dir);
+        await import_fs_extra3.default.writeJson(paths.viewportFile, viewport);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/canvas-viewport", async (req, res) => {
+    try {
+      const canvasName = req.query.canvasName;
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+      await withFileLock(paths.viewportFile, async () => {
+        if (await import_fs_extra3.default.pathExists(paths.viewportFile)) {
+          const viewport = await import_fs_extra3.default.readJson(paths.viewportFile);
+          res.json(viewport);
+          return;
+        }
+        res.json(null);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.get("/api/load-canvas", async (req, res) => {
+    try {
+      const canvasName = req.query.canvasName;
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+      let images = [];
+      await withFileLock(paths.dataFile, async () => {
+        if (await import_fs_extra3.default.pathExists(paths.dataFile)) {
+          images = await import_fs_extra3.default.readJson(paths.dataFile);
+        }
+      });
+      try {
+        const canvasTempDir = deps.getCanvasTempDir();
+        await withFileLock(canvasTempDir, async () => {
+          if (await import_fs_extra3.default.pathExists(canvasTempDir)) {
+            const usedTempFiles = /* @__PURE__ */ new Set();
+            if (Array.isArray(images)) {
+              images.forEach((img) => {
+                const pathValue = img.localPath || img.imagePath;
+                if (pathValue) {
+                  const basename = import_path4.default.basename(pathValue);
+                  usedTempFiles.add(basename);
+                }
+              });
+            }
+            const files = await import_fs_extra3.default.readdir(canvasTempDir);
+            for (const file of files) {
+              if (!usedTempFiles.has(file)) {
+                await import_fs_extra3.default.unlink(import_path4.default.join(canvasTempDir, file));
+              }
+            }
+          }
+        });
+      } catch {
+      }
+      res.json(images);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/temp.ts
+var import_path5 = __toESM(require("path"), 1);
+var import_express5 = __toESM(require("express"), 1);
+var import_fs_extra4 = __toESM(require("fs-extra"), 1);
+var createTempRouter = (deps) => {
+  const router = import_express5.default.Router();
+  router.post("/api/download-url", async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url || typeof url !== "string") {
+        res.status(400).json({ error: "URL is required" });
+        return;
+      }
+      const trimmedUrl = url.trim();
+      if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+        res.status(400).json({ error: "Invalid URL" });
+        return;
+      }
+      let urlFilename = "image.jpg";
+      try {
+        const urlObj = new URL(trimmedUrl);
+        const pathname = urlObj.pathname;
+        const baseName = import_path5.default.basename(pathname).split("?")[0];
+        if (baseName && /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(baseName)) {
+          urlFilename = baseName;
+        }
+      } catch {
+      }
+      const ext = import_path5.default.extname(urlFilename) || ".jpg";
+      const nameWithoutExt = import_path5.default.basename(urlFilename, ext);
+      const safeName = nameWithoutExt.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "image";
+      const timestamp = Date.now();
+      const filename = `${safeName}_${timestamp}${ext}`;
+      const filepath = import_path5.default.join(deps.getCanvasTempDir(), filename);
+      await deps.downloadImage(trimmedUrl, filepath);
+      res.json({
+        success: true,
+        filename,
+        path: filepath
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/upload-temp", async (req, res) => {
+    try {
+      const { imageBase64, filename: providedFilename } = req.body;
+      if (!imageBase64) {
+        res.status(400).json({ error: "No image data" });
+        return;
+      }
+      let filename = "temp.png";
+      if (providedFilename) {
+        const ext = import_path5.default.extname(providedFilename) || ".png";
+        const name = import_path5.default.basename(providedFilename, ext);
+        const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+        filename = `${safeName}${ext}`;
+      }
+      const filepath = import_path5.default.join(deps.getCanvasTempDir(), filename);
+      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+      await withFileLock(filepath, async () => {
+        await import_fs_extra4.default.writeFile(filepath, base64Data, "base64");
+      });
+      res.json({
+        success: true,
+        filename,
+        path: filepath
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/delete-temp-file", async (req, res) => {
+    try {
+      const { filePath } = req.body;
+      if (!filePath) {
+        res.status(400).json({ error: "File path is required" });
+        return;
+      }
+      const canvasTempDir = deps.getCanvasTempDir();
+      const normalizedPath = import_path5.default.normalize(filePath);
+      if (!normalizedPath.startsWith(canvasTempDir)) {
+        const inTemp = import_path5.default.join(canvasTempDir, import_path5.default.basename(filePath));
+        await withFileLock(inTemp, async () => {
+          if (await import_fs_extra4.default.pathExists(inTemp)) {
+            await import_fs_extra4.default.unlink(inTemp);
+            res.json({ success: true });
+            return;
+          }
+          res.status(403).json({ error: "Invalid file path: Must be in temp directory" });
+        });
+        return;
+      }
+      await withFileLock(normalizedPath, async () => {
+        if (await import_fs_extra4.default.pathExists(normalizedPath)) {
+          await import_fs_extra4.default.unlink(normalizedPath);
+          res.json({ success: true });
+          return;
+        }
+        res.status(404).json({ error: "File not found" });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  router.post("/api/temp-dominant-color", async (req, res) => {
+    try {
+      const { filePath } = req.body;
+      if (!filePath) {
+        res.status(400).json({ error: "File path is required" });
+        return;
+      }
+      const normalizedPath = import_path5.default.normalize(filePath);
+      let targetPath = normalizedPath;
+      const canvasTempDir = deps.getCanvasTempDir();
+      if (!normalizedPath.startsWith(canvasTempDir)) {
+        const inTemp = import_path5.default.join(canvasTempDir, import_path5.default.basename(filePath));
+        const exists = await withFileLock(inTemp, () => import_fs_extra4.default.pathExists(inTemp));
+        if (!exists) {
+          res.status(403).json({ error: "Invalid file path: Must be in temp directory" });
+          return;
+        }
+        targetPath = inTemp;
+      } else {
+        const exists = await withFileLock(
+          normalizedPath,
+          () => import_fs_extra4.default.pathExists(normalizedPath)
+        );
+        if (!exists) {
+          res.status(404).json({ error: "File not found" });
+          return;
+        }
+      }
+      const dominantColor = await deps.runPythonDominantColor(targetPath);
+      res.json({ success: true, dominantColor });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/routes/model.ts
+var import_express6 = __toESM(require("express"), 1);
+var createModelRouter = (deps) => {
+  const router = import_express6.default.Router();
+  router.post("/api/download-model", async (_req, res) => {
+    try {
+      deps.downloadModel((data) => {
+        var _a;
+        (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "model-download-progress", data);
+      }).catch((err) => {
+        var _a;
+        (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "model-download-progress", {
+          type: "error",
+          reason: String(err)
+        });
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  return router;
+};
+
+// backend/server.ts
+var SERVER_PORT = 30001;
+var CONFIG_FILE = import_path6.default.join(import_electron2.app.getPath("userData"), "lookback_config.json");
+var DEFAULT_STORAGE_DIR = import_path6.default.join(import_electron2.app.getPath("userData"), "lookback_storage");
+var loadStorageRoot = async () => {
+  try {
+    if (await lockedFs.pathExists(CONFIG_FILE)) {
+      const raw = await lockedFs.readJson(CONFIG_FILE).catch(() => null);
       if (raw && typeof raw.storageDir === "string" && raw.storageDir.trim()) {
         return raw.storageDir;
       }
     }
   } catch {
   }
-  if (import_electron.app.isPackaged && process.platform !== "darwin") {
+  if (import_electron2.app.isPackaged && process.platform !== "darwin") {
     try {
-      const exeDir = import_path.default.dirname(import_electron.app.getPath("exe"));
-      const portableDataDir = import_path.default.join(exeDir, "data");
-      if (import_fs_extra.default.existsSync(portableDataDir)) {
+      const exeDir = import_path6.default.dirname(import_electron2.app.getPath("exe"));
+      const portableDataDir = import_path6.default.join(exeDir, "data");
+      if (await lockedFs.pathExists(portableDataDir)) {
         return portableDataDir;
       }
-      const testFile = import_path.default.join(exeDir, ".write_test");
-      try {
-        import_fs_extra.default.writeFileSync(testFile, "test");
-        import_fs_extra.default.removeSync(testFile);
+      const testFile = import_path6.default.join(exeDir, ".write_test");
+      const writable = await withFileLock(testFile, async () => {
+        try {
+          await import_fs_extra5.default.writeFile(testFile, "test");
+          await import_fs_extra5.default.remove(testFile);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (writable) {
         return portableDataDir;
-      } catch {
       }
     } catch {
     }
   }
-  return import_path.default.join(import_electron.app.getPath("userData"), "lookback_storage");
+  return DEFAULT_STORAGE_DIR;
 };
-var STORAGE_DIR = loadStorageRoot();
-var META_DIR = import_path.default.join(STORAGE_DIR, "meta");
-var IMAGE_DIR = import_path.default.join(STORAGE_DIR, "images");
-var CANVAS_TEMP_DIR = import_path.default.join(STORAGE_DIR, "canvas_temp");
-var CANVASES_DIR = import_path.default.join(STORAGE_DIR, "canvases");
-var GALLERY_ORDER_FILE = import_path.default.join(STORAGE_DIR, "gallery_order.json");
-var SETTINGS_FILE = import_path.default.join(STORAGE_DIR, "settings.json");
-var ensureStorageDirs = (root) => {
-  import_fs_extra.default.ensureDirSync(root);
-  import_fs_extra.default.ensureDirSync(import_path.default.join(root, "meta"));
-  import_fs_extra.default.ensureDirSync(import_path.default.join(root, "images"));
-  import_fs_extra.default.ensureDirSync(import_path.default.join(root, "model"));
-  import_fs_extra.default.ensureDirSync(import_path.default.join(root, "canvas_temp"));
-  import_fs_extra.default.ensureDirSync(import_path.default.join(root, "canvases"));
+var STORAGE_DIR = DEFAULT_STORAGE_DIR;
+var IMAGE_DIR = import_path6.default.join(STORAGE_DIR, "images");
+var CANVAS_TEMP_DIR = import_path6.default.join(STORAGE_DIR, "canvas_temp");
+var CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
+var SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+var settingsCache = null;
+var updateStoragePaths = (root) => {
+  STORAGE_DIR = root;
+  IMAGE_DIR = import_path6.default.join(STORAGE_DIR, "images");
+  CANVAS_TEMP_DIR = import_path6.default.join(STORAGE_DIR, "canvas_temp");
+  CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
+  SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+};
+var ensureStorageDirs = async (root) => {
+  await Promise.all([
+    lockedFs.ensureDir(root),
+    lockedFs.ensureDir(import_path6.default.join(root, "images")),
+    lockedFs.ensureDir(import_path6.default.join(root, "model")),
+    lockedFs.ensureDir(import_path6.default.join(root, "canvas_temp")),
+    lockedFs.ensureDir(import_path6.default.join(root, "canvases"))
+  ]);
 };
 var getStorageDir = () => STORAGE_DIR;
 var setStorageRoot = async (root) => {
   const trimmed = root.trim();
   if (!trimmed) return;
-  STORAGE_DIR = trimmed;
-  META_DIR = import_path.default.join(STORAGE_DIR, "meta");
-  IMAGE_DIR = import_path.default.join(STORAGE_DIR, "images");
-  CANVAS_TEMP_DIR = import_path.default.join(STORAGE_DIR, "canvas_temp");
-  CANVASES_DIR = import_path.default.join(STORAGE_DIR, "canvases");
-  GALLERY_ORDER_FILE = import_path.default.join(STORAGE_DIR, "gallery_order.json");
-  SETTINGS_FILE = import_path.default.join(STORAGE_DIR, "settings.json");
-  ensureStorageDirs(STORAGE_DIR);
-  await import_fs_extra.default.writeJson(CONFIG_FILE, { storageDir: STORAGE_DIR });
+  updateStoragePaths(trimmed);
+  settingsCache = null;
+  await ensureStorageDirs(STORAGE_DIR);
+  await withFileLock(CONFIG_FILE, async () => {
+    await import_fs_extra5.default.writeJson(CONFIG_FILE, { storageDir: STORAGE_DIR });
+  });
+  initDatabase();
 };
 var readSettings = async () => {
-  if (!await import_fs_extra.default.pathExists(SETTINGS_FILE)) {
-    return {};
-  }
-  try {
-    const raw = await import_fs_extra.default.readJson(SETTINGS_FILE);
-    if (raw && typeof raw === "object") {
-      return raw;
+  if (settingsCache) return settingsCache;
+  return withFileLock(SETTINGS_FILE, async () => {
+    if (!await import_fs_extra5.default.pathExists(SETTINGS_FILE)) {
+      settingsCache = {};
+      return settingsCache;
     }
-  } catch (error) {
-    console.error("Failed to read settings file", error);
-  }
-  return {};
+    try {
+      const raw = await import_fs_extra5.default.readJson(SETTINGS_FILE);
+      if (raw && typeof raw === "object") {
+        settingsCache = raw;
+        return settingsCache;
+      }
+    } catch (error) {
+      console.error("Failed to read settings file", error);
+    }
+    settingsCache = {};
+    return settingsCache;
+  });
 };
+var persistSettings = (0, import_radash.debounce)({ delay: 500 }, async (settings) => {
+  await withFileLock(SETTINGS_FILE, async () => {
+    try {
+      await import_fs_extra5.default.writeJson(SETTINGS_FILE, settings);
+    } catch (error) {
+      console.error("Failed to write settings file", error);
+    }
+  });
+});
 var writeSettings = async (settings) => {
-  try {
-    await import_fs_extra.default.writeJson(SETTINGS_FILE, settings);
-  } catch (error) {
-    console.error("Failed to write settings file", error);
-  }
+  settingsCache = settings;
+  persistSettings(settings);
 };
-ensureStorageDirs(STORAGE_DIR);
+var imageDb = null;
+var incompatibleError = null;
+var dbHandle = null;
+var initDatabase = () => {
+  const result = createDatabase(STORAGE_DIR);
+  incompatibleError = result.incompatibleError;
+  imageDb = result.imageDb;
+  if (dbHandle && dbHandle !== result.db) {
+    dbHandle.close();
+  }
+  dbHandle = result.db;
+};
+var initializeStorage = async () => {
+  const root = await loadStorageRoot();
+  updateStoragePaths(root);
+  settingsCache = null;
+  await ensureStorageDirs(STORAGE_DIR);
+  initDatabase();
+};
 var PythonMetaService = class {
   process = null;
   queue = [];
   getUvCandidates() {
     var _a, _b;
     const candidates = [];
-    if (import_electron.app.isPackaged) {
+    if (import_electron2.app.isPackaged) {
       if (process.platform === "win32") {
-        candidates.push(import_path.default.join(process.resourcesPath, "bin", "uv.exe"));
+        candidates.push(import_path6.default.join(process.resourcesPath, "bin", "uv.exe"));
       } else if (process.platform === "darwin") {
         candidates.push(
-          import_path.default.join(
+          import_path6.default.join(
             process.resourcesPath,
             "bin",
             "mac",
@@ -148,11 +1965,11 @@ var PythonMetaService = class {
       }
     } else {
       if (process.platform === "win32") {
-        candidates.push(import_path.default.join(import_electron.app.getAppPath(), "bin", "win32", "uv.exe"));
+        candidates.push(import_path6.default.join(import_electron2.app.getAppPath(), "bin", "win32", "uv.exe"));
       } else if (process.platform === "darwin") {
         candidates.push(
-          import_path.default.join(
-            import_electron.app.getAppPath(),
+          import_path6.default.join(
+            import_electron2.app.getAppPath(),
             "bin",
             "mac",
             "arm64",
@@ -167,9 +1984,9 @@ var PythonMetaService = class {
     if (home) {
       const versions = ["3.14", "3.13", "3.12", "3.11", "3.10"];
       for (const v of versions) {
-        candidates.push(import_path.default.join(home, "Library", "Python", v, "bin", "uv"));
+        candidates.push(import_path6.default.join(home, "Library", "Python", v, "bin", "uv"));
       }
-      candidates.push(import_path.default.join(home, ".local", "bin", "uv"));
+      candidates.push(import_path6.default.join(home, ".local", "bin", "uv"));
     }
     candidates.push("/opt/homebrew/bin/uv", "/usr/local/bin/uv", "uv");
     const uniq = [];
@@ -227,7 +2044,7 @@ var PythonMetaService = class {
   spawnProcess(command, args, cwd) {
     const env = {
       ...process.env,
-      PROREF_MODEL_DIR: import_path.default.join(getStorageDir(), "model"),
+      PROREF_MODEL_DIR: import_path6.default.join(getStorageDir(), "model"),
       // Use Aliyun mirror for PyPI (often more stable/accessible)
       UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
       // Also set PIP_INDEX_URL as fallback/standard
@@ -245,23 +2062,26 @@ var PythonMetaService = class {
   }
   start() {
     if (this.process) return;
-    let scriptPath = import_path.default.join(__dirname, "../backend/python/tagger.py");
-    if (import_electron.app.isPackaged) {
+    let scriptPath = import_path6.default.join(__dirname, "../backend/python/tagger.py");
+    if (import_electron2.app.isPackaged) {
       scriptPath = scriptPath.replace("app.asar", "app.asar.unpacked");
     }
-    const pythonDir = import_path.default.dirname(scriptPath);
+    const pythonDir = import_path6.default.dirname(scriptPath);
     const uvArgs = ["run", "python", scriptPath];
     const uvCandidates = this.getUvCandidates();
-    const trySpawn = (index) => {
+    const trySpawn = async (index) => {
       if (index >= uvCandidates.length) {
         console.error("Failed to spawn python vector service: uv not found");
         this.process = null;
         return;
       }
       const command = uvCandidates[index];
-      if (import_path.default.isAbsolute(command) && !import_fs_extra.default.pathExistsSync(command)) {
-        trySpawn(index + 1);
-        return;
+      if (import_path6.default.isAbsolute(command)) {
+        const exists = await lockedFs.pathExists(command);
+        if (!exists) {
+          await trySpawn(index + 1);
+          return;
+        }
       }
       const proc = this.spawnProcess(command, uvArgs, pythonDir);
       this.process = proc;
@@ -280,31 +2100,34 @@ var PythonMetaService = class {
         }
       });
     };
-    trySpawn(0);
+    void trySpawn(0);
   }
   downloadModel(onProgress) {
     return new Promise((resolve, reject) => {
-      let scriptPath = import_path.default.join(__dirname, "../backend/python/tagger.py");
-      if (import_electron.app.isPackaged) {
+      let scriptPath = import_path6.default.join(__dirname, "../backend/python/tagger.py");
+      if (import_electron2.app.isPackaged) {
         scriptPath = scriptPath.replace("app.asar", "app.asar.unpacked");
       }
-      const pythonDir = import_path.default.dirname(scriptPath);
+      const pythonDir = import_path6.default.dirname(scriptPath);
       const uvArgs = ["run", "python", scriptPath, "--download-model"];
       const uvCandidates = this.getUvCandidates();
-      const trySpawn = (index) => {
+      const trySpawn = async (index) => {
         var _a;
         if (index >= uvCandidates.length) {
           reject(new Error("Failed to spawn python service: uv not found"));
           return;
         }
         const command = uvCandidates[index];
-        if (import_path.default.isAbsolute(command) && !import_fs_extra.default.pathExistsSync(command)) {
-          trySpawn(index + 1);
-          return;
+        if (import_path6.default.isAbsolute(command)) {
+          const exists = await lockedFs.pathExists(command);
+          if (!exists) {
+            await trySpawn(index + 1);
+            return;
+          }
         }
         const env = {
           ...process.env,
-          PROREF_MODEL_DIR: import_path.default.join(getStorageDir(), "model"),
+          PROREF_MODEL_DIR: import_path6.default.join(getStorageDir(), "model"),
           UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
           PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/",
           HF_ENDPOINT: "https://hf-mirror.com"
@@ -337,13 +2160,13 @@ var PythonMetaService = class {
         proc.on("error", (err) => {
           const code = err.code;
           if (code === "ENOENT") {
-            trySpawn(index + 1);
+            void trySpawn(index + 1);
             return;
           }
           reject(err);
         });
       };
-      trySpawn(0);
+      void trySpawn(0);
     });
   }
   async run(mode, arg) {
@@ -359,11 +2182,18 @@ var PythonMetaService = class {
         resolve({ error: "stdin-unavailable" });
       }
     });
-    if (!raw || typeof raw !== "object") return null;
+    if (!raw || typeof raw !== "object") {
+      throw new Error("Invalid vector response");
+    }
     const res = raw;
-    if (res.error) return null;
-    if (Array.isArray(res.vector)) return res.vector;
-    return null;
+    if (res.error) {
+      throw new Error(`Python error: ${String(res.error)}`);
+    }
+    if (Array.isArray(res.vector)) {
+      const vector = res.vector;
+      return vector;
+    }
+    throw new Error("Vector missing");
   }
   async runDominantColor(arg) {
     if (!this.process) {
@@ -441,31 +2271,8 @@ var mapModelDownloadProgress = (data) => {
   }
   return data;
 };
-var KeyedMutex = class {
-  chains = /* @__PURE__ */ new Map();
-  async run(key, fn) {
-    const currentChain = this.chains.get(key) || Promise.resolve();
-    const nextPromise = currentChain.then(
-      () => fn(),
-      () => fn()
-    );
-    const storedPromise = nextPromise.then(
-      () => {
-      },
-      () => {
-      }
-    );
-    this.chains.set(key, storedPromise);
-    storedPromise.then(() => {
-      if (this.chains.get(key) === storedPromise) {
-        this.chains.delete(key);
-      }
-    });
-    return nextPromise;
-  }
-};
 function downloadImage(url, dest) {
-  return new Promise((resolve, reject) => {
+  return withFileLock(dest, () => new Promise((resolve, reject) => {
     if (url.startsWith("file://") || url.startsWith("/")) {
       let srcPath = url;
       if (url.startsWith("file://")) {
@@ -475,14 +2282,14 @@ function downloadImage(url, dest) {
         }
       }
       srcPath = decodeURIComponent(srcPath);
-      import_fs_extra.default.copy(srcPath, dest).then(() => resolve()).catch((err) => {
-        import_fs_extra.default.unlink(dest, () => {
+      import_fs_extra5.default.copy(srcPath, dest).then(() => resolve()).catch((err) => {
+        import_fs_extra5.default.unlink(dest, () => {
         });
         reject(err);
       });
       return;
     }
-    const file = import_fs_extra.default.createWriteStream(dest);
+    const file = import_fs_extra5.default.createWriteStream(dest);
     const client = url.startsWith("https") ? import_https.default : import_http.default;
     const request = client.get(url, (response) => {
       if (response.statusCode === 200) {
@@ -493,7 +2300,7 @@ function downloadImage(url, dest) {
         });
       } else {
         file.close();
-        import_fs_extra.default.unlink(dest, () => {
+        import_fs_extra5.default.unlink(dest, () => {
         });
         reject(
           new Error(
@@ -503,1626 +2310,119 @@ function downloadImage(url, dest) {
       }
     });
     request.on("error", (err) => {
-      import_fs_extra.default.unlink(dest, () => {
+      import_fs_extra5.default.unlink(dest, () => {
       });
       reject(err);
     });
     file.on("error", (err) => {
-      import_fs_extra.default.unlink(dest, () => {
+      import_fs_extra5.default.unlink(dest, () => {
       });
       reject(err);
     });
-  });
-}
-var YOUDAO_API_ENDPOINT = "https://openapi.youdao.com/api";
-var YOUDAO_APP_KEY = "6cd66a17b06e2f25";
-var YOUDAO_APP_SECRET = "JFkAkZrB9UtVXfx2qmcThkkQHEV9CO3U";
-function buildYoudaoSignInput(q) {
-  if (q.length <= 20) return q;
-  const head = q.slice(0, 10);
-  const tail = q.slice(-10);
-  return `${head}${q.length}${tail}`;
-}
-function buildYoudaoSign(q, salt, curtime, appKey, appSecret) {
-  const input = buildYoudaoSignInput(q);
-  const raw = `${appKey}${input}${salt}${curtime}${appSecret}`;
-  return import_crypto.default.createHash("sha256").update(raw).digest("hex");
-}
-async function translateToEnglish(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return { text };
-  const appKey = YOUDAO_APP_KEY;
-  const appSecret = YOUDAO_APP_SECRET;
-  if (!appKey || !appSecret) {
-    console.warn("Youdao translation credentials are not configured");
-    return { text };
-  }
-  try {
-    const salt = import_crypto.default.randomUUID();
-    const curtime = Math.floor(Date.now() / 1e3).toString();
-    const sign = buildYoudaoSign(trimmed, salt, curtime, appKey, appSecret);
-    const params = new URLSearchParams();
-    params.set("q", trimmed);
-    params.set("from", "auto");
-    params.set("to", "en");
-    params.set("appKey", appKey);
-    params.set("salt", salt);
-    params.set("sign", sign);
-    params.set("signType", "v3");
-    params.set("curtime", curtime);
-    const res = await fetch(YOUDAO_API_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString()
-    });
-    if (!res.ok) {
-      console.error(
-        "Youdao translation HTTP error",
-        res.status,
-        res.statusText
-      );
-      return { text };
-    }
-    const data = await res.json();
-    if (data && typeof data === "object" && "errorCode" in data) {
-      const errorCode = data.errorCode;
-      if (errorCode === "0") {
-        const translations = data.translation;
-        if (Array.isArray(translations) && typeof translations[0] === "string") {
-          const translated = translations[0].trim();
-          if (translated) {
-            console.log("query translated via Youdao", translated);
-            return { text: translated };
-          }
-        }
-      } else if (errorCode === "411") {
-        console.warn("Youdao translation rate limited (411), falling back to original text");
-        return {
-          text,
-          warning: "Translation rate limited (411), using original text"
-        };
-      } else {
-        console.error("Youdao translation unexpected response", data);
-        return {
-          text,
-          warning: `Translation failed (Code: ${errorCode || "unknown"}), using original text`
-        };
-      }
-    } else {
-      console.error("Youdao translation unexpected response", data);
-      return {
-        text,
-        warning: "Translation unexpected response, using original text"
-      };
-    }
-    return { text };
-  } catch (e) {
-    console.error("Youdao translation failed", e);
-    return {
-      text,
-      warning: "Translation failed (Network/Error), using original text"
-    };
-  }
+  }));
 }
 async function startServer(sendToRenderer) {
-  const server = (0, import_express.default)();
+  await initializeStorage();
+  const server = (0, import_express7.default)();
   server.use((0, import_cors.default)());
   server.use(import_body_parser.default.json({ limit: "25mb" }));
-  const metaMutex = new KeyedMutex();
-  class StorageIncompatibleError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = "StorageIncompatibleError";
-    }
-  }
-  const getCanvasPaths = (name) => {
-    const safeName = name.replace(/[/\\:*?"<>|]/g, "_") || "Default";
-    const dir = import_path.default.join(CANVASES_DIR, safeName);
-    return {
-      dir,
-      dataFile: import_path.default.join(dir, "canvas.json"),
-      viewportFile: import_path.default.join(dir, "canvas_viewport.json")
-    };
-  };
-  const ensureDefaultCanvas = async () => {
-    const defaultCanvasPath = import_path.default.join(CANVASES_DIR, "Default");
-    const canvases = await import_fs_extra.default.readdir(CANVASES_DIR).catch(() => []);
-    if (canvases.length === 0) {
-      await import_fs_extra.default.ensureDir(defaultCanvasPath);
-    }
-  };
-  await ensureDefaultCanvas();
-  server.get("/api/canvases", async (_req, res) => {
-    try {
-      const dirs = await import_fs_extra.default.readdir(CANVASES_DIR);
-      const canvases = [];
-      for (const dir of dirs) {
-        const fullPath = import_path.default.join(CANVASES_DIR, dir);
-        try {
-          const stat = await import_fs_extra.default.stat(fullPath);
-          if (stat.isDirectory()) {
-            canvases.push({ name: dir, lastModified: stat.mtimeMs });
-          }
-        } catch {
-        }
-      }
-      res.json(canvases.sort((a, b) => b.lastModified - a.lastModified));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/canvases", async (req, res) => {
-    try {
-      const { name } = req.body;
-      if (!name || !name.trim()) {
-        res.status(400).json({ error: "Canvas name is required" });
-        return;
-      }
-      const paths = getCanvasPaths(name);
-      if (await import_fs_extra.default.pathExists(paths.dir)) {
-        res.status(409).json({ error: "Canvas already exists" });
-        return;
-      }
-      await import_fs_extra.default.ensureDir(paths.dir);
-      res.json({ success: true, name: import_path.default.basename(paths.dir) });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/canvases/rename", async (req, res) => {
-    try {
-      const { oldName, newName } = req.body;
-      if (!oldName || !newName) {
-        res.status(400).json({ error: "Both oldName and newName are required" });
-        return;
-      }
-      const oldPaths = getCanvasPaths(oldName);
-      const newPaths = getCanvasPaths(newName);
-      if (!await import_fs_extra.default.pathExists(oldPaths.dir)) {
-        res.status(404).json({ error: "Canvas not found" });
-        return;
-      }
-      if (await import_fs_extra.default.pathExists(newPaths.dir)) {
-        res.status(409).json({ error: "Target canvas name already exists" });
-        return;
-      }
-      await import_fs_extra.default.rename(oldPaths.dir, newPaths.dir);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/canvases/delete", async (req, res) => {
-    try {
-      const { name } = req.body;
-      if (!name) {
-        res.status(400).json({ error: "Canvas name is required" });
-        return;
-      }
-      const paths = getCanvasPaths(name);
-      if (await import_fs_extra.default.pathExists(paths.dir)) {
-        await import_fs_extra.default.remove(paths.dir);
-      }
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  const normalizeTags = (tags) => {
-    if (!Array.isArray(tags)) return [];
-    return tags.filter((t2) => typeof t2 === "string");
-  };
-  const toStoredMeta = (data, relativePath) => {
-    return {
-      image: relativePath,
-      pageUrl: data.pageUrl,
-      tags: normalizeTags(data.tags),
-      createdAt: data.createdAt,
-      vector: Array.isArray(data.vector) ? data.vector : null,
-      dominantColor: typeof data.dominantColor === "string" ? data.dominantColor : null,
-      tone: typeof data.tone === "string" ? data.tone : null
-    };
-  };
-  const readAllDiskMeta = async () => {
-    const result = [];
-    if (!await import_fs_extra.default.pathExists(META_DIR)) return result;
-    const files = await import_fs_extra.default.readdir(META_DIR);
-    const metaFiles = files.filter((f) => f.endsWith(".json"));
-    for (const file of metaFiles) {
-      try {
-        const fullPath = import_path.default.join(META_DIR, file);
-        const raw = await import_fs_extra.default.readJson(fullPath);
-        let relativePath = raw.image;
-        if (!relativePath) {
-          const imageName = file.slice(0, -5);
-          relativePath = import_path.default.join("images", imageName);
-        }
-        const localPath = import_path.default.join(STORAGE_DIR, relativePath);
-        if (!await import_fs_extra.default.pathExists(localPath)) {
-          await import_fs_extra.default.remove(fullPath);
-          continue;
-        }
-        result.push({ meta: raw, relativePath });
-      } catch (e) {
-        console.error("Error reading meta file", file, e);
-      }
-    }
-    return result;
-  };
   const vectorService = new PythonMetaService();
   vectorService.start();
-  async function runPythonVector(mode, arg) {
+  const runPythonVector = async (mode, arg) => {
     return vectorService.run(mode, arg);
-  }
-  async function runPythonDominantColor(arg) {
+  };
+  const runPythonDominantColor = async (arg) => {
     return vectorService.runDominantColor(arg);
-  }
-  async function runPythonTone(arg) {
+  };
+  const runPythonTone = async (arg) => {
     return vectorService.runTone(arg);
-  }
-  async function processImageImport(source, metadata) {
-    const timestamp = Date.now();
-    const sanitizeBase = (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return "image";
-      let withoutControls = "";
-      for (const ch of trimmed) {
-        const code = ch.charCodeAt(0);
-        withoutControls += code < 32 || code === 127 ? "_" : ch;
-      }
-      const withoutReserved = withoutControls.replace(/[\\/:*?"<>|]/g, "_");
-      const collapsedWs = withoutReserved.replace(/\s+/g, " ").trim();
-      const noTrailing = collapsedWs.replace(/[ .]+$/g, "");
-      const normalized = noTrailing || "image";
-      const maxLen = 80;
-      return normalized.length > maxLen ? normalized.slice(0, maxLen) : normalized;
+  };
+  const sendRenderer = sendToRenderer;
+  const logErrorToFile = async (error, req) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : void 0;
+    const payload = {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      message,
+      stack,
+      method: req == null ? void 0 : req.method,
+      url: req == null ? void 0 : req.originalUrl
     };
-    const normalizeExt = (raw) => {
-      if (!raw) return null;
-      const trimmed = raw.trim();
-      if (!trimmed) return null;
-      const withDot = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
-      if (!/^\.[a-zA-Z0-9]{1,10}$/.test(withDot)) return null;
-      return withDot.toLowerCase();
-    };
-    const sourceFilename = source.type === "path" ? import_path.default.basename(source.data).split("?")[0] : "";
-    const metaFilename = typeof metadata.filename === "string" ? metadata.filename.trim() : "";
-    const metaName = typeof metadata.name === "string" ? metadata.name.trim() : "";
-    const extFromMetaFilename = normalizeExt(import_path.default.extname(metaFilename));
-    const extFromSource = normalizeExt(import_path.default.extname(sourceFilename));
-    const extFromMetaName = normalizeExt(import_path.default.extname(metaName));
-    const ext = extFromMetaFilename || extFromSource || extFromMetaName || (source.type === "buffer" ? ".png" : ".jpg");
-    const baseNameFromMetaFilename = metaFilename ? import_path.default.basename(metaFilename, import_path.default.extname(metaFilename)) : "";
-    const baseNameFromMetaName = metaName ? import_path.default.basename(metaName, import_path.default.extname(metaName)) : "";
-    const baseNameFromSource = sourceFilename ? import_path.default.basename(sourceFilename, import_path.default.extname(sourceFilename)) : "";
-    const rawBase = baseNameFromMetaFilename || baseNameFromMetaName || baseNameFromSource || `EMPTY_NAME_${timestamp}`;
-    const safeName = sanitizeBase(rawBase);
-    let filename = `${safeName}${ext}`;
-    let counter = 1;
-    while (await import_fs_extra.default.pathExists(import_path.default.join(IMAGE_DIR, filename))) {
-      filename = `${safeName}_${counter}${ext}`;
-      counter++;
+    const logFile = import_path6.default.join(STORAGE_DIR, "server.log");
+    await withFileLock(logFile, async () => {
+      await import_fs_extra5.default.ensureFile(logFile);
+      await import_fs_extra5.default.appendFile(logFile, `${JSON.stringify(payload)}
+`);
+    });
+  };
+  const getImageDb = () => {
+    if (!imageDb) {
+      initDatabase();
     }
-    const relativePath = import_path.default.join("images", filename);
-    const localPath = import_path.default.join(STORAGE_DIR, relativePath);
-    if (source.type === "buffer") {
-      await import_fs_extra.default.writeFile(localPath, source.data);
-    } else if (source.type === "path") {
-      let srcPath = source.data;
-      if (srcPath.startsWith("file://")) {
-        srcPath = new URL(srcPath).pathname;
-        if (process.platform === "win32" && srcPath.startsWith("/") && srcPath.includes(":")) {
-          srcPath = srcPath.substring(1);
-        }
-      }
-      srcPath = decodeURIComponent(srcPath);
-      await import_fs_extra.default.copy(srcPath, localPath);
-    } else {
-      await downloadImage(source.data, localPath);
+    if (!imageDb) {
+      throw new Error("Database is not initialized");
     }
-    const tags = Array.isArray(metadata.tags) ? metadata.tags : [];
-    const id = filename;
-    const diskMeta = {
-      image: relativePath,
-      pageUrl: metadata.pageUrl,
-      tags,
-      createdAt: timestamp,
-      vector: null,
-      dominantColor: null,
-      tone: null
-    };
-    await import_fs_extra.default.writeJson(import_path.default.join(META_DIR, `${id}.json`), diskMeta);
-    const meta = toStoredMeta(diskMeta, relativePath);
-    void (async () => {
-      const settings = await readSettings();
-      const enableVectorSearch = Boolean(settings.enableVectorSearch);
-      if (enableVectorSearch) {
-        const vector = await runPythonVector("encode-image", localPath);
-        if (!vector) {
-          console.error("Vector generation failed for", localPath);
-          return;
-        }
-        const metaPath = import_path.default.join(META_DIR, `${id}.json`);
-        await metaMutex.run(metaPath, async () => {
-          try {
-            if (await import_fs_extra.default.pathExists(metaPath)) {
-              const currentRaw = await import_fs_extra.default.readJson(metaPath);
-              const updated = {
-                ...currentRaw,
-                vector
-              };
-              await import_fs_extra.default.writeJson(metaPath, updated);
-              sendToRenderer == null ? void 0 : sendToRenderer("image-updated", toStoredMeta(updated, updated.image));
-            }
-          } catch (e) {
-            console.error("Failed to update meta with vector", e);
-          }
-        });
-      }
-    })();
-    void (async () => {
-      const dominantColor = await runPythonDominantColor(localPath);
-      if (!dominantColor) {
-        return;
-      }
-      const metaPath = import_path.default.join(META_DIR, `${id}.json`);
-      await metaMutex.run(metaPath, async () => {
-        try {
-          if (await import_fs_extra.default.pathExists(metaPath)) {
-            const currentRaw = await import_fs_extra.default.readJson(metaPath);
-            const updated = {
-              ...currentRaw,
-              dominantColor
-            };
-            await import_fs_extra.default.writeJson(metaPath, updated);
-            sendToRenderer == null ? void 0 : sendToRenderer("image-updated", toStoredMeta(updated, updated.image));
-          }
-        } catch (e) {
-          console.error("Failed to update meta with dominant color", e);
-        }
-      });
-    })();
-    void (async () => {
-      const tone = await runPythonTone(localPath);
-      if (!tone) {
-        return;
-      }
-      const metaPath = import_path.default.join(META_DIR, `${id}.json`);
-      await metaMutex.run(metaPath, async () => {
-        try {
-          if (await import_fs_extra.default.pathExists(metaPath)) {
-            const currentRaw = await import_fs_extra.default.readJson(metaPath);
-            const updated = {
-              ...currentRaw,
-              tone
-            };
-            await import_fs_extra.default.writeJson(metaPath, updated);
-            sendToRenderer == null ? void 0 : sendToRenderer("image-updated", toStoredMeta(updated, updated.image));
-          }
-        } catch (e) {
-          console.error("Failed to update meta with tone", e);
-        }
-      });
-    })();
-    sendToRenderer == null ? void 0 : sendToRenderer("new-collection", meta);
-    return meta;
-  }
-  server.post("/api/import-blob", async (req, res) => {
-    try {
-      const { imageBase64, filename } = req.body;
-      if (!imageBase64) {
-        res.status(400).json({ error: "No image data" });
-        return;
-      }
-      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-      const buffer = Buffer.from(base64Data, "base64");
-      const meta = await processImageImport(
-        { type: "buffer", data: buffer },
-        { filename: filename || "pasted-image.png" }
-      );
-      res.json({ success: true, meta });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Import blob error:", error);
-      res.status(500).json({ error: "Failed to import blob", details: message });
+    return imageDb;
+  };
+  server.use(createSettingsRouter({ readSettings, writeSettings }));
+  server.use(
+    createCanvasRouter({
+      getCanvasesDir: () => CANVASES_DIR,
+      getCanvasTempDir: () => CANVAS_TEMP_DIR
+    })
+  );
+  server.use(
+    createTempRouter({
+      getCanvasTempDir: () => CANVAS_TEMP_DIR,
+      downloadImage,
+      runPythonDominantColor
+    })
+  );
+  server.use(
+    createModelRouter({
+      downloadModel: (onProgress) => vectorService.downloadModel((data) => {
+        onProgress(mapModelDownloadProgress(data));
+      }),
+      sendToRenderer: sendRenderer
+    })
+  );
+  server.use(
+    createTagsRouter({
+      getImageDb,
+      getIncompatibleError: () => incompatibleError,
+      readSettings,
+      writeSettings
+    })
+  );
+  server.use(
+    createImagesRouter({
+      getImageDb,
+      getIncompatibleError: () => incompatibleError,
+      getStorageDir: () => STORAGE_DIR,
+      getImageDir: () => IMAGE_DIR,
+      readSettings,
+      writeSettings,
+      runPythonVector,
+      runPythonDominantColor,
+      runPythonTone,
+      downloadImage,
+      sendToRenderer: sendRenderer
+    })
+  );
+  server.use("/images", import_express7.default.static(STORAGE_DIR));
+  server.use("/temp-images", import_express7.default.static(CANVAS_TEMP_DIR));
+  server.use(
+    (err, req, res, _next) => {
+      const message = err instanceof Error ? err.message : String(err);
+      void _next;
+      void logErrorToFile(err, req);
+      res.status(500).json({ error: "Unexpected error", details: message });
     }
-  });
-  server.post("/api/collect", async (req, res) => {
-    try {
-      const { imageUrl, pageUrl, filename, tags, name } = req.body;
-      console.log("Received collection request:", imageUrl);
-      let type = "url";
-      if (imageUrl.startsWith("file://") || imageUrl.startsWith("/")) {
-        type = "path";
-      }
-      const meta = await processImageImport(
-        { type, data: imageUrl },
-        { filename, pageUrl, tags, name }
-      );
-      res.json({ success: true, meta });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Collection error:", error);
-      res.status(500).json({ error: "Failed to collect image", details: message });
-    }
-  });
-  server.get("/api/images", async (_req, res) => {
-    try {
-      const diskItems = await readAllDiskMeta();
-      const items = diskItems.map((m) => toStoredMeta(m.meta, m.relativePath));
-      let order = [];
-      if (await import_fs_extra.default.pathExists(GALLERY_ORDER_FILE)) {
-        try {
-          order = await import_fs_extra.default.readJson(GALLERY_ORDER_FILE);
-        } catch (e) {
-          console.error("Failed to read gallery order:", e);
-        }
-      }
-      if (order.length > 0) {
-        const orderMap = new Map(order.map((id, index) => [id, index]));
-        items.sort((a, b) => {
-          const indexA = orderMap.get(a.image);
-          const indexB = orderMap.get(b.image);
-          if (indexA !== void 0 && indexB !== void 0) {
-            return indexA - indexB;
-          }
-          if (indexA === void 0 && indexB !== void 0) {
-            return -1;
-          }
-          if (indexA !== void 0 && indexB === void 0) {
-            return 1;
-          }
-          return b.createdAt - a.createdAt;
-        });
-      } else {
-        items.sort((a, b) => b.createdAt - a.createdAt);
-      }
-      res.json(items);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof Error && error.name === "StorageIncompatibleError") {
-        res.status(409).json({ error: message, code: "STORAGE_INCOMPATIBLE" });
-        return;
-      }
-      res.status(500).json({ error: message });
-    }
-  });
-  server.get("/api/tags", async (_req, res) => {
-    try {
-      const diskItems = await readAllDiskMeta();
-      const allTags = /* @__PURE__ */ new Set();
-      for (const item of diskItems) {
-        if (Array.isArray(item.meta.tags)) {
-          for (const t2 of item.meta.tags) {
-            if (typeof t2 === "string" && t2.trim()) {
-              allTags.add(t2.trim());
-            }
-          }
-        }
-      }
-      const settings = await readSettings();
-      const tagColors = settings.tagColors || {};
-      const result = Array.from(allTags).sort().map((tag) => ({
-        name: tag,
-        color: tagColors[tag] || null
-      }));
-      res.json(result);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/save-gallery-order", async (req, res) => {
-    try {
-      const { order } = req.body;
-      if (!Array.isArray(order)) {
-        res.status(400).json({ error: "Order must be an array of IDs" });
-        return;
-      }
-      await import_fs_extra.default.writeJson(GALLERY_ORDER_FILE, order);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Save gallery order error:", error);
-      res.status(500).json({ error: "Failed to save gallery order", details: message });
-    }
-  });
-  server.post("/api/download-model", async (req, res) => {
-    try {
-      vectorService.downloadModel((data) => {
-        sendToRenderer == null ? void 0 : sendToRenderer("model-download-progress", mapModelDownloadProgress(data));
-      }).catch((err) => {
-        console.error("Model download failed", err);
-        sendToRenderer == null ? void 0 : sendToRenderer("model-download-progress", { type: "error", reason: String(err) });
-      });
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.get("/api/settings", async (_req, res) => {
-    try {
-      const settings = await readSettings();
-      res.json(settings);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.get("/api/settings/:key", async (req, res) => {
-    try {
-      const key = req.params.key;
-      if (!key) {
-        res.status(400).json({ error: "Key is required" });
-        return;
-      }
-      const settings = await readSettings();
-      const value = Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : null;
-      res.json({ value });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/settings/:key", async (req, res) => {
-    try {
-      const key = req.params.key;
-      if (!key) {
-        res.status(400).json({ error: "Key is required" });
-        return;
-      }
-      const { value } = req.body;
-      const settings = await readSettings();
-      const next = { ...settings, [key]: value };
-      await writeSettings(next);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/delete", async (req, res) => {
-    try {
-      const { image } = req.body;
-      if (!image) {
-        res.status(400).json({ error: "Image path is required" });
-        return;
-      }
-      try {
-        if (await import_fs_extra.default.pathExists(GALLERY_ORDER_FILE)) {
-          const order = await import_fs_extra.default.readJson(GALLERY_ORDER_FILE);
-          if (Array.isArray(order)) {
-            const newOrder = order.filter((itemImage) => itemImage !== image);
-            if (newOrder.length !== order.length) {
-              await import_fs_extra.default.writeJson(GALLERY_ORDER_FILE, newOrder);
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Failed to update gallery order on delete", e);
-      }
-      const filename = import_path.default.basename(image);
-      const metaPath = import_path.default.join(META_DIR, `${filename}.json`);
-      await metaMutex.run(metaPath, async () => {
-        if (await import_fs_extra.default.pathExists(metaPath)) {
-          const meta = await import_fs_extra.default.readJson(metaPath);
-          const relativePath = meta.image;
-          const localPath = import_path.default.join(STORAGE_DIR, relativePath);
-          if (await import_fs_extra.default.pathExists(localPath)) {
-            await import_fs_extra.default.remove(localPath);
-          }
-          await import_fs_extra.default.remove(metaPath);
-          res.json({ success: true });
-          return;
-        }
-        res.status(404).json({ error: "Image not found" });
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/rename-tag", async (req, res) => {
-    try {
-      const { oldTag, newTag } = req.body;
-      if (!oldTag || !newTag) {
-        res.status(400).json({ error: "oldTag and newTag are required" });
-        return;
-      }
-      const trimmedOld = oldTag.trim();
-      const trimmedNew = newTag.trim();
-      if (!trimmedOld || !trimmedNew) {
-        res.status(400).json({ error: "Tags cannot be empty" });
-        return;
-      }
-      if (trimmedOld === trimmedNew) {
-        res.json({ success: true });
-        return;
-      }
-      if (await import_fs_extra.default.pathExists(META_DIR)) {
-        const files = await import_fs_extra.default.readdir(META_DIR);
-        const metaFiles = files.filter((f) => f.endsWith(".json"));
-        for (const file of metaFiles) {
-          const metaPath = import_path.default.join(META_DIR, file);
-          await metaMutex.run(metaPath, async () => {
-            if (await import_fs_extra.default.pathExists(metaPath)) {
-              const current = await import_fs_extra.default.readJson(metaPath);
-              if (Array.isArray(current.tags) && current.tags.includes(trimmedOld)) {
-                const nextTags = current.tags.map(
-                  (t2) => t2 === trimmedOld ? trimmedNew : t2
-                );
-                const uniqueTags = Array.from(new Set(nextTags));
-                const updated = {
-                  ...current,
-                  tags: uniqueTags
-                };
-                await import_fs_extra.default.writeJson(metaPath, updated);
-              }
-            }
-          });
-        }
-      }
-      const settings = await readSettings();
-      const tagColors = settings.tagColors || {};
-      if (Object.prototype.hasOwnProperty.call(tagColors, trimmedOld)) {
-        const color = tagColors[trimmedOld];
-        const nextTagColors = { ...tagColors };
-        delete nextTagColors[trimmedOld];
-        nextTagColors[trimmedNew] = color;
-        await writeSettings({ ...settings, tagColors: nextTagColors });
-      }
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Rename tag error:", error);
-      res.status(500).json({ error: "Failed to rename tag", details: message });
-    }
-  });
-  server.post("/api/update-tags", async (req, res) => {
-    try {
-      const { image, tags } = req.body;
-      if (!image) {
-        res.status(400).json({ error: "Image path is required" });
-        return;
-      }
-      const filename = import_path.default.basename(image);
-      const metaPath = import_path.default.join(META_DIR, `${filename}.json`);
-      await metaMutex.run(metaPath, async () => {
-        if (await import_fs_extra.default.pathExists(metaPath)) {
-          const current = await import_fs_extra.default.readJson(metaPath);
-          const nextTags = normalizeTags(tags);
-          const updated = {
-            ...current,
-            tags: nextTags
-          };
-          await import_fs_extra.default.writeJson(metaPath, updated);
-          res.json({ success: true, meta: toStoredMeta(updated, current.image) });
-          return;
-        }
-        res.status(404).json({ error: "Image not found" });
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/update-dominant-color", async (req, res) => {
-    try {
-      const { image, dominantColor } = req.body;
-      if (!image) {
-        res.status(400).json({ error: "Image path is required" });
-        return;
-      }
-      let next = null;
-      if (dominantColor === null || dominantColor === void 0) {
-        next = null;
-      } else if (typeof dominantColor === "string") {
-        const trimmed = dominantColor.trim();
-        if (!trimmed) {
-          next = null;
-        } else if (/^#[0-9a-fA-F]{6}$/.test(trimmed) || /^#[0-9a-fA-F]{3}$/.test(trimmed)) {
-          next = trimmed;
-        } else {
-          res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
-          return;
-        }
-      } else {
-        res.status(400).json({ error: "dominantColor must be a string or null" });
-        return;
-      }
-      const filename = import_path.default.basename(image);
-      const metaPath = import_path.default.join(META_DIR, `${filename}.json`);
-      if (await import_fs_extra.default.pathExists(metaPath)) {
-        const current = await import_fs_extra.default.readJson(metaPath);
-        const updated = {
-          ...current,
-          dominantColor: next
-        };
-        await import_fs_extra.default.writeJson(metaPath, updated);
-        res.json({ success: true, meta: toStoredMeta(updated, current.image) });
-        return;
-      }
-      res.status(404).json({ error: "Image not found" });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/update-name", async (req, res) => {
-    try {
-      const { image, name } = req.body;
-      if (!image) {
-        res.status(400).json({ error: "Image path is required" });
-        return;
-      }
-      if (typeof name !== "string" || !name.trim()) {
-        res.status(400).json({ error: "name is required" });
-        return;
-      }
-      const rawName = name.trim();
-      const oldFilename = import_path.default.basename(image);
-      const metaPath = import_path.default.join(META_DIR, `${oldFilename}.json`);
-      await metaMutex.run(metaPath, async () => {
-        if (!await import_fs_extra.default.pathExists(metaPath)) {
-          res.status(404).json({ error: "Image meta not found" });
-          return;
-        }
-        const current = await import_fs_extra.default.readJson(metaPath);
-        const oldRelPath = current.image;
-        const oldLocalPath = import_path.default.join(STORAGE_DIR, oldRelPath);
-        if (!await import_fs_extra.default.pathExists(oldLocalPath)) {
-          res.status(404).json({ error: "Image file not found" });
-          return;
-        }
-        const ext = import_path.default.extname(oldRelPath);
-        const base = rawName.replace(/[/\\:*?"<>|]+/g, "_").trim() || "image";
-        let newFilename = `${base}${ext}`;
-        let counter = 1;
-        while (await import_fs_extra.default.pathExists(import_path.default.join(IMAGE_DIR, newFilename))) {
-          const existingFull = import_path.default.join(IMAGE_DIR, newFilename);
-          const currentFull = import_path.default.join(
-            IMAGE_DIR,
-            import_path.default.basename(oldRelPath).split("?")[0] || import_path.default.basename(oldRelPath)
-          );
-          if (existingFull === currentFull) {
-            break;
-          }
-          newFilename = `${base}_${counter}${ext}`;
-          counter += 1;
-        }
-        const newRelPath = import_path.default.join("images", newFilename);
-        const newLocalPath = import_path.default.join(STORAGE_DIR, newRelPath);
-        if (oldLocalPath !== newLocalPath) {
-          await import_fs_extra.default.rename(oldLocalPath, newLocalPath);
-        }
-        const newMetaPath = import_path.default.join(META_DIR, `${newFilename}.json`);
-        const updated = {
-          ...current,
-          image: newRelPath
-        };
-        if (oldFilename !== newFilename) {
-          await import_fs_extra.default.writeJson(newMetaPath, updated);
-          await import_fs_extra.default.remove(metaPath);
-          if (await import_fs_extra.default.pathExists(GALLERY_ORDER_FILE)) {
-            try {
-              const order = await import_fs_extra.default.readJson(GALLERY_ORDER_FILE);
-              if (Array.isArray(order)) {
-                const nextOrder = order.map((oid) => oid === oldRelPath ? newRelPath : oid);
-                await import_fs_extra.default.writeJson(GALLERY_ORDER_FILE, nextOrder);
-              }
-            } catch (e) {
-              console.error("Failed to update gallery order on rename", e);
-            }
-          }
-          try {
-            const canvasDirs = await import_fs_extra.default.readdir(CANVASES_DIR);
-            for (const dir of canvasDirs) {
-              const canvasFile = import_path.default.join(CANVASES_DIR, dir, "canvas.json");
-              if (await import_fs_extra.default.pathExists(canvasFile)) {
-                try {
-                  const canvasData = await import_fs_extra.default.readJson(canvasFile);
-                  if (Array.isArray(canvasData)) {
-                    let hasChanges = false;
-                    const nextCanvasData = canvasData.map((item) => {
-                      if (item.type === "image" && item.image === oldRelPath) {
-                        hasChanges = true;
-                        return { ...item, image: newRelPath };
-                      }
-                      return item;
-                    });
-                    if (hasChanges) {
-                      await import_fs_extra.default.writeJson(canvasFile, nextCanvasData);
-                    }
-                  }
-                } catch {
-                }
-              }
-            }
-          } catch (e) {
-            console.error("Failed to update canvas data on rename", e);
-          }
-        } else {
-          await import_fs_extra.default.writeJson(metaPath, updated);
-        }
-        res.json({ success: true, meta: toStoredMeta(updated, newRelPath) });
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/reindex", async (req, res) => {
-    try {
-      const { image } = req.body;
-      if (!image) {
-        res.status(400).json({ error: "Image path is required" });
-        return;
-      }
-      const filename = import_path.default.basename(image);
-      const metaPath = import_path.default.join(META_DIR, `${filename}.json`);
-      if (await import_fs_extra.default.pathExists(metaPath)) {
-        const current = await import_fs_extra.default.readJson(metaPath);
-        const relativePath = current.image;
-        const localPath = import_path.default.join(STORAGE_DIR, relativePath);
-        const vector = await runPythonVector("encode-image", localPath);
-        if (vector) {
-          const updated = {
-            ...current,
-            vector
-          };
-          await import_fs_extra.default.writeJson(metaPath, updated);
-          res.json({ success: true, meta: toStoredMeta(updated, relativePath) });
-          return;
-        }
-        res.json({ success: true, meta: toStoredMeta(current, relativePath) });
-        return;
-      }
-      res.status(404).json({ error: "Image not found" });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/index-missing", async (_req, res) => {
-    try {
-      await import_fs_extra.default.ensureDir(IMAGE_DIR);
-      await import_fs_extra.default.ensureDir(META_DIR);
-      const imageFiles = await import_fs_extra.default.readdir(IMAGE_DIR);
-      imageFiles.sort();
-      const imageSet = /* @__PURE__ */ new Set();
-      for (const file of imageFiles) {
-        const full = import_path.default.join(IMAGE_DIR, file);
-        const stat = await import_fs_extra.default.stat(full);
-        if (stat.isFile()) {
-          imageSet.add(file);
-        }
-      }
-      const metaFiles = await import_fs_extra.default.readdir(META_DIR);
-      const metaByImage = /* @__PURE__ */ new Map();
-      for (const file of metaFiles) {
-        if (!file.endsWith(".json")) continue;
-        const fullPath = import_path.default.join(META_DIR, file);
-        try {
-          const raw = await import_fs_extra.default.readJson(fullPath);
-          const imageVal = typeof raw.image === "string" ? raw.image.trim() : "";
-          if (!imageVal) {
-            throw new StorageIncompatibleError(
-              `Storage format is incompatible: missing image. Please reset the data folder. (meta: ${fullPath})`
-            );
-          }
-          const normalizedImage = imageVal.replace(/\\/g, "/");
-          if (!normalizedImage.startsWith("images/")) {
-            throw new StorageIncompatibleError(
-              `Storage format is incompatible: invalid image path "${imageVal}". Please reset the data folder. (meta: ${fullPath})`
-            );
-          }
-          const createdAtRaw = raw.createdAt;
-          if (typeof createdAtRaw !== "number" || !Number.isFinite(createdAtRaw)) {
-            throw new StorageIncompatibleError(
-              `Storage format is incompatible: missing createdAt. Please reset the data folder. (meta: ${fullPath})`
-            );
-          }
-          const createdAt = createdAtRaw;
-          const imageName = import_path.default.basename(normalizedImage);
-          if (!imageName) continue;
-          const expectedRel = import_path.default.join("images", imageName).replace(/\\/g, "/");
-          if (normalizedImage !== expectedRel) {
-            throw new StorageIncompatibleError(
-              `Storage format is incompatible: invalid image path "${imageVal}". Please reset the data folder. (meta: ${fullPath})`
-            );
-          }
-          const normalized = {
-            image: expectedRel,
-            pageUrl: typeof raw.pageUrl === "string" ? raw.pageUrl : void 0,
-            tags: normalizeTags(raw.tags),
-            createdAt,
-            vector: Array.isArray(raw.vector) ? raw.vector : null,
-            dominantColor: typeof raw.dominantColor === "string" ? raw.dominantColor : null,
-            tone: typeof raw.tone === "string" ? raw.tone : null
-          };
-          metaByImage.set(imageName, { meta: normalized, metaPath: fullPath });
-        } catch (e) {
-          if (e instanceof StorageIncompatibleError) {
-            throw e;
-          }
-          console.error("Failed to read meta for batch index", fullPath, e);
-        }
-      }
-      let created = 0;
-      let updated = 0;
-      const settings = await readSettings();
-      const enableVectorSearch = Boolean(settings.enableVectorSearch);
-      const now = Date.now();
-      let current = 0;
-      const total = imageSet.size;
-      sendToRenderer == null ? void 0 : sendToRenderer("indexing-progress", {
-        current: 0,
-        total,
-        statusKey: "indexing.starting"
-      });
-      for (const imageName of imageSet) {
-        current++;
-        if (current % 2 === 0 || current === total || current === 1) {
-          sendToRenderer == null ? void 0 : sendToRenderer("indexing-progress", {
-            current,
-            total,
-            statusKey: "indexing.progress",
-            statusParams: { current, total }
-          });
-        }
-        const imageRel = import_path.default.join("images", imageName);
-        const imagePath = import_path.default.join(STORAGE_DIR, imageRel);
-        let fileStat = null;
-        try {
-          fileStat = await import_fs_extra.default.stat(imagePath);
-        } catch (e) {
-          console.error("Failed to stat image file", imagePath, e);
-        }
-        const existing = metaByImage.get(imageName);
-        if (existing) {
-          const { meta, metaPath: metaPath2 } = existing;
-          const currentMeta = {
-            ...meta,
-            image: imageRel
-          };
-          const hasVector = Array.isArray(currentMeta.vector) && currentMeta.vector.length > 0;
-          const hasDominantColor = typeof currentMeta.dominantColor === "string" && currentMeta.dominantColor.trim().length > 0;
-          const hasTone = typeof currentMeta.tone === "string" && currentMeta.tone.trim().length > 0;
-          if ((hasVector || !enableVectorSearch) && hasDominantColor && hasTone) {
-            continue;
-          }
-          const [vector2, dominantColor2, tone2] = await Promise.all([
-            hasVector || !enableVectorSearch ? Promise.resolve(currentMeta.vector) : runPythonVector("encode-image", imagePath),
-            hasDominantColor ? Promise.resolve(currentMeta.dominantColor) : runPythonDominantColor(imagePath),
-            hasTone ? Promise.resolve(currentMeta.tone) : runPythonTone(imagePath)
-          ]);
-          const updatedMeta = {
-            ...currentMeta,
-            vector: vector2 && Array.isArray(vector2) ? vector2 : currentMeta.vector ?? null,
-            dominantColor: typeof dominantColor2 === "string" ? dominantColor2 : currentMeta.dominantColor ?? null,
-            tone: typeof tone2 === "string" ? tone2 : currentMeta.tone ?? null
-          };
-          const hasChanges = updatedMeta.vector !== (currentMeta.vector ?? null) || updatedMeta.dominantColor !== (currentMeta.dominantColor ?? null) || updatedMeta.tone !== (currentMeta.tone ?? null);
-          if (hasChanges) {
-            await import_fs_extra.default.writeJson(metaPath2, updatedMeta);
-            updated += 1;
-            sendToRenderer == null ? void 0 : sendToRenderer("image-updated", toStoredMeta(updatedMeta, imageRel));
-          }
-          continue;
-        }
-        const id = imageName;
-        const baseMeta = {
-          image: imageRel,
-          pageUrl: void 0,
-          tags: [],
-          createdAt: (fileStat == null ? void 0 : fileStat.birthtimeMs) || (fileStat == null ? void 0 : fileStat.mtimeMs) || now,
-          vector: null,
-          dominantColor: null,
-          tone: null
-        };
-        const [vector, dominantColor, tone] = await Promise.all([
-          enableVectorSearch ? runPythonVector("encode-image", imagePath) : Promise.resolve(null),
-          runPythonDominantColor(imagePath),
-          runPythonTone(imagePath)
-        ]);
-        const finalMeta = {
-          ...baseMeta,
-          vector: vector && Array.isArray(vector) ? vector : null,
-          dominantColor: typeof dominantColor === "string" ? dominantColor : null,
-          tone: typeof tone === "string" ? tone : null
-        };
-        const metaPath = import_path.default.join(META_DIR, `${id}.json`);
-        await import_fs_extra.default.writeJson(metaPath, finalMeta);
-        created += 1;
-        sendToRenderer == null ? void 0 : sendToRenderer("new-collection", toStoredMeta(finalMeta, imageRel));
-      }
-      for (const [imageName, { metaPath }] of metaByImage.entries()) {
-        if (!imageSet.has(imageName)) {
-          try {
-            await import_fs_extra.default.remove(metaPath);
-          } catch (e) {
-            console.error("Failed to remove stale meta", metaPath, e);
-          }
-        }
-      }
-      sendToRenderer == null ? void 0 : sendToRenderer("indexing-progress", {
-        current: total,
-        total,
-        statusKey: "indexing.completed"
-      });
-      res.json({ success: true, created, updated, images: imageSet.size });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Batch index error:", error);
-      if (error instanceof Error && error.name === "StorageIncompatibleError") {
-        res.status(409).json({
-          error: "Storage is incompatible",
-          details: message,
-          code: "STORAGE_INCOMPATIBLE"
-        });
-        return;
-      }
-      res.status(500).json({ error: "Failed to index images", details: message });
-    }
-  });
-  server.post("/api/open-in-folder", async (req, res) => {
-    try {
-      const { path: filePath, image } = req.body;
-      let targetPath = filePath;
-      if (image && !targetPath) {
-        targetPath = import_path.default.join(STORAGE_DIR, image);
-      }
-      if (!targetPath) {
-        res.status(400).json({ error: "Path or image is required" });
-        return;
-      }
-      try {
-        const stat = await import_fs_extra.default.stat(targetPath);
-        if (stat.isDirectory()) {
-          await import_electron.shell.openPath(targetPath);
-          res.json({ success: true });
-          return;
-        }
-        import_electron.shell.showItemInFolder(targetPath);
-        res.json({ success: true });
-        return;
-      } catch {
-        if (!import_path.default.isAbsolute(targetPath)) {
-          const abs = import_path.default.join(STORAGE_DIR, targetPath);
-          try {
-            import_electron.shell.showItemInFolder(abs);
-            res.json({ success: true });
-            return;
-          } catch {
-          }
-        }
-        const dir = import_path.default.dirname(targetPath);
-        await import_electron.shell.openPath(dir);
-        res.json({ success: true });
-        return;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/open-with-default", async (req, res) => {
-    try {
-      const { path: filePath, image } = req.body;
-      let targetPath = filePath;
-      if (image && !targetPath) {
-        targetPath = import_path.default.join(STORAGE_DIR, image);
-      }
-      if (!targetPath) {
-        res.status(400).json({ error: "Path or image is required" });
-        return;
-      }
-      await import_electron.shell.openPath(targetPath);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/search", async (req, res) => {
-    console.log("searching...");
-    try {
-      const { query, vector, limit, tags, color, tone, searchId, threshold } = req.body;
-      const settings = await readSettings();
-      const enableVectorSearch = Boolean(settings.enableVectorSearch);
-      const trimmed = (query || "").trim();
-      const resolvedSearchId = typeof searchId === "string" && searchId.trim() ? searchId.trim() : `search_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      const normalizeTag = (t2) => t2.trim().toLowerCase();
-      const queryTags = Array.isArray(tags) ? tags.filter((t2) => typeof t2 === "string") : [];
-      const normalizedQueryTags = queryTags.map((t2) => normalizeTag(t2)).filter((t2) => t2.length > 0);
-      const hasTagFilter = normalizedQueryTags.length > 0;
-      const normalizeHexColor = (raw) => {
-        if (typeof raw !== "string") return null;
-        const val = raw.trim();
-        if (!val) return null;
-        const withHash = val.startsWith("#") ? val : `#${val}`;
-        if (!/^#[0-9a-fA-F]{6}$/.test(withHash)) return null;
-        return withHash.toLowerCase();
-      };
-      const hexToRgb = (hex) => {
-        if (!/^#[0-9a-f]{6}$/i.test(hex)) return null;
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        if ([r, g, b].some((n) => Number.isNaN(n))) return null;
-        return { r, g, b };
-      };
-      const requestedColor = normalizeHexColor(color);
-      const hasColorFilter = Boolean(requestedColor);
-      const requestedTone = typeof tone === "string" && tone.trim() ? tone.trim() : null;
-      const hasToneFilter = Boolean(requestedTone);
-      if (process.env.PROREF_DEBUG_SEARCH === "1") {
-        console.log("Search request:", {
-          query: trimmed,
-          tags: normalizedQueryTags,
-          color: requestedColor,
-          tone: requestedTone,
-          hasTagFilter,
-          hasColorFilter,
-          hasToneFilter
-        });
-      }
-      const srgbToLinear = (x) => {
-        const v = x / 255;
-        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-      };
-      const rgbToOklab = (rgb) => {
-        const r = srgbToLinear(rgb.r);
-        const g = srgbToLinear(rgb.g);
-        const b = srgbToLinear(rgb.b);
-        const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
-        const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
-        const s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
-        const l_ = Math.cbrt(l);
-        const m_ = Math.cbrt(m);
-        const s_ = Math.cbrt(s);
-        return {
-          L: 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_,
-          a: 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_,
-          b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_
-        };
-      };
-      const isSimilarColor = (a, b) => {
-        if (!a) return false;
-        const aNorm = normalizeHexColor(a);
-        if (!aNorm) return false;
-        const rgbA = hexToRgb(aNorm);
-        const rgbB = hexToRgb(b);
-        if (!rgbA || !rgbB) return false;
-        const labA = rgbToOklab(rgbA);
-        const labB = rgbToOklab(rgbB);
-        const dL = labA.L - labB.L;
-        const da = labA.a - labB.a;
-        const db = labA.b - labB.b;
-        const dist = Math.sqrt(dL * dL + da * da + db * db);
-        return dist <= 0.12;
-      };
-      if (!trimmed && (!vector || vector.length === 0) && !hasTagFilter && !hasColorFilter && !hasToneFilter) {
-        res.json([]);
-        return;
-      }
-      const diskItems = await readAllDiskMeta();
-      if (diskItems.length === 0) {
-        res.json([]);
-        return;
-      }
-      const items = diskItems.map((m) => toStoredMeta(m.meta, m.relativePath));
-      const filterByTags = (source) => {
-        if (!hasTagFilter) return source;
-        return source.filter((item) => {
-          const itemTags = Array.isArray(item.tags) ? item.tags : [];
-          const normalizedItem = new Set(
-            itemTags.map((t2) => normalizeTag(String(t2)))
-          );
-          return normalizedQueryTags.every((t2) => normalizedItem.has(t2));
-        });
-      };
-      const filterByColor = (source) => {
-        if (!requestedColor) return source;
-        return source.filter(
-          (item) => isSimilarColor(item.dominantColor, requestedColor)
-        );
-      };
-      const filterByTone = (source) => {
-        if (!requestedTone) return source;
-        const result = source.filter((item) => item.tone === requestedTone);
-        if (process.env.PROREF_DEBUG_SEARCH === "1") {
-          console.log(`Tone filter: ${requestedTone}, Input: ${source.length}, Output: ${result.length}`);
-        }
-        return result;
-      };
-      const buildNameMatches = (source) => {
-        const queryTokens = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
-        const hasNameQuery2 = queryTokens.length > 0;
-        const isNameMatch = (item) => {
-          if (!hasNameQuery2) return false;
-          const filename = import_path.default.basename(item.image);
-          const nameWithoutExt = import_path.default.basename(filename, import_path.default.extname(filename));
-          const hay = `${nameWithoutExt} ${item.image}`.toLowerCase();
-          return queryTokens.every((t2) => hay.includes(t2));
-        };
-        const nameMatches2 = hasNameQuery2 ? source.filter(isNameMatch) : [];
-        return { nameMatches: nameMatches2, hasNameQuery: hasNameQuery2, queryTokens };
-      };
-      const buildFastResult = (params) => {
-        const { candidates, nameMatches: nameMatches2, hasNameQuery: hasNameQuery2, topN: topN2 } = params;
-        if (hasNameQuery2) {
-          return nameMatches2.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, topN2).map((item) => ({
-            ...item,
-            score: 1,
-            matchedType: "exact"
-          }));
-        }
-        if (!hasTagFilter && !hasColorFilter && !hasToneFilter) {
-          return [];
-        }
-        return candidates.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, topN2).map((item) => ({
-          ...item,
-          score: 1,
-          matchedType: "exact"
-        }));
-      };
-      const runVectorFlow = async (params) => {
-        const { candidates, nameMatches: nameMatches2, topN: topN2, threshold: threshold2 } = params;
-        if (!enableVectorSearch) {
-          return;
-        }
-        const dotSimilarity = (a, b) => {
-          const length = Math.min(a.length, b.length);
-          if (length === 0) return -1;
-          let dot = 0;
-          for (let i = 0; i < length; i += 1) {
-            dot += a[i] * b[i];
-          }
-          return dot;
-        };
-        try {
-          const actualQueryVector = vector && vector.length > 0 ? vector : trimmed ? await (async () => {
-            const translation = await translateToEnglish(trimmed);
-            if (translation.warning) {
-              sendToRenderer == null ? void 0 : sendToRenderer("toast", {
-                key: "toast.translationWarning",
-                params: { warning: translation.warning },
-                type: "warning"
-              });
-            }
-            return runPythonVector("encode-text", translation.text);
-          })() : null;
-          if (!actualQueryVector) {
-            return;
-          }
-          const results = candidates.map((item) => {
-            if (Array.isArray(item.vector)) {
-              const score = dotSimilarity(item.vector, actualQueryVector);
-              return { item, score, matchedType: "vector" };
-            }
-            return { item, score: -1, matchedType: "vector" };
-          });
-          let baseMinScore;
-          if (typeof threshold2 === "number") {
-            baseMinScore = threshold2;
-          } else if (hasTagFilter) {
-            baseMinScore = -1;
-          } else {
-            baseMinScore = 0.1;
-          }
-          const bestScore = results.reduce(
-            (max, r) => r.score > max ? r.score : max,
-            -1
-          );
-          const dynamicMinScore = Math.max(baseMinScore, bestScore - 0.08);
-          const filtered = results.filter((r) => r.score >= dynamicMinScore);
-          filtered.sort(
-            (a, b) => b.score - a.score || b.item.createdAt - a.item.createdAt
-          );
-          const map = /* @__PURE__ */ new Map();
-          for (const { item, score, matchedType } of filtered.slice(0, topN2)) {
-            map.set(item.image, { ...item, score, matchedType });
-          }
-          for (const item of nameMatches2) {
-            const existing = map.get(item.image);
-            if (!existing) {
-              map.set(item.image, { ...item, score: 1, matchedType: "exact" });
-              continue;
-            }
-            if (existing.matchedType === "vector") {
-              map.set(item.image, {
-                ...existing,
-                score: Math.max(existing.score, 1),
-                matchedType: "all"
-              });
-              continue;
-            }
-            map.set(item.image, {
-              ...existing,
-              score: Math.max(existing.score, 1),
-              matchedType: "exact"
-            });
-          }
-          const finalResult = Array.from(map.values()).sort((a, b) => b.score - a.score || b.createdAt - a.createdAt).slice(0, topN2);
-          if (process.env.PROREF_DEBUG_SEARCH === "1") {
-            console.log("Search scores:", {
-              searchId: resolvedSearchId,
-              query: trimmed,
-              tags: hasTagFilter ? normalizedQueryTags : [],
-              candidates: candidates.length,
-              bestScore,
-              baseMinScore,
-              dynamicMinScore,
-              returned: finalResult.length,
-              top: finalResult.slice(0, 20).map((r) => ({
-                id: r.image,
-                score: r.score,
-                matchedType: r.matchedType
-              }))
-            });
-          }
-          sendToRenderer == null ? void 0 : sendToRenderer("search-updated", {
-            searchId: resolvedSearchId,
-            results: finalResult
-          });
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.error("Async search error:", message);
-        }
-      };
-      const candidatesAfterTag = filterByTags(items);
-      const candidatesAfterColor = filterByColor(candidatesAfterTag);
-      const candidatesAfterTone = filterByTone(candidatesAfterColor);
-      const { nameMatches, hasNameQuery } = buildNameMatches(
-        candidatesAfterTone
-      );
-      const topN = typeof limit === "number" && limit > 0 ? limit : 100;
-      const fastResult = buildFastResult({
-        candidates: candidatesAfterTone,
-        nameMatches,
-        hasNameQuery,
-        topN
-      });
-      res.json(fastResult);
-      if (!(vector == null ? void 0 : vector.length) && !trimmed) {
-        return;
-      }
-      void runVectorFlow({
-        candidates: candidatesAfterTone,
-        nameMatches,
-        topN,
-        threshold
-      });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Search error:", error);
-      if (error instanceof Error && error.name === "StorageIncompatibleError") {
-        res.status(409).json({
-          error: "Storage is incompatible",
-          details: message,
-          code: "STORAGE_INCOMPATIBLE"
-        });
-        return;
-      }
-      res.status(500).json({ error: "Failed to search images", details: message });
-    }
-  });
-  server.use("/images", (req, res, next) => {
-    return import_express.default.static(STORAGE_DIR)(req, res, next);
-  });
-  server.use("/temp-images", (req, res, next) => {
-    return import_express.default.static(CANVAS_TEMP_DIR)(req, res, next);
-  });
-  server.post("/api/download-url", async (req, res) => {
-    try {
-      const { url } = req.body;
-      if (!url || typeof url !== "string") {
-        res.status(400).json({ error: "URL is required" });
-        return;
-      }
-      const trimmedUrl = url.trim();
-      if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
-        res.status(400).json({ error: "Invalid URL" });
-        return;
-      }
-      let urlFilename = "image.jpg";
-      try {
-        const urlObj = new URL(trimmedUrl);
-        const pathname = urlObj.pathname;
-        const baseName = import_path.default.basename(pathname).split("?")[0];
-        if (baseName && /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(baseName)) {
-          urlFilename = baseName;
-        }
-      } catch {
-      }
-      const ext = import_path.default.extname(urlFilename) || ".jpg";
-      const nameWithoutExt = import_path.default.basename(urlFilename, ext);
-      const safeName = nameWithoutExt.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "image";
-      const timestamp = Date.now();
-      const filename = `${safeName}_${timestamp}${ext}`;
-      const filepath = import_path.default.join(CANVAS_TEMP_DIR, filename);
-      await downloadImage(trimmedUrl, filepath);
-      res.json({
-        success: true,
-        filename,
-        path: filepath
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Download URL error:", error);
-      res.status(500).json({ error: "Failed to download image", details: message });
-    }
-  });
-  server.post("/api/upload-temp", async (req, res) => {
-    try {
-      const { imageBase64, filename: providedFilename } = req.body;
-      if (!imageBase64) {
-        res.status(400).json({ error: "No image data" });
-        return;
-      }
-      let filename = "temp.png";
-      if (providedFilename) {
-        const ext = import_path.default.extname(providedFilename) || ".png";
-        const name = import_path.default.basename(providedFilename, ext);
-        const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-        filename = `${safeName}${ext}`;
-      }
-      const filepath = import_path.default.join(CANVAS_TEMP_DIR, filename);
-      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-      await import_fs_extra.default.writeFile(filepath, base64Data, "base64");
-      res.json({
-        success: true,
-        filename,
-        path: filepath
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Temp upload error:", error);
-      res.status(500).json({ error: "Failed to upload temp image", details: message });
-    }
-  });
-  server.post("/api/delete-temp-file", async (req, res) => {
-    try {
-      const { filePath } = req.body;
-      if (!filePath) {
-        res.status(400).json({ error: "File path is required" });
-        return;
-      }
-      const normalizedPath = import_path.default.normalize(filePath);
-      if (!normalizedPath.startsWith(CANVAS_TEMP_DIR)) {
-        const inTemp = import_path.default.join(CANVAS_TEMP_DIR, import_path.default.basename(filePath));
-        if (await import_fs_extra.default.pathExists(inTemp)) {
-          await import_fs_extra.default.unlink(inTemp);
-          res.json({ success: true });
-          return;
-        }
-        res.status(403).json({ error: "Invalid file path: Must be in temp directory" });
-        return;
-      }
-      if (await import_fs_extra.default.pathExists(normalizedPath)) {
-        await import_fs_extra.default.unlink(normalizedPath);
-        res.json({ success: true });
-      } else {
-        res.status(404).json({ error: "File not found" });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Delete temp file error:", error);
-      res.status(500).json({ error: "Failed to delete temp file", details: message });
-    }
-  });
-  server.post("/api/temp-dominant-color", async (req, res) => {
-    try {
-      const { filePath } = req.body;
-      if (!filePath) {
-        res.status(400).json({ error: "File path is required" });
-        return;
-      }
-      const normalizedPath = import_path.default.normalize(filePath);
-      let targetPath = normalizedPath;
-      if (!normalizedPath.startsWith(CANVAS_TEMP_DIR)) {
-        const inTemp = import_path.default.join(CANVAS_TEMP_DIR, import_path.default.basename(filePath));
-        if (!await import_fs_extra.default.pathExists(inTemp)) {
-          res.status(403).json({ error: "Invalid file path: Must be in temp directory" });
-          return;
-        }
-        targetPath = inTemp;
-      } else if (!await import_fs_extra.default.pathExists(normalizedPath)) {
-        res.status(404).json({ error: "File not found" });
-        return;
-      }
-      const dominantColor = await runPythonDominantColor(targetPath);
-      res.json({ success: true, dominantColor });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Temp dominant color error:", error);
-      res.status(500).json({ error: "Failed to compute dominant color", details: message });
-    }
-  });
-  server.post("/api/save-canvas", async (req, res) => {
-    try {
-      const { images, canvasName } = req.body;
-      const paths = getCanvasPaths(canvasName || "Default");
-      await import_fs_extra.default.ensureDir(paths.dir);
-      await import_fs_extra.default.writeJson(paths.dataFile, images);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.post("/api/canvas-viewport", async (req, res) => {
-    try {
-      const { viewport, canvasName } = req.body;
-      const paths = getCanvasPaths(canvasName || "Default");
-      await import_fs_extra.default.ensureDir(paths.dir);
-      await import_fs_extra.default.writeJson(paths.viewportFile, viewport);
-      res.json({ success: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.get("/api/canvas-viewport", async (req, res) => {
-    try {
-      const canvasName = req.query.canvasName;
-      const paths = getCanvasPaths(canvasName || "Default");
-      if (await import_fs_extra.default.pathExists(paths.viewportFile)) {
-        const viewport = await import_fs_extra.default.readJson(paths.viewportFile);
-        res.json(viewport);
-      } else {
-        res.json(null);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  server.get("/api/load-canvas", async (req, res) => {
-    try {
-      const canvasName = req.query.canvasName;
-      const paths = getCanvasPaths(canvasName || "Default");
-      let images = [];
-      if (await import_fs_extra.default.pathExists(paths.dataFile)) {
-        images = await import_fs_extra.default.readJson(paths.dataFile);
-      }
-      try {
-        if (await import_fs_extra.default.pathExists(CANVAS_TEMP_DIR)) {
-          const usedTempFiles = /* @__PURE__ */ new Set();
-          if (Array.isArray(images)) {
-            images.forEach((img) => {
-              if (img.localPath) {
-                const basename = import_path.default.basename(img.localPath);
-                usedTempFiles.add(basename);
-              }
-            });
-          }
-          const files = await import_fs_extra.default.readdir(CANVAS_TEMP_DIR);
-          for (const file of files) {
-            if (!usedTempFiles.has(file)) {
-              await import_fs_extra.default.unlink(import_path.default.join(CANVAS_TEMP_DIR, file));
-            }
-          }
-        }
-      } catch (cleanupErr) {
-        console.error("Canvas temp cleanup failed on load", cleanupErr);
-      }
-      res.json(images);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
+  );
   server.listen(SERVER_PORT, () => {
     console.log(`Local server running on port ${SERVER_PORT}`);
   });
+  return;
 }
 
 // shared/i18n/locales/en.ts
@@ -2159,7 +2459,6 @@ var en = {
   "titleBar.shortcutRecording": "Press a shortcut\u2026",
   "titleBar.index": "Index",
   "titleBar.enableAiSearchVector": "Enable AI Search (Vector)",
-  "titleBar.threshold": "Threshold",
   "titleBar.indexing": "Indexing...",
   "titleBar.indexUnindexedImages": "Index unindexed images",
   "titleBar.processing": "Processing...",
@@ -2224,6 +2523,7 @@ var en = {
   "gallery.toneFilter.title": "Tone Filter",
   "gallery.referenceAlt": "Reference",
   "gallery.notIndexed": "Not Indexed",
+  "gallery.vectorResult": "AI Search Result",
   "gallery.contextMenu.nameLabel": "Name",
   "gallery.contextMenu.imageNamePlaceholder": "Image name",
   "gallery.contextMenu.linkLabel": "Link",
@@ -2241,6 +2541,10 @@ var en = {
   "tag.setColor": "Set Color",
   "canvas.toolbar.expand": "Expand Toolbar",
   "canvas.toolbar.collapse": "Collapse Toolbar",
+  "canvas.toolbar.filters": "Filters",
+  "canvas.filters.grayscale": "Grayscale",
+  "canvas.filters.posterize": "Oil Paint Block",
+  "canvas.filters.trianglePixelate": "Triangle Pixelate",
   "canvas.toolbar.toggleGrayscale": "Toggle Grayscale Mode",
   "canvas.toolbar.grayscale": "Grayscale",
   "canvas.toolbar.smartLayout": "Smart Layout",
@@ -2282,7 +2586,13 @@ var en = {
   "settings.canvas.deleteConfirm": "Delete this canvas?",
   "settings.canvas.rename": "Rename",
   "settings.canvas.renamePlaceholder": "New Name",
-  "toast.createCanvasFailed": "Failed to create canvas"
+  "toast.createCanvasFailed": "Failed to create canvas",
+  "toast.llmTranslationFailed": "LLM translation failed: {{error}}",
+  "settings.llm.title": "LLM Settings",
+  "settings.llm.enable": "Enable LLM Translation",
+  "settings.llm.baseUrl": "Base URL",
+  "settings.llm.key": "API Key",
+  "settings.llm.model": "Model"
 };
 
 // shared/i18n/locales/zh.ts
@@ -2319,7 +2629,6 @@ var zh = {
   "titleBar.shortcutRecording": "\u8BF7\u6309\u4E0B\u5FEB\u6377\u952E\u2026",
   "titleBar.index": "\u7D22\u5F15",
   "titleBar.enableAiSearchVector": "\u542F\u7528 AI \u641C\u7D22",
-  "titleBar.threshold": "\u9608\u503C",
   "titleBar.indexing": "\u7D22\u5F15\u4E2D\u2026",
   "titleBar.indexUnindexedImages": "\u7D22\u5F15\u672A\u5165\u5E93\u56FE\u7247",
   "titleBar.processing": "\u5904\u7406\u4E2D\u2026",
@@ -2384,6 +2693,7 @@ var zh = {
   "gallery.toneFilter.title": "\u8272\u8C03\u7B5B\u9009",
   "gallery.referenceAlt": "\u53C2\u8003\u56FE",
   "gallery.notIndexed": "\u672A\u5165\u5E93",
+  "gallery.vectorResult": "AI \u641C\u7D22\u7ED3\u679C",
   "gallery.contextMenu.nameLabel": "\u540D\u79F0",
   "gallery.contextMenu.imageNamePlaceholder": "\u56FE\u7247\u540D\u79F0",
   "gallery.contextMenu.linkLabel": "\u94FE\u63A5",
@@ -2401,6 +2711,10 @@ var zh = {
   "tag.setColor": "\u8BBE\u7F6E\u989C\u8272",
   "canvas.toolbar.expand": "\u5C55\u5F00\u5DE5\u5177\u680F",
   "canvas.toolbar.collapse": "\u6536\u8D77\u5DE5\u5177\u680F",
+  "canvas.toolbar.filters": "\u6EE4\u955C",
+  "canvas.filters.grayscale": "\u7070\u5EA6",
+  "canvas.filters.posterize": "\u6CB9\u753B\u8272\u5757",
+  "canvas.filters.trianglePixelate": "\u4E09\u89D2\u5F62\u50CF\u7D20\u5316",
   "canvas.toolbar.toggleGrayscale": "\u5207\u6362\u7070\u5EA6\u6A21\u5F0F",
   "canvas.toolbar.grayscale": "\u7070\u5EA6",
   "canvas.toolbar.smartLayout": "\u667A\u80FD\u5E03\u5C40",
@@ -2442,7 +2756,13 @@ var zh = {
   "settings.canvas.deleteConfirm": "\u786E\u8BA4\u5220\u9664\u8BE5\u753B\u5E03\uFF1F",
   "settings.canvas.rename": "\u91CD\u547D\u540D",
   "settings.canvas.renamePlaceholder": "\u65B0\u540D\u79F0",
-  "toast.createCanvasFailed": "\u521B\u5EFA\u753B\u5E03\u5931\u8D25"
+  "toast.createCanvasFailed": "\u521B\u5EFA\u753B\u5E03\u5931\u8D25",
+  "toast.llmTranslationFailed": "LLM \u7FFB\u8BD1\u5931\u8D25\uFF1A{{error}}",
+  "settings.llm.title": "LLM \u8BBE\u7F6E",
+  "settings.llm.enable": "\u542F\u7528 LLM \u7FFB\u8BD1",
+  "settings.llm.baseUrl": "\u57FA\u7840\u5730\u5740 (Base URL)",
+  "settings.llm.key": "API \u5BC6\u94A5",
+  "settings.llm.model": "\u6A21\u578B\u540D\u79F0"
 };
 
 // shared/i18n/t.ts
@@ -2461,17 +2781,17 @@ function t(locale, key, params) {
 }
 
 // electron/main.ts
-if (!import_electron2.app.isPackaged) {
-  import_electron2.app.setName("LookBack");
+if (!import_electron3.app.isPackaged) {
+  import_electron3.app.setName("LookBack");
 }
 Object.assign(console, import_electron_log.default.functions);
 import_electron_log.default.transports.file.level = "info";
 import_electron_log.default.transports.file.maxSize = 5 * 1024 * 1024;
 import_electron_log.default.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
-  const info = import_path2.default.parse(filePath);
+  const info = import_path7.default.parse(filePath);
   try {
-    import_fs_extra2.default.renameSync(filePath, import_path2.default.join(info.dir, info.name + ".old" + info.ext));
+    import_fs_extra6.default.renameSync(filePath, import_path7.default.join(info.dir, info.name + ".old" + info.ext));
   } catch (e) {
     console.warn("Could not rotate log", e);
   }
@@ -2512,11 +2832,12 @@ function applyPinStateToWindow() {
 var isLocale = (value) => value === "en" || value === "zh";
 async function getLocale() {
   try {
-    const settingsPath = import_path2.default.join(getStorageDir(), "settings.json");
-    const stat = await import_fs_extra2.default.stat(settingsPath).catch(() => null);
+    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+    const stat = await import_fs_extra6.default.stat(settingsPath).catch(() => null);
     if (!stat) return "en";
-    if (localeCache && localeCache.mtimeMs === stat.mtimeMs) return localeCache.locale;
-    const settings = await import_fs_extra2.default.readJson(settingsPath).catch(() => null);
+    if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
+      return localeCache.locale;
+    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
     const raw = settings && typeof settings === "object" ? settings.language : void 0;
     const locale = isLocale(raw) ? raw : "en";
     localeCache = { locale, mtimeMs: stat.mtimeMs };
@@ -2527,8 +2848,8 @@ async function getLocale() {
 }
 async function loadShortcuts() {
   try {
-    const settingsPath = import_path2.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra2.default.readJson(settingsPath).catch(() => null);
+    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const rawToggle = settings.toggleWindowShortcut;
     if (typeof rawToggle === "string" && rawToggle.trim()) {
@@ -2555,8 +2876,8 @@ async function loadShortcuts() {
 }
 async function loadWindowPinState() {
   try {
-    const settingsPath = import_path2.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra2.default.readJson(settingsPath).catch(() => null);
+    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+    const settings = await import_fs_extra6.default.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const raw = settings;
     if (typeof raw.pinMode === "boolean") {
@@ -2570,11 +2891,11 @@ async function loadWindowPinState() {
 }
 function loadMainWindow() {
   if (!mainWindow) return;
-  if (!import_electron2.app.isPackaged) {
+  if (!import_electron3.app.isPackaged) {
     import_electron_log.default.info("Loading renderer from localhost");
     void mainWindow.loadURL("http://localhost:5173");
   } else {
-    const filePath = import_path2.default.join(__dirname, "../dist-renderer/index.html");
+    const filePath = import_path7.default.join(__dirname, "../dist-renderer/index.html");
     import_electron_log.default.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
   }
@@ -2612,21 +2933,21 @@ function setupAutoUpdater() {
       mainWindow.webContents.send("update-downloaded", info);
     }
   });
-  if (import_electron2.app.isPackaged) {
+  if (import_electron3.app.isPackaged) {
     import_electron_updater.autoUpdater.checkForUpdatesAndNotify();
   }
 }
 function createWindow(options) {
   import_electron_log.default.info("Creating main window...");
-  const { width, height } = import_electron2.screen.getPrimaryDisplay().workAreaSize;
-  mainWindow = new import_electron2.BrowserWindow({
+  const { width, height } = import_electron3.screen.getPrimaryDisplay().workAreaSize;
+  mainWindow = new import_electron3.BrowserWindow({
     width: Math.floor(width * 0.6),
     height: Math.floor(height * 0.8),
-    icon: import_path2.default.join(__dirname, "../resources/icon.svg"),
+    icon: import_path7.default.join(__dirname, "../resources/icon.svg"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: import_path2.default.join(__dirname, "preload.cjs")
+      preload: import_path7.default.join(__dirname, "preload.cjs")
     },
     frame: false,
     transparent: true,
@@ -2637,11 +2958,19 @@ function createWindow(options) {
   mainWindow.webContents.on("did-finish-load", () => {
     import_electron_log.default.info("Renderer process finished loading");
   });
-  if (!import_electron2.app.isPackaged) {
+  if (!import_electron3.app.isPackaged) {
   }
-  mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription, validatedURL) => {
-    import_electron_log.default.error("Renderer process failed to load:", errorCode, errorDescription, validatedURL);
-  });
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (event, errorCode, errorDescription, validatedURL) => {
+      import_electron_log.default.error(
+        "Renderer process failed to load:",
+        errorCode,
+        errorDescription,
+        validatedURL
+      );
+    }
+  );
   mainWindow.webContents.on("render-process-gone", (event, details) => {
     import_electron_log.default.error("Renderer process gone:", details.reason, details.exitCode);
   });
@@ -2649,65 +2978,70 @@ function createWindow(options) {
     loadMainWindow();
   }
   setupAutoUpdater();
-  import_electron2.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
-  import_electron2.ipcMain.on("window-max", () => {
+  import_electron3.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
+  import_electron3.ipcMain.on("window-max", () => {
     if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
       mainWindow.unmaximize();
     } else {
       mainWindow == null ? void 0 : mainWindow.maximize();
     }
   });
-  import_electron2.ipcMain.on("window-close", () => mainWindow == null ? void 0 : mainWindow.close());
-  import_electron2.ipcMain.on("window-focus", () => mainWindow == null ? void 0 : mainWindow.focus());
-  import_electron2.ipcMain.on("toggle-always-on-top", (_event, flag) => {
+  import_electron3.ipcMain.on("window-close", () => mainWindow == null ? void 0 : mainWindow.close());
+  import_electron3.ipcMain.on("window-focus", () => mainWindow == null ? void 0 : mainWindow.focus());
+  import_electron3.ipcMain.on("toggle-always-on-top", (_event, flag) => {
     if (flag) {
       mainWindow == null ? void 0 : mainWindow.setAlwaysOnTop(true, "screen-saver");
-      mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true
+      });
     } else {
       mainWindow == null ? void 0 : mainWindow.setAlwaysOnTop(false);
       mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(false);
     }
   });
-  import_electron2.ipcMain.on("set-pin-mode", (_event, { enabled, widthDelta }) => {
-    if (!mainWindow) return;
-    const requested = Math.round(widthDelta);
-    const shouldResize = Number.isFinite(requested) && requested > 0;
-    if (shouldResize) {
-      const [w, h] = mainWindow.getSize();
-      const [x, y] = mainWindow.getPosition();
-      const right = x + w;
-      if (enabled) {
-        const [minW] = mainWindow.getMinimumSize();
-        const nextWidth = Math.max(minW, w - requested);
-        const applied = Math.max(0, w - nextWidth);
-        lastGalleryDockDelta = applied;
-        mainWindow.setBounds({
-          x: right - nextWidth,
-          y,
-          width: nextWidth,
-          height: h
-        });
-      } else {
-        const applied = lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
-        lastGalleryDockDelta = 0;
-        const nextWidth = w + applied;
-        mainWindow.setBounds({
-          x: right - nextWidth,
-          y,
-          width: nextWidth,
-          height: h
-        });
+  import_electron3.ipcMain.on(
+    "set-pin-mode",
+    (_event, { enabled, widthDelta }) => {
+      if (!mainWindow) return;
+      const requested = Math.round(widthDelta);
+      const shouldResize = Number.isFinite(requested) && requested > 0;
+      if (shouldResize) {
+        const [w, h] = mainWindow.getSize();
+        const [x, y] = mainWindow.getPosition();
+        const right = x + w;
+        if (enabled) {
+          const [minW] = mainWindow.getMinimumSize();
+          const nextWidth = Math.max(minW, w - requested);
+          const applied = Math.max(0, w - nextWidth);
+          lastGalleryDockDelta = applied;
+          mainWindow.setBounds({
+            x: right - nextWidth,
+            y,
+            width: nextWidth,
+            height: h
+          });
+        } else {
+          const applied = lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
+          lastGalleryDockDelta = 0;
+          const nextWidth = w + applied;
+          mainWindow.setBounds({
+            x: right - nextWidth,
+            y,
+            width: nextWidth,
+            height: h
+          });
+        }
       }
+      isPinMode = enabled;
+      applyPinStateToWindow();
     }
-    isPinMode = enabled;
-    applyPinStateToWindow();
-  });
-  import_electron2.ipcMain.on("set-pin-transparent", (_event, enabled) => {
+  );
+  import_electron3.ipcMain.on("set-pin-transparent", (_event, enabled) => {
     if (!mainWindow) return;
     isPinTransparent = enabled;
     syncWindowShadow();
   });
-  import_electron2.ipcMain.on("resize-window-by", (_event, deltaWidth) => {
+  import_electron3.ipcMain.on("resize-window-by", (_event, deltaWidth) => {
     if (!mainWindow) return;
     const [w, h] = mainWindow.getSize();
     const [x, y] = mainWindow.getPosition();
@@ -2718,22 +3052,25 @@ function createWindow(options) {
       height: h
     });
   });
-  import_electron2.ipcMain.on("log-message", (_event, level, ...args) => {
+  import_electron3.ipcMain.on("log-message", (_event, level, ...args) => {
     if (typeof import_electron_log.default[level] === "function") {
       import_electron_log.default[level](...args);
     } else {
       import_electron_log.default.info(...args);
     }
   });
-  import_electron2.ipcMain.handle("get-log-content", async () => {
+  import_electron3.ipcMain.handle("get-log-content", async () => {
     try {
       const logPath = import_electron_log.default.transports.file.getFile().path;
-      if (await import_fs_extra2.default.pathExists(logPath)) {
-        const stats = await import_fs_extra2.default.stat(logPath);
+      if (await import_fs_extra6.default.pathExists(logPath)) {
+        const stats = await import_fs_extra6.default.stat(logPath);
         const size = stats.size;
         const READ_SIZE = 50 * 1024;
         const start = Math.max(0, size - READ_SIZE);
-        const stream = import_fs_extra2.default.createReadStream(logPath, { start, encoding: "utf8" });
+        const stream = import_fs_extra6.default.createReadStream(logPath, {
+          start,
+          encoding: "utf8"
+        });
         const chunks = [];
         return new Promise((resolve, reject) => {
           stream.on("data", (chunk) => chunks.push(chunk.toString()));
@@ -2747,18 +3084,18 @@ function createWindow(options) {
       return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
     }
   });
-  import_electron2.ipcMain.handle("ensure-model-ready", async () => {
+  import_electron3.ipcMain.handle("ensure-model-ready", async () => {
     if (!mainWindow) return;
     try {
       await ensurePythonRuntime(mainWindow);
-      await ensureModelReady(mainWindow);
+      await ensureModelReady(mainWindow, true);
       return { success: true };
     } catch (e) {
       import_electron_log.default.error("Manual ensure model failed:", e);
       return { success: false, error: String(e) };
     }
   });
-  import_electron2.ipcMain.handle("open-external", async (_event, rawUrl) => {
+  import_electron3.ipcMain.handle("open-external", async (_event, rawUrl) => {
     try {
       if (typeof rawUrl !== "string") {
         return { success: false, error: "Invalid URL" };
@@ -2767,7 +3104,7 @@ function createWindow(options) {
       if (url.protocol !== "http:" && url.protocol !== "https:") {
         return { success: false, error: "Unsupported URL protocol" };
       }
-      await import_electron2.shell.openExternal(url.toString());
+      await import_electron3.shell.openExternal(url.toString());
       return { success: true };
     } catch (error) {
       return {
@@ -2803,26 +3140,34 @@ function registerShortcut(accelerator, currentVar, updateVar, action, checkSetti
   };
   try {
     if (prev !== next) {
-      import_electron2.globalShortcut.unregister(prev);
+      import_electron3.globalShortcut.unregister(prev);
     } else {
-      import_electron2.globalShortcut.unregister(prev);
+      import_electron3.globalShortcut.unregister(prev);
     }
-    const ok = import_electron2.globalShortcut.register(next, handler);
+    const ok = import_electron3.globalShortcut.register(next, handler);
     if (!ok) {
       if (prev !== next) {
-        import_electron2.globalShortcut.unregister(next);
-        import_electron2.globalShortcut.register(prev, handler);
+        import_electron3.globalShortcut.unregister(next);
+        import_electron3.globalShortcut.register(prev, handler);
       }
-      return { success: false, error: "Shortcut registration failed", accelerator: prev };
+      return {
+        success: false,
+        error: "Shortcut registration failed",
+        accelerator: prev
+      };
     }
     updateVar(next);
     return { success: true, accelerator: next };
   } catch (e) {
     if (prev !== next) {
-      import_electron2.globalShortcut.unregister(next);
-      import_electron2.globalShortcut.register(prev, handler);
+      import_electron3.globalShortcut.unregister(next);
+      import_electron3.globalShortcut.register(prev, handler);
     }
-    return { success: false, error: e instanceof Error ? e.message : String(e), accelerator: prev };
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+      accelerator: prev
+    };
   }
 }
 function registerToggleWindowShortcut(accelerator) {
@@ -2885,45 +3230,37 @@ function registerCanvasGroupShortcut(accelerator) {
   );
 }
 function getModelDir() {
-  return import_path2.default.join(getStorageDir(), "model");
+  return import_path7.default.join(getStorageDir(), "model");
 }
 async function hasRequiredModelFiles(modelDir) {
-  const hasConfig = await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "config.json"));
-  const hasWeights = await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "pytorch_model.bin")) || await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "model.safetensors"));
-  const hasProcessor = await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "preprocessor_config.json"));
-  const hasTokenizer = await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "tokenizer.json")) || await import_fs_extra2.default.pathExists(import_path2.default.join(modelDir, "vocab.json"));
+  const hasConfig = await import_fs_extra6.default.pathExists(import_path7.default.join(modelDir, "config.json"));
+  const hasWeights = await import_fs_extra6.default.pathExists(
+    import_path7.default.join(modelDir, "model.safetensors")
+  );
+  const hasProcessor = await import_fs_extra6.default.pathExists(
+    import_path7.default.join(modelDir, "preprocessor_config.json")
+  );
+  const hasTokenizer = await import_fs_extra6.default.pathExists(
+    import_path7.default.join(modelDir, "tokenizer.json")
+  );
   return hasConfig && hasWeights && hasProcessor && hasTokenizer;
 }
 function getUvCandidates() {
   var _a;
   const candidates = [];
-  if (import_electron2.app.isPackaged) {
+  if (import_electron3.app.isPackaged) {
     if (process.platform === "win32") {
-      candidates.push(import_path2.default.join(process.resourcesPath, "bin", "uv.exe"));
+      candidates.push(import_path7.default.join(process.resourcesPath, "bin", "uv.exe"));
     } else if (process.platform === "darwin") {
       candidates.push(
-        import_path2.default.join(
-          process.resourcesPath,
-          "bin",
-          "mac",
-          "arm64",
-          "uv"
-        )
+        import_path7.default.join(process.resourcesPath, "bin", "mac", "arm64", "uv")
       );
     }
   } else {
     if (process.platform === "win32") {
-      candidates.push(import_path2.default.join(import_electron2.app.getAppPath(), "bin", "win32", "uv.exe"));
+      candidates.push(import_path7.default.join(import_electron3.app.getAppPath(), "bin", "win32", "uv.exe"));
     } else if (process.platform === "darwin") {
-      candidates.push(
-        import_path2.default.join(
-          import_electron2.app.getAppPath(),
-          "bin",
-          "mac",
-          "arm64",
-          "uv"
-        )
-      );
+      candidates.push(import_path7.default.join(import_electron3.app.getAppPath(), "bin", "mac", "arm64", "uv"));
     }
   }
   const env = (_a = process.env.PROREF_UV_PATH) == null ? void 0 : _a.trim();
@@ -2948,11 +3285,15 @@ function spawnUvPython(args, cwd, env) {
         return;
       }
       const command = candidates[index];
-      if (import_path2.default.isAbsolute(command) && !import_fs_extra2.default.pathExistsSync(command)) {
+      if (import_path7.default.isAbsolute(command) && !import_fs_extra6.default.pathExistsSync(command)) {
         trySpawn(index + 1);
         return;
       }
-      const proc = (0, import_child_process2.spawn)(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd, env });
+      const proc = (0, import_child_process2.spawn)(command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd,
+        env
+      });
       proc.once("error", (err) => {
         if (err.code === "ENOENT") {
           trySpawn(index + 1);
@@ -2966,7 +3307,11 @@ function spawnUvPython(args, cwd, env) {
   });
 }
 function getManagedUvPath() {
-  return import_path2.default.join(import_electron2.app.getPath("userData"), "uv", process.platform === "win32" ? "uv.exe" : "uv");
+  return import_path7.default.join(
+    import_electron3.app.getPath("userData"),
+    "uv",
+    process.platform === "win32" ? "uv.exe" : "uv"
+  );
 }
 var UV_VERSION = "latest";
 function resolveUvReleaseAsset() {
@@ -2979,7 +3324,10 @@ function resolveUvReleaseAsset() {
   }
   if (process.platform === "linux") {
     const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-    return { url: `${base}/uv-${arch}-unknown-linux-gnu.tar.gz`, kind: "tar.gz" };
+    return {
+      url: `${base}/uv-${arch}-unknown-linux-gnu.tar.gz`,
+      kind: "tar.gz"
+    };
   }
   if (process.platform === "win32") {
     const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
@@ -3066,7 +3414,7 @@ function extractZipFile(buffer, predicate) {
 function downloadBuffer(url, onProgress) {
   return new Promise((resolve, reject) => {
     const visited = /* @__PURE__ */ new Set();
-    const fetch2 = (u, depth) => {
+    const fetch = (u, depth) => {
       if (depth > 8) {
         reject(new Error("Too many redirects"));
         return;
@@ -3082,7 +3430,7 @@ function downloadBuffer(url, onProgress) {
         if ([301, 302, 303, 307, 308].includes(status) && loc) {
           const next = loc.startsWith("http") ? loc : new URL(loc, u).toString();
           res.resume();
-          fetch2(next, depth + 1);
+          fetch(next, depth + 1);
           return;
         }
         if (status < 200 || status >= 300) {
@@ -3104,18 +3452,20 @@ function downloadBuffer(url, onProgress) {
       });
       req.on("error", reject);
     };
-    fetch2(url, 0);
+    fetch(url, 0);
   });
 }
 async function ensureUvInstalled(onProgress) {
-  const existing = getUvCandidates().find((c) => import_path2.default.isAbsolute(c) && import_fs_extra2.default.pathExistsSync(c));
+  const existing = getUvCandidates().find(
+    (c) => import_path7.default.isAbsolute(c) && import_fs_extra6.default.pathExistsSync(c)
+  );
   if (existing) return existing;
   const uvPath = getManagedUvPath();
-  if (await import_fs_extra2.default.pathExists(uvPath)) {
+  if (await import_fs_extra6.default.pathExists(uvPath)) {
     process.env.PROREF_UV_PATH = uvPath;
     return uvPath;
   }
-  await import_fs_extra2.default.ensureDir(import_path2.default.dirname(uvPath));
+  await import_fs_extra6.default.ensureDir(import_path7.default.dirname(uvPath));
   const { url, kind } = resolveUvReleaseAsset();
   import_electron_log.default.info(`Downloading uv from: ${url}`);
   const buf = await downloadBuffer(url, (current, total) => {
@@ -3126,22 +3476,28 @@ async function ensureUvInstalled(onProgress) {
   let binary = null;
   if (kind === "tar.gz") {
     const tar = import_zlib.default.gunzipSync(buf);
-    binary = extractTarFile(tar, (name) => name === "uv" || name.endsWith("/uv"));
+    binary = extractTarFile(
+      tar,
+      (name) => name === "uv" || name.endsWith("/uv")
+    );
   } else {
-    binary = extractZipFile(buf, (name) => name === "uv.exe" || name.endsWith("/uv.exe"));
+    binary = extractZipFile(
+      buf,
+      (name) => name === "uv.exe" || name.endsWith("/uv.exe")
+    );
   }
   if (!binary) {
     throw new Error("Failed to extract uv binary");
   }
-  await import_fs_extra2.default.writeFile(uvPath, binary);
+  await import_fs_extra6.default.writeFile(uvPath, binary);
   if (process.platform !== "win32") {
-    await import_fs_extra2.default.chmod(uvPath, 493);
+    await import_fs_extra6.default.chmod(uvPath, 493);
   }
   process.env.PROREF_UV_PATH = uvPath;
   return uvPath;
 }
 function getUnpackedPath(originalPath) {
-  if (import_electron2.app.isPackaged) {
+  if (import_electron3.app.isPackaged) {
     return originalPath.replace("app.asar", "app.asar.unpacked");
   }
   return originalPath;
@@ -3149,8 +3505,10 @@ function getUnpackedPath(originalPath) {
 async function ensurePythonRuntime(parent) {
   const modelDir = getModelDir();
   process.env.PROREF_MODEL_DIR = modelDir;
-  const scriptPath = getUnpackedPath(import_path2.default.join(__dirname, "../backend/python/tagger.py"));
-  const pythonDir = import_path2.default.dirname(scriptPath);
+  const scriptPath = getUnpackedPath(
+    import_path7.default.join(__dirname, "../backend/python/tagger.py")
+  );
+  const pythonDir = import_path7.default.dirname(scriptPath);
   const sendProgress = (statusKey, percentText, progress, statusParams) => {
     if (parent.isDestroyed()) return;
     parent.webContents.send("env-init-progress", {
@@ -3189,12 +3547,14 @@ async function ensurePythonRuntime(parent) {
       }
     });
   }
-  const syncExit = await new Promise((resolve) => syncProc.once("exit", resolve));
+  const syncExit = await new Promise(
+    (resolve) => syncProc.once("exit", resolve)
+  );
   if (syncExit !== 0) {
     parent.setProgressBar(-1);
     parent.webContents.send("env-init-progress", { isOpen: false });
     const locale = await getLocale();
-    await import_electron2.dialog.showMessageBox(parent, {
+    await import_electron3.dialog.showMessageBox(parent, {
       type: "error",
       title: t(locale, "dialog.pythonSetupFailedTitle"),
       message: t(locale, "dialog.pythonSetupFailedMessage"),
@@ -3208,28 +3568,33 @@ async function ensurePythonRuntime(parent) {
   sendProgress("envInit.pythonEnvReady", "100%", 1);
   parent.webContents.send("env-init-progress", { isOpen: false });
 }
-async function ensureModelReady(parent) {
+async function ensureModelReady(parent, force = false) {
   const modelDir = getModelDir();
   process.env.PROREF_MODEL_DIR = modelDir;
   const debug = process.env.PROREF_DEBUG_MODEL === "1";
   if (debug) console.log("[model] dir:", modelDir);
-  try {
-    const settingsPath = import_path2.default.join(getStorageDir(), "settings.json");
-    if (await import_fs_extra2.default.pathExists(settingsPath)) {
-      const settings = await import_fs_extra2.default.readJson(settingsPath);
-      if (!settings.enableVectorSearch) {
-        if (debug) console.log("[model] Vector search disabled, skipping model check");
+  const modelMissing = !await hasRequiredModelFiles(modelDir);
+  if (!force) {
+    try {
+      const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+      if (await import_fs_extra6.default.pathExists(settingsPath)) {
+        const settings = await import_fs_extra6.default.readJson(settingsPath);
+        if (!settings.enableVectorSearch && !modelMissing) {
+          if (debug)
+            console.log("[model] Vector search disabled, skipping model check");
+          return;
+        }
+      } else if (!modelMissing) {
+        if (debug)
+          console.log("[model] No settings file, skipping model check");
         return;
       }
-    } else {
-      if (debug) console.log("[model] No settings file, skipping model check");
-      return;
+    } catch (e) {
+      console.error("[model] Failed to read settings:", e);
+      if (!modelMissing) return;
     }
-  } catch (e) {
-    console.error("[model] Failed to read settings:", e);
-    return;
   }
-  if (await hasRequiredModelFiles(modelDir)) {
+  if (!modelMissing) {
     if (debug) console.log("[model] ok");
     return;
   }
@@ -3245,17 +3610,35 @@ async function ensureModelReady(parent) {
       filename
     });
   };
+  const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+      value /= 1024;
+      index += 1;
+    }
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(precision)} ${units[index]}`;
+  };
   sendProgress("model.preparingDownload", "0%", 0);
   parent.setProgressBar(0);
-  const scriptPath = getUnpackedPath(import_path2.default.join(__dirname, "../backend/python/tagger.py"));
-  const pythonDir = import_path2.default.dirname(scriptPath);
+  const scriptPath = getUnpackedPath(
+    import_path7.default.join(__dirname, "../backend/python/tagger.py")
+  );
+  const pythonDir = import_path7.default.dirname(scriptPath);
   let percentText = "0%";
   let progress = 0;
   sendProgress("model.downloading", percentText, progress);
-  const proc = await spawnUvPython(["run", "python", scriptPath, "--download-model"], pythonDir, {
-    ...process.env,
-    PROREF_MODEL_DIR: modelDir
-  });
+  const proc = await spawnUvPython(
+    ["run", "python", scriptPath, "--download-model"],
+    pythonDir,
+    {
+      ...process.env,
+      PROREF_MODEL_DIR: modelDir
+    }
+  );
   if (proc.stderr) {
     proc.stderr.on("data", (data) => {
       const msg = data.toString().trim();
@@ -3263,6 +3646,7 @@ async function ensureModelReady(parent) {
     });
   }
   let lastProgress = 0;
+  let lastError = "";
   if (proc.stdout) {
     const rl = import_readline2.default.createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
@@ -3277,6 +3661,30 @@ async function ensureModelReady(parent) {
         }
       })();
       if (!(evt == null ? void 0 : evt.type)) return;
+      if (evt.type === "verify") {
+        return;
+      }
+      if (evt.type === "file-progress" && typeof evt.currentBytes === "number" && typeof evt.totalBytes === "number" && typeof evt.stepIndex === "number" && typeof evt.totalSteps === "number") {
+        const perFile = evt.totalBytes > 0 ? evt.currentBytes / evt.totalBytes : 0;
+        const mapped = Math.max(
+          0,
+          Math.min(1, (evt.stepIndex - 1 + perFile) / evt.totalSteps)
+        );
+        progress = mapped;
+        percentText = `${Math.round(mapped * 100)}%`;
+        lastProgress = mapped;
+        sendProgress(
+          "model.downloadingFraction",
+          percentText,
+          progress,
+          evt.filename,
+          {
+            current: formatBytes(evt.currentBytes),
+            total: formatBytes(evt.totalBytes)
+          }
+        );
+        return;
+      }
       if (evt.type === "file" && typeof evt.current === "number" && typeof evt.total === "number") {
         const p = Math.max(0, Math.min(1, evt.current / evt.total));
         const mapped = p;
@@ -3290,6 +3698,7 @@ async function ensureModelReady(parent) {
       }
       if (evt.type === "error" && typeof evt.message === "string") {
         progress = Math.max(progress, 0);
+        lastError = evt.message;
       }
       if (evt.type === "file" && typeof evt.current === "number" && typeof evt.total === "number") {
         sendProgress(
@@ -3317,24 +3726,33 @@ async function ensureModelReady(parent) {
         return;
       }
       if (evt.type === "start") {
-        sendProgress("model.preparingDownload", percentText, progress, evt.filename);
+        sendProgress(
+          "model.preparingDownload",
+          percentText,
+          progress,
+          evt.filename
+        );
         return;
       }
       sendProgress("model.downloading", percentText, progress, evt.filename);
     });
   }
-  const exitCode = await new Promise((resolve) => proc.once("exit", resolve));
+  const exitCode = await new Promise(
+    (resolve) => proc.once("exit", resolve)
+  );
   parent.setProgressBar(-1);
   parent.webContents.send("model-download-progress", { isOpen: false });
   const ok = await hasRequiredModelFiles(modelDir);
   if (debug) console.log("[model] download exit:", exitCode, "ok:", ok);
   if (exitCode !== 0 || !ok) {
     const locale = await getLocale();
-    await import_electron2.dialog.showMessageBox(parent, {
+    await import_electron3.dialog.showMessageBox(parent, {
       type: "error",
       title: t(locale, "dialog.modelDownloadFailedTitle"),
       message: t(locale, "dialog.modelDownloadFailedMessage"),
-      detail: t(locale, "dialog.modelDownloadFailedDetail", {
+      detail: (lastError ? `Error: ${lastError}
+
+` : "") + t(locale, "dialog.modelDownloadFailedDetail", {
         code: exitCode,
         progress: Math.round(lastProgress * 100),
         dir: modelDir
@@ -3348,12 +3766,12 @@ async function startServer2() {
     mainWindow == null ? void 0 : mainWindow.webContents.send(channel, data);
   });
 }
-import_electron2.ipcMain.handle("get-storage-dir", async () => {
+import_electron3.ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
 });
-import_electron2.ipcMain.handle("choose-storage-dir", async () => {
+import_electron3.ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();
-  const result = await import_electron2.dialog.showOpenDialog({
+  const result = await import_electron3.dialog.showOpenDialog({
     title: t(locale, "dialog.chooseStorageFolderTitle"),
     properties: ["openDirectory", "createDirectory"]
   });
@@ -3362,14 +3780,14 @@ import_electron2.ipcMain.handle("choose-storage-dir", async () => {
   }
   const dir = result.filePaths[0];
   await setStorageRoot(dir);
-  import_electron2.app.relaunch();
-  import_electron2.app.exit(0);
+  import_electron3.app.relaunch();
+  import_electron3.app.exit(0);
 });
-import_electron2.app.whenReady().then(async () => {
+import_electron3.app.whenReady().then(async () => {
   import_electron_log.default.info("App starting...");
   import_electron_log.default.info("Log file location:", import_electron_log.default.transports.file.getFile().path);
-  import_electron_log.default.info("App path:", import_electron2.app.getAppPath());
-  import_electron_log.default.info("User data:", import_electron2.app.getPath("userData"));
+  import_electron_log.default.info("App path:", import_electron3.app.getAppPath());
+  import_electron_log.default.info("User data:", import_electron3.app.getPath("userData"));
   await loadWindowPinState();
   createWindow();
   applyPinStateToWindow();
@@ -3393,44 +3811,62 @@ import_electron2.app.whenReady().then(async () => {
       import_electron_log.default.error("[model] ensure failed:", message);
     }
   }
-  import_electron2.app.on("activate", () => {
-    if (import_electron2.BrowserWindow.getAllWindows().length === 0) {
+  import_electron3.app.on("activate", () => {
+    if (import_electron3.BrowserWindow.getAllWindows().length === 0) {
       createWindow();
       applyPinStateToWindow();
     }
   });
 });
-import_electron2.ipcMain.handle("set-toggle-window-shortcut", async (_event, accelerator) => {
-  return registerToggleWindowShortcut(accelerator);
-});
-import_electron2.ipcMain.handle("set-canvas-opacity-up-shortcut", async (_event, accelerator) => {
-  return registerCanvasOpacityUpShortcut(accelerator);
-});
-import_electron2.ipcMain.handle("set-canvas-opacity-down-shortcut", async (_event, accelerator) => {
-  return registerCanvasOpacityDownShortcut(accelerator);
-});
-import_electron2.ipcMain.handle("set-toggle-mouse-through-shortcut", async (_event, accelerator) => {
-  return registerToggleMouseThroughShortcut(accelerator);
-});
-import_electron2.ipcMain.handle("set-canvas-group-shortcut", async (_event, accelerator) => {
-  return registerCanvasGroupShortcut(accelerator);
-});
-import_electron2.ipcMain.on("set-mouse-through", (_event, enabled) => {
+import_electron3.ipcMain.handle(
+  "set-toggle-window-shortcut",
+  async (_event, accelerator) => {
+    return registerToggleWindowShortcut(accelerator);
+  }
+);
+import_electron3.ipcMain.handle(
+  "set-canvas-opacity-up-shortcut",
+  async (_event, accelerator) => {
+    return registerCanvasOpacityUpShortcut(accelerator);
+  }
+);
+import_electron3.ipcMain.handle(
+  "set-canvas-opacity-down-shortcut",
+  async (_event, accelerator) => {
+    return registerCanvasOpacityDownShortcut(accelerator);
+  }
+);
+import_electron3.ipcMain.handle(
+  "set-toggle-mouse-through-shortcut",
+  async (_event, accelerator) => {
+    return registerToggleMouseThroughShortcut(accelerator);
+  }
+);
+import_electron3.ipcMain.handle(
+  "set-canvas-group-shortcut",
+  async (_event, accelerator) => {
+    return registerCanvasGroupShortcut(accelerator);
+  }
+);
+import_electron3.ipcMain.on("set-mouse-through", (_event, enabled) => {
   if (!enabled && mainWindow) {
     mainWindow.setIgnoreMouseEvents(false);
   }
 });
-import_electron2.ipcMain.on("set-ignore-mouse-events", (_event, ignore, options) => {
-  if (mainWindow) {
-    mainWindow.setIgnoreMouseEvents(ignore, options);
+import_electron3.ipcMain.on(
+  "set-ignore-mouse-events",
+  (_event, ignore, options) => {
+    if (mainWindow) {
+      mainWindow.setIgnoreMouseEvents(ignore, options);
+    }
   }
-});
-import_electron2.ipcMain.on("settings-open-changed", (_event, open) => {
+);
+import_electron3.ipcMain.on("settings-open-changed", (_event, open) => {
   isSettingsOpen = Boolean(open);
 });
-import_electron2.app.on("will-quit", () => {
-  import_electron2.globalShortcut.unregisterAll();
+import_electron3.app.on("will-quit", () => {
+  import_electron3.globalShortcut.unregisterAll();
 });
-import_electron2.app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") import_electron2.app.quit();
+import_electron3.app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") import_electron3.app.quit();
 });

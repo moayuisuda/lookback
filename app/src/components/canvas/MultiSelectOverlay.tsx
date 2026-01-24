@@ -1,19 +1,23 @@
 import React from "react";
-import { Group, Rect, Circle, Path } from "react-konva";
+import { Rect } from "react-konva";
 import { THEME } from "../../theme";
-
-const TrashIconPath = "M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3";
+import { CanvasControlButton } from "./CanvasButton";
+import { CANVAS_ICONS } from "./CanvasIcons";
 
 interface MultiSelectOverlayProps {
   union: { x: number; y: number; width: number; height: number } | null;
   stageScale: number;
   onDeleteSelection: () => void;
+  onFlipSelection: () => void;
+  onScaleStart: () => void;
 }
 
 export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
   union,
   stageScale,
   onDeleteSelection,
+  onFlipSelection,
+  onScaleStart,
 }) => {
   if (!union) return null;
 
@@ -29,45 +33,60 @@ export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
         dash={[6 / stageScale, 4 / stageScale]}
         listening={false}
       />
-      <Group
+      <CanvasControlButton
+        x={union.x}
+        y={union.y}
+        scale={1 / stageScale}
+        size={24}
+        fill={THEME.primary}
+        stroke="white"
+        strokeWidth={2}
+        iconPath={CANVAS_ICONS.FLIP.PATH}
+        iconScale={CANVAS_ICONS.FLIP.SCALE}
+        iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
+        iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
+        onClick={(e) => {
+          e.cancelBubble = true;
+          onFlipSelection();
+        }}
+      />
+      <CanvasControlButton
         x={union.x + union.width}
         y={union.y}
-        scaleX={1 / stageScale}
-        scaleY={1 / stageScale}
+        scale={1 / stageScale}
+        size={24}
+        fill={THEME.danger}
+        stroke="white"
+        strokeWidth={2}
+        iconPath={CANVAS_ICONS.TRASH.PATH}
+        iconScale={CANVAS_ICONS.TRASH.SCALE}
+        iconOffsetX={CANVAS_ICONS.TRASH.OFFSET_X}
+        iconOffsetY={CANVAS_ICONS.TRASH.OFFSET_Y}
         onClick={(e) => {
           e.cancelBubble = true;
           onDeleteSelection();
         }}
-        onMouseEnter={(e) => {
-          const container = e.target.getStage()?.container();
-          if (container) container.style.cursor = "pointer";
+      />
+      <CanvasControlButton
+        x={union.x + union.width}
+        y={union.y + union.height}
+        scale={1 / stageScale}
+        size={10}
+        fill="white"
+        stroke={THEME.primary}
+        strokeWidth={2}
+        cursor="nwse-resize"
+        shadowBlur={4}
+        shadowOpacity={0.2}
+        onMouseDown={(e) => {
+          e.cancelBubble = true;
+          onScaleStart();
         }}
-        onMouseLeave={(e) => {
-          const container = e.target.getStage()?.container();
-          if (container) container.style.cursor = "default";
+        onTouchStart={(e) => {
+          e.cancelBubble = true;
+          onScaleStart();
         }}
-      >
-        <Circle
-          radius={12}
-          fill="#ef4444"
-          stroke="white"
-          strokeWidth={2}
-          shadowColor="black"
-          shadowBlur={5}
-          shadowOpacity={0.3}
-        />
-        <Path
-          data={TrashIconPath}
-          stroke="white"
-          strokeWidth={2}
-          lineCap="round"
-          lineJoin="round"
-          scale={{ x: 0.8, y: 0.8 }}
-          x={-10}
-          y={-10}
-        />
-      </Group>
+      />
     </>
   );
 };
-

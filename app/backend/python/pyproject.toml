@@ -2,10 +2,11 @@
 name = "server"
 version = "0.1.0"
 description = "LookBack local vector service"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "pillow",
     "torch",
     "torchvision",
     "transformers",
+    "protobuf",
 ]

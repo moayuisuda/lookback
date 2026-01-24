@@ -5,20 +5,27 @@
 ## 职责
 - **Local API (`server.ts`)**
   - 启动本地 Express 服务（默认端口 `30001`），为前端与插件提供 REST API。
-  - 管理本地数据存储：图片文件、元数据、画布数据与排序文件。
+-  - 管理本地数据存储：图片文件、元数据、画布数据与图库排序字段（SQLite）。
+  - 提供 settings 聚合接口 `/settings`，用于一次性读取 settings.json。
   - 开发阶段不做旧数据兼容；存储格式不兼容时返回错误并提示重置数据目录。
   - 当前判定为“不兼容”的情况：
-    - meta 缺少 `id` / `image` / `createdAt` 等核心字段，或字段类型不合法
     - `image` 路径不是 `images/` 开头
     - `tags` / `vector` / `dominantColor` 的类型不合法（例如 tags 不是数组）
   - 新增字段缺失不视为不兼容：例如 `name` 通常会从 `image` 文件名推导并在读/索引时补齐；但对 x.com/twitter.com 与 pinterest.* 页面来源的采集，如果扩展未解析到 `name`，服务端会保持为空，前端据此不展示 name。
   - 提供索引相关 API：重新索引、批量索引缺失向量（`/api/index-missing`）。
   - 提供检索 API：Tag 过滤 + 向量相似度检索 + 颜色近似过滤（`/api/search`）。
-  - 搜索响应策略：先返回快速结果（name/tag/color），向量相似度结果异步推送到渲染进程更新。支持 `threshold` 参数自定义向量搜索阈值。
+-  - 搜索响应策略：先返回快速结果（name/tag/color），向量相似度结果异步推送到渲染进程更新。
   - **搜索优化**：CLIP 向量检索前，会自动调用免费翻译 API 将搜索词转换为英文，以提高非英文搜索的匹配准确度。
+  - 仅使用颜色/色调筛选时，基于图库顺序筛选再分页返回。
+  - 颜色相似度使用 OKLCH 距离，并根据色度调整色相权重。
   - 提供元数据更新 API：Tag 更新、主体色（dominantColor）更新、名称（name）更新（用于右键菜单编辑与文件名搜索）。
-  - **并发控制**：引入 `KeyedMutex` 确保同一文件的读写操作串行化，防止向量生成与颜色提取并发写入导致 JSON 文件损坏。
-  - 模型目录 `model/` 与 `images/`、`meta/` 同级，位于 storage 根目录下。
+  - **并发控制**：通过 `fileLock.ts` 的 `KeyedMutex`/`lockedFs` 将本地文件读写串行化。
+  - 异步的颜色/色调处理使用独立错误捕获，避免未处理拒绝中断主流程。
+  - 模型目录 `model/` 与 `images/`、`canvas_temp/`、`canvases/` 同级，位于 storage 根目录下。
+- **Database (`db.ts`)**
+  - 所有更新语句使用完整命名参数绑定，避免遗漏导致运行时错误。
+-  - 向量写入与检索使用 `Float32Array` 绑定，确保 sqlite-vss 参数类型稳定。
+  - 使用 vss_search 时在 vss 查询层提供 LIMIT。
 - **Python Vector Service (`python/tagger.py`)**
   - 常驻加载 CLIP 模型，提供图片/文本向量生成能力。
   - 提供图片主体色提取能力（偏向高色彩像素聚合），用于颜色过滤。
@@ -26,9 +33,10 @@
   - **日志机制**：
     - 正常状态日志（启动、模型加载）带 `[INFO]` 前缀，通过 stderr 输出。
     - Node 侧解析 stderr，将 `[INFO]` 转换为正常日志，其余作为错误日志记录。
-  - `CLIPProcessor.from_pretrained(..., use_fast=True)` 依赖 `torchvision`（`CLIPImageProcessorFast`）。
+  - 默认使用 `CLIPModel`/`CLIPProcessor`，处理器固定 `use_fast=True`，当前模型为 `openai/clip-vit-large-patch14`。
   - 支持通过环境变量覆盖 uv 路径：`PROREF_UV_PATH`。
   - 使用 `PROREF_MODEL_DIR` 指定模型目录；启动时可触发下载并输出进度事件。
+  - 权重下载支持字节级进度事件（`file-progress`），用于大文件进度展示。
 
 ## 命令行使用
 - **下载/准备模型**

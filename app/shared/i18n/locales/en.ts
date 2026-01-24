@@ -32,7 +32,6 @@ export const en = {
   'titleBar.shortcutRecording': 'Press a shortcut…',
   'titleBar.index': 'Index',
   'titleBar.enableAiSearchVector': 'Enable AI Search (Vector)',
-  'titleBar.threshold': 'Threshold',
   'titleBar.indexing': 'Indexing...',
   'titleBar.indexUnindexedImages': 'Index unindexed images',
   'titleBar.processing': 'Processing...',
@@ -104,6 +103,7 @@ export const en = {
   'gallery.toneFilter.title': 'Tone Filter',
   'gallery.referenceAlt': 'Reference',
   'gallery.notIndexed': 'Not Indexed',
+  'gallery.vectorResult': 'AI Search Result',
   'gallery.contextMenu.nameLabel': 'Name',
   'gallery.contextMenu.imageNamePlaceholder': 'Image name',
   'gallery.contextMenu.linkLabel': 'Link',
@@ -123,6 +123,10 @@ export const en = {
 
   'canvas.toolbar.expand': 'Expand Toolbar',
   'canvas.toolbar.collapse': 'Collapse Toolbar',
+  'canvas.toolbar.filters': 'Filters',
+  'canvas.filters.grayscale': 'Grayscale',
+  'canvas.filters.posterize': 'Oil Paint Block',
+  'canvas.filters.trianglePixelate': 'Triangle Pixelate',
   'canvas.toolbar.toggleGrayscale': 'Toggle Grayscale Mode',
   'canvas.toolbar.grayscale': 'Grayscale',
   'canvas.toolbar.smartLayout': 'Smart Layout',
@@ -172,4 +176,11 @@ export const en = {
   'settings.canvas.rename': 'Rename',
   'settings.canvas.renamePlaceholder': 'New Name',
   'toast.createCanvasFailed': 'Failed to create canvas',
+  'toast.llmTranslationFailed': 'LLM translation failed: {{error}}',
+
+  'settings.llm.title': 'LLM Settings',
+  'settings.llm.enable': 'Enable LLM Translation',
+  'settings.llm.baseUrl': 'Base URL',
+  'settings.llm.key': 'API Key',
+  'settings.llm.model': 'Model',
 } as const;

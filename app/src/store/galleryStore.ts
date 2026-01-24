@@ -1,17 +1,29 @@
 import { proxy } from 'valtio';
-import { fileStorage, saveGalleryOrder } from '../service';
+import {
+  settingStorage,
+  getSettingsSnapshot,
+  readSetting,
+  saveGalleryOrder,
+} from '../service';
 import { canvasActions } from './canvasStore';
 import { API_BASE_URL } from '../config';
 
 export interface ImageMeta {
-  image: string; // "images/foo.jpg"
-  pageUrl?: string;
+  id: string;
+  filename: string;
+  imagePath: string;
+  pageUrl?: string | null;
   tags: string[];
   createdAt: number;
-  vector?: number[] | null;
   dominantColor?: string | null;
   tone?: string | null;
+  hasVector?: boolean;
+  isVectorResult?: boolean;
 }
+
+export type SearchResult = ImageMeta & {
+  score?: number;
+};
 
 export const getImageUrl = (imagePath: string) => {
   if (imagePath.startsWith('images/')) {
@@ -19,11 +31,6 @@ export const getImageUrl = (imagePath: string) => {
   }
   return `${API_BASE_URL}/${imagePath}`;
 };
-
-export interface SearchResult extends ImageMeta {
-  score: number;
-  matchedType: string;
-}
 
 export interface CanvasText {
   type: 'text';
@@ -52,7 +59,8 @@ export interface CanvasImage extends ImageMeta {
   rotation: number;
   width?: number;
   height?: number;
-  grayscale?: boolean;
+  grayscale?: boolean; // Deprecated
+  filters?: string[];
 }
 
 export type CanvasItem = CanvasImage | CanvasText;
@@ -71,10 +79,12 @@ export interface CanvasPersistedItem {
   height?: number;
   
   // Image specific
-  image?: string;
+  imageId?: string;
+  imagePath?: string;
   dominantColor?: string | null;
   tone?: string | null;
-  grayscale?: boolean;
+  grayscale?: boolean; // Deprecated
+  filters?: string[];
   
   // Temp image specific
   // name, localPath removed
@@ -92,7 +102,6 @@ export interface CanvasPersistedItem {
 export const deriveNameFromFilename = (filename: string): string => {
   const trimmed = filename.trim();
   if (!trimmed) return 'image';
-  // If input is a path like "images/foo.jpg", extract basename first
   const baseName = trimmed.split(/[\\/]/).pop() || trimmed;
   const dot = baseName.lastIndexOf('.');
   const withoutExt = dot <= 0 ? baseName : baseName.slice(0, dot) || baseName;
@@ -104,7 +113,6 @@ export type GallerySort = 'manual' | 'createdAtDesc';
 
 interface AppState {
   images: ImageMeta[];
-  allImages: ImageMeta[];
   searchQuery: string;
   searchTags: string[];
   searchColor: string | null;
@@ -117,7 +125,6 @@ interface AppState {
 
 export const state = proxy<AppState>({
   images: [],
-  allImages: [],
   searchQuery: '',
   searchTags: [],
   searchColor: null,
@@ -130,16 +137,13 @@ export const state = proxy<AppState>({
 export const actions = {
   hydrateSettings: async () => {
     try {
-      const [rawTagSortOrder, rawGallerySort] = await Promise.all([
-        fileStorage.get<unknown>({
-          key: 'tagSortOrder',
-          fallback: [],
-        }),
-        fileStorage.get<unknown>({
-          key: 'gallerySort',
-          fallback: state.gallerySort,
-        }),
-      ]);
+      const settings = await getSettingsSnapshot();
+      const rawTagSortOrder = readSetting<unknown>(settings, 'tagSortOrder', []);
+      const rawGallerySort = readSetting<unknown>(
+        settings,
+        'gallerySort',
+        state.gallerySort,
+      );
 
       if (
         Array.isArray(rawTagSortOrder) &&
@@ -172,75 +176,83 @@ export const actions = {
       tone?: string | null;
     }
   ): ImageMeta => {
+    const name = file.originalName.trim() || 'image';
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
     return {
-      image: file.storedFilename, // e.g. "images/foo.jpg"
+      id: `temp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      filename: base,
+      imagePath: file.storedFilename,
       pageUrl: undefined,
       tags: [],
       createdAt: Date.now(),
       dominantColor: file.dominantColor ?? null,
       tone: file.tone ?? null,
-      vector: null,
+      hasVector: false,
     };
   },
 
   setTagSortOrder: (order: string[]) => {
     state.tagSortOrder = order;
-    void fileStorage.set('tagSortOrder', order);
+    void settingStorage.set('tagSortOrder', order);
   },
 
   setGallerySort: (sort: GallerySort) => {
     state.gallerySort = sort;
-    void fileStorage.set('gallerySort', sort);
+    void settingStorage.set('gallerySort', sort);
   },
 
   setImages: (images: ImageMeta[]) => {
     state.images = images.map((i) => ({ ...i }));
   },
 
-  setAllImages: (images: ImageMeta[]) => {
-    const next = images.map((i) => ({ ...i }));
-    state.allImages = next;
-    if (
-      !state.searchQuery &&
-      state.searchTags.length === 0 &&
-      !state.searchColor &&
-      !state.searchTone
-    ) {
-      state.images = next.map((i) => ({ ...i }));
+  appendImages: (images: ImageMeta[]) => {
+    const newImages = images.map((i) => ({ ...i }));
+    // Avoid duplicates
+    const existingIds = new Set(state.images.map((i) => i.id));
+    for (const img of newImages) {
+      if (!existingIds.has(img.id)) {
+        state.images.push(img);
+      }
+    }
+  },
+
+  mergeImages: (images: ImageMeta[]) => {
+    const newImages = images.map((i) => ({ ...i }));
+    const imageMap = new Map(state.images.map((i) => [i.id, i]));
+    
+    for (const img of newImages) {
+      if (imageMap.has(img.id)) {
+        const existing = imageMap.get(img.id)!;
+        if (!existing.isVectorResult && img.isVectorResult) {
+          Object.assign(existing, { ...img, isVectorResult: existing.isVectorResult });
+        } else {
+          Object.assign(existing, img);
+        }
+      } else {
+        state.images.push(img);
+        imageMap.set(img.id, img);
+      }
     }
   },
 
   saveGalleryOrder: async (images: ImageMeta[]) => {
-    const order = images.map((img) => img.image);
+    const order = images.map((img) => img.id);
     await saveGalleryOrder(order);
   },
 
   reorderImages: (images: ImageMeta[]) => {
     const next = images.map((i) => ({ ...i }));
-    state.allImages = next;
-    if (
-      !state.searchQuery &&
-      state.searchTags.length === 0 &&
-      !state.searchColor &&
-      !state.searchTone
-    ) {
-      state.images = next.map((i) => ({ ...i }));
-    }
+    state.images = next;
     actions.saveGalleryOrder(next);
   },
   
   addImage: (image: ImageMeta) => {
-    const existingIndex = state.images.findIndex(i => i.image === image.image);
+    const existingIndex = state.images.findIndex(i => i.id === image.id);
     if (existingIndex >= 0) {
       Object.assign(state.images[existingIndex], image);
     } else {
       state.images.unshift(image);
-    }
-    const existingAllIndex = state.allImages.findIndex(i => i.image === image.image);
-    if (existingAllIndex >= 0) {
-      Object.assign(state.allImages[existingAllIndex], image);
-    } else {
-      state.allImages.unshift(image);
     }
   },
   
@@ -264,26 +276,18 @@ export const actions = {
     state.searchImage = image;
   },
 
-  deleteImage: (image: string) => {
-    const index = state.images.findIndex(img => img.image === image);
+  deleteImage: (imageId: string) => {
+    const index = state.images.findIndex(img => img.id === imageId);
     if (index !== -1) {
       state.images.splice(index, 1);
     }
-    const allIndex = state.allImages.findIndex(img => img.image === image);
-    if (allIndex !== -1) {
-      state.allImages.splice(allIndex, 1);
-    }
-    canvasActions.removeImageFromCanvas(image);
+    canvasActions.removeImageFromCanvas(imageId);
   },
 
-  updateImage: (image: string, updates: Partial<ImageMeta>) => {
-    const index = state.images.findIndex((img) => img.image === image);
+  updateImage: (imageId: string, updates: Partial<ImageMeta>) => {
+    const index = state.images.findIndex((img) => img.id === imageId);
     if (index !== -1) {
       Object.assign(state.images[index], updates);
-    }
-    const allIndex = state.allImages.findIndex((img) => img.image === image);
-    if (allIndex !== -1) {
-      Object.assign(state.allImages[allIndex], updates);
     }
   },
 };

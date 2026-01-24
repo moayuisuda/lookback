@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'
-import { globalActions, globalState } from './store/globalStore.ts'
+import { globalActions } from './store/globalStore.ts'
 import { i18nActions } from './store/i18nStore.ts'
 import { actions as galleryActions } from './store/galleryStore.ts'
 import { canvasActions } from './store/canvasStore.ts'
@@ -51,9 +51,7 @@ const bootstrap = async () => {
     canvasActions.hydrateSettings(),
   ]);
 
-  if (globalState.pinMode) {
-    window.electron?.setPinMode?.(true, globalState.sidebarWidth);
-  }
+  window.electron?.setPinMode?.(true, 0);
 };
 
 void bootstrap()

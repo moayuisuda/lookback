@@ -1,6 +1,8 @@
 import { proxy } from 'valtio';
 import {
-  fileStorage,
+  settingStorage,
+  getSettingsSnapshot,
+  readSetting,
   loadCanvasImages,
   getCanvasViewport,
 saveCanvasViewport,
@@ -67,7 +69,8 @@ interface CanvasStoreState {
   canvasHistory: CanvasItem[][];
   canvasHistoryIndex: number;
   canvasViewport: CanvasViewport;
-  canvasGrayscale: boolean;
+  canvasGrayscale: boolean; // Deprecated, kept for backward compatibility if needed, but UI should use canvasFilters
+  canvasFilters: string[];
   showMinimap: boolean;
   isCanvasToolbarExpanded: boolean;
 
@@ -96,6 +99,7 @@ export const canvasState = proxy<CanvasStoreState>({
   canvasHistoryIndex: -1,
   canvasViewport: DEFAULT_CANVAS_VIEWPORT,
   canvasGrayscale: false,
+  canvasFilters: [],
   showMinimap: true,
   isCanvasToolbarExpanded: true,
   isClearModalOpen: false,
@@ -120,7 +124,6 @@ const cloneCanvasItem = (item: CanvasItem): CanvasItem => {
   return {
     ...img,
     tags: [...img.tags],
-    vector: Array.isArray(img.vector) ? [...img.vector] : img.vector,
   };
 };
 
@@ -149,7 +152,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
       }
 
       const img = item as CanvasImage;
-      const kind: CanvasPersistedItem['kind'] = img.image.startsWith('temp-images/')
+      const kind: CanvasPersistedItem['kind'] = img.imagePath.startsWith('temp-images/')
         ? 'temp'
         : 'ref';
 
@@ -167,8 +170,8 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
           width: img.width,
           height: img.height,
           grayscale: img.grayscale,
-          image: img.image,
-          pageUrl: img.pageUrl,
+          imagePath: img.imagePath,
+          pageUrl: img.pageUrl ?? undefined,
           tags: [...img.tags],
           createdAt: img.createdAt,
           dominantColor:
@@ -190,7 +193,8 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
         width: img.width,
         height: img.height,
         grayscale: img.grayscale,
-        image: img.image,
+        imageId: img.id,
+        imagePath: img.imagePath,
         dominantColor:
           typeof img.dominantColor === 'string' ? img.dominantColor : null,
         tone: typeof img.tone === 'string' ? img.tone : null,
@@ -219,27 +223,37 @@ const debouncedPersistCanvasViewport = debounce({ delay: 500 }, persistCanvasVie
 export const canvasActions = {
   hydrateSettings: async () => {
     try {
-      const [
-        rawCanvasGrayscale,
-        rawShowMinimap,
-        rawIsCanvasToolbarExpanded,
-      ] = await Promise.all([
-        fileStorage.get<unknown>({
-          key: 'canvasGrayscale',
-          fallback: canvasState.canvasGrayscale,
-        }),
-        fileStorage.get<unknown>({
-          key: 'showMinimap',
-          fallback: canvasState.showMinimap,
-        }),
-        fileStorage.get<unknown>({
-          key: 'isCanvasToolbarExpanded',
-          fallback: canvasState.isCanvasToolbarExpanded,
-        }),
-      ]);
+      const settings = await getSettingsSnapshot();
+      const rawCanvasGrayscale = readSetting<unknown>(
+        settings,
+        'canvasGrayscale',
+        canvasState.canvasGrayscale,
+      );
+      const rawCanvasFilters = readSetting<unknown>(
+        settings,
+        'canvasFilters',
+        canvasState.canvasFilters,
+      );
+      const rawShowMinimap = readSetting<unknown>(
+        settings,
+        'showMinimap',
+        canvasState.showMinimap,
+      );
+      const rawIsCanvasToolbarExpanded = readSetting<unknown>(
+        settings,
+        'isCanvasToolbarExpanded',
+        canvasState.isCanvasToolbarExpanded,
+      );
 
       if (typeof rawCanvasGrayscale === 'boolean') {
         canvasState.canvasGrayscale = rawCanvasGrayscale;
+      }
+
+      if (Array.isArray(rawCanvasFilters)) {
+        canvasState.canvasFilters = rawCanvasFilters as string[];
+      } else if (canvasState.canvasGrayscale && canvasState.canvasFilters.length === 0) {
+        // Migration from legacy boolean
+        canvasState.canvasFilters = ['grayscale'];
       }
 
       if (typeof rawShowMinimap === 'boolean') {
@@ -263,11 +277,11 @@ export const canvasActions = {
     findImageMeta: (id: string) => ImageMeta | null,
   ): Promise<void> => {
     try {
-      const lastActive = await fileStorage.get<string>({
+      const lastActive = await settingStorage.get<string>({
         key: 'lastActiveCanvas',
         fallback: 'Default',
       });
-      canvasState.currentCanvasName = lastActive;
+        canvasState.currentCanvasName = lastActive;
 
       const [itemsRaw, viewportRaw] = await Promise.all([
         loadCanvasImages<CanvasPersistedItem[]>(lastActive).catch(
@@ -303,17 +317,22 @@ export const canvasActions = {
 
         if (item.kind === 'temp') {
           const temp = item;
-          if (!temp.image) return;
+          if (!temp.imagePath) return;
+          const rawName = temp.imagePath.split(/[\\/]/).pop() || temp.imagePath;
+          const dot = rawName.lastIndexOf('.');
+          const filename = dot > 0 ? rawName.slice(0, dot) : rawName;
 
           const img: CanvasImage = {
             type: 'image',
-            image: temp.image,
+            id: `temp_${temp.canvasId}`,
+            filename,
+            imagePath: temp.imagePath,
             pageUrl: temp.pageUrl,
             tags: Array.isArray(temp.tags) ? [...temp.tags] : [],
             createdAt: temp.createdAt || Date.now(),
-            vector: null,
             dominantColor: temp.dominantColor ?? null,
             tone: temp.tone ?? null,
+            hasVector: false,
             canvasId: temp.canvasId,
             x: temp.x,
             y: temp.y,
@@ -331,9 +350,9 @@ export const canvasActions = {
 
         if (item.kind === 'ref' || (!item.kind && item.type === 'image')) {
           const ref = item;
-          if (!ref.image) return;
+          if (!ref.imageId) return;
 
-          const meta = findImageMeta(ref.image);
+          const meta = findImageMeta(ref.imageId);
           if (!meta) return;
 
           const img: CanvasImage = {
@@ -389,7 +408,7 @@ export const canvasActions = {
     );
 
     // Update storage
-    await fileStorage.set('lastActiveCanvas', name);
+    await settingStorage.set('lastActiveCanvas', name);
 
     // Clear state
     canvasState.canvasItems = [];
@@ -480,14 +499,10 @@ export const canvasActions = {
       targetY = baseY + row * spacingY;
     }
 
-    const { vector: _vector, ...cleanImage } = image;
-
-    void _vector;
-
     const canvasId = `img_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     canvasState.canvasItems.push({
       type: 'image',
-      ...cleanImage,
+      ...image,
       canvasId,
       x: targetX,
       y: targetY,
@@ -544,11 +559,11 @@ export const canvasActions = {
     canvasActions.commitCanvasChange();
   },
 
-  removeImageFromCanvas: (imagePath: string) => {
+  removeImageFromCanvas: (imageId: string) => {
     const prevLen = canvasState.canvasItems.length;
     canvasState.canvasItems = canvasState.canvasItems.filter((img) => {
       if (img.type === 'text') return true;
-      return img.image !== imagePath;
+      return img.id !== imageId;
     });
     if (canvasState.canvasItems.length !== prevLen) {
       canvasActions.commitCanvasChange();
@@ -775,13 +790,30 @@ export const canvasActions = {
   },
 
   toggleCanvasGrayscale: () => {
-    canvasState.canvasGrayscale = !canvasState.canvasGrayscale;
-    void fileStorage.set('canvasGrayscale', canvasState.canvasGrayscale);
+    // Legacy support: toggle 'grayscale' in canvasFilters
+    const hasGrayscale = canvasState.canvasFilters.includes('grayscale');
+    if (hasGrayscale) {
+      canvasState.canvasFilters = canvasState.canvasFilters.filter(f => f !== 'grayscale');
+      canvasState.canvasGrayscale = false;
+    } else {
+      canvasState.canvasFilters = [...canvasState.canvasFilters, 'grayscale'];
+      canvasState.canvasGrayscale = true;
+    }
+    void settingStorage.set('canvasFilters', canvasState.canvasFilters);
+    void settingStorage.set('canvasGrayscale', canvasState.canvasGrayscale);
+  },
+
+  setCanvasFilters: (filters: string[]) => {
+    canvasState.canvasFilters = filters;
+    // Sync legacy flag
+    canvasState.canvasGrayscale = filters.includes('grayscale');
+    void settingStorage.set('canvasFilters', filters);
+    void settingStorage.set('canvasGrayscale', canvasState.canvasGrayscale);
   },
 
   toggleCanvasToolbarExpanded: () => {
     canvasState.isCanvasToolbarExpanded = !canvasState.isCanvasToolbarExpanded;
-    void fileStorage.set(
+    void settingStorage.set(
       'isCanvasToolbarExpanded',
       canvasState.isCanvasToolbarExpanded,
     );
@@ -789,6 +821,6 @@ export const canvasActions = {
 
   toggleMinimap: () => {
     canvasState.showMinimap = !canvasState.showMinimap;
-    void fileStorage.set('showMinimap', canvasState.showMinimap);
+    void settingStorage.set('showMinimap', canvasState.showMinimap);
   },
 };

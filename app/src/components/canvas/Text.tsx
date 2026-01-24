@@ -5,14 +5,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import React from "react";
 import {
   Transformer,
-  Path,
   Text as KonvaText,
-  Circle,
   Group,
 } from "react-konva";
 
 import { THEME } from "../../theme";
-const TrashIconPath = "M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3";
+import { CanvasControlButton } from "./CanvasButton";
+import { CANVAS_ICONS } from "./CanvasIcons";
 
 interface CanvasTextProps {
   item: CanvasTextState;
@@ -321,36 +320,23 @@ export const CanvasText = ({
             e.cancelBubble = true;
           }}
         >
-          <Group
+          <CanvasControlButton
             x={deleteOffsetX}
             y={deleteOffsetY}
-            scaleX={btnScale}
-            scaleY={btnScale}
+            scale={btnScale}
+            size={24}
+            fill={THEME.danger}
+            stroke="white"
+            strokeWidth={2}
+            iconPath={CANVAS_ICONS.TRASH.PATH}
+            iconScale={CANVAS_ICONS.TRASH.SCALE}
+            iconOffsetX={CANVAS_ICONS.TRASH.OFFSET_X}
+            iconOffsetY={CANVAS_ICONS.TRASH.OFFSET_Y}
             onClick={(e) => {
               e.cancelBubble = true;
               onDelete();
             }}
-            onMouseEnter={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "pointer";
-            }}
-            onMouseLeave={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "default";
-            }}
-          >
-            <Circle radius={12} fill={THEME.danger} />
-            <Path
-              data={TrashIconPath}
-              stroke="white"
-              strokeWidth={2}
-              lineCap="round"
-              lineJoin="round"
-              scale={{ x: 0.65, y: 0.65 }}
-              x={-8}
-              y={-9}
-            />
-          </Group>
+          />
         </Group>
       )}
     </React.Fragment>

@@ -1,6 +1,6 @@
 import { proxy } from 'valtio';
 import { THEME } from '../theme';
-import { fileStorage } from '../service';
+import { settingStorage, getSettingsSnapshot, readSetting } from '../service';
 import type { I18nKey, I18nMessage, I18nParams } from '../../shared/i18n/types';
 
 export interface EnvInitState {
@@ -117,7 +117,16 @@ export interface GlobalState {
    canvasGroupShortcut: string;
   sidebarWidth: number;
   activeArea: ActiveArea;
-  vectorSearchThreshold: number;
+  isGalleryOpen: boolean;
+  enableVectorSearch: boolean;
+  llmSettings: LLMSettings;
+}
+
+export interface LLMSettings {
+  enabled: boolean;
+  baseUrl: string;
+  key: string;
+  model: string;
 }
 
 const DEFAULT_COLOR_SWATCHES = [
@@ -133,6 +142,9 @@ const DEFAULT_COLOR_SWATCHES = [
   '#ffffff',
   '#0f172a',
 ] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
 const isHexColor = (value: unknown): value is string => {
   if (typeof value !== 'string') return false;
@@ -177,8 +189,8 @@ export const globalState = proxy<GlobalState>({
   tagColors: {},
   colorSwatches: [...DEFAULT_COLOR_SWATCHES],
   toasts: [],
-  pinMode: false,
-  pinTransparent: false,
+  pinMode: true,
+  pinTransparent: true,
   toggleWindowShortcut: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
   canvasOpacity: 1,
   mouseThrough: false,
@@ -188,81 +200,56 @@ export const globalState = proxy<GlobalState>({
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
   sidebarWidth: 320,
   activeArea: null,
-  vectorSearchThreshold: 0.19,
+  isGalleryOpen: true,
+  enableVectorSearch: false,
+  llmSettings: {
+    enabled: false,
+    baseUrl: '',
+    key: '',
+    model: '',
+  },
 });
 
 export const globalActions = {
   hydrateSettings: async () => {
     try {
-      const [
-        rawTagColors,
-        rawColorSwatches,
-        rawSidebarWidth,
-        rawVectorSearchThreshold,
-        rawPinTransparent,
-        rawPinMode,
-        rawToggleWindowShortcut,
-        rawCanvasOpacity,
-        rawMouseThrough,
-        rawCanvasOpacityUpShortcut,
-        rawCanvasOpacityDownShortcut,
-        rawToggleMouseThroughShortcut,
-        rawCanvasGroupShortcut,
-      ] =
-        await Promise.all([
-          fileStorage.get<Record<string, unknown>>({
-            key: 'tagColors',
-            fallback: {},
-          }),
-          fileStorage.get<unknown>({
-            key: 'colorSwatches',
-            fallback: [...DEFAULT_COLOR_SWATCHES],
-          }),
-          fileStorage.get<unknown>({
-            key: 'sidebarWidth',
-            fallback: 320,
-          }),
-          fileStorage.get<unknown>({
-            key: 'vectorSearchThreshold',
-            fallback: 0.19,
-          }),
-          fileStorage.get<unknown>({
-            key: 'pinTransparent',
-            fallback: false,
-          }),
-          fileStorage.get<unknown>({
-            key: 'pinMode',
-            fallback: false,
-          }),
-          fileStorage.get<unknown>({
-            key: 'toggleWindowShortcut',
-            fallback: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
-          }),
-          fileStorage.get<unknown>({
-            key: 'canvasOpacity',
-            fallback: 1,
-          }),
-          fileStorage.get<unknown>({
-            key: 'mouseThrough',
-            fallback: false,
-          }),
-          fileStorage.get<unknown>({
-            key: 'canvasOpacityUpShortcut',
-            fallback: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
-          }),
-          fileStorage.get<unknown>({
-            key: 'canvasOpacityDownShortcut',
-            fallback: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
-          }),
-          fileStorage.get<unknown>({
-            key: 'toggleMouseThroughShortcut',
-            fallback: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
-          }),
-          fileStorage.get<unknown>({
-            key: 'canvasGroupShortcut',
-            fallback: DEFAULT_CANVAS_GROUP_SHORTCUT,
-          }),
-        ]);
+      const settings = await getSettingsSnapshot();
+      const rawTagColors = readSetting<Record<string, unknown>>(settings, 'tagColors', {});
+      const rawColorSwatches = readSetting<unknown>(
+        settings,
+        'colorSwatches',
+        [...DEFAULT_COLOR_SWATCHES],
+      );
+      const rawSidebarWidth = readSetting<unknown>(settings, 'sidebarWidth', 320);
+      const rawToggleWindowShortcut = readSetting<unknown>(
+        settings,
+        'toggleWindowShortcut',
+        DEFAULT_TOGGLE_WINDOW_SHORTCUT,
+      );
+      const rawCanvasOpacity = readSetting<unknown>(settings, 'canvasOpacity', 1);
+      const rawMouseThrough = readSetting<unknown>(settings, 'mouseThrough', false);
+      const rawCanvasOpacityUpShortcut = readSetting<unknown>(
+        settings,
+        'canvasOpacityUpShortcut',
+        DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
+      );
+      const rawCanvasOpacityDownShortcut = readSetting<unknown>(
+        settings,
+        'canvasOpacityDownShortcut',
+        DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
+      );
+      const rawToggleMouseThroughShortcut = readSetting<unknown>(
+        settings,
+        'toggleMouseThroughShortcut',
+        DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+      );
+      const rawCanvasGroupShortcut = readSetting<unknown>(
+        settings,
+        'canvasGroupShortcut',
+        DEFAULT_CANVAS_GROUP_SHORTCUT,
+      );
+      const rawIsGalleryOpen = readSetting<unknown>(settings, 'isGalleryOpen', true);
+      const rawLlmSettings = readSetting<unknown>(settings, 'llmSettings', {});
 
       const nextTagColors: Record<string, string> = {};
       for (const [k, v] of Object.entries(rawTagColors)) {
@@ -285,17 +272,10 @@ export const globalActions = {
 
       globalState.sidebarWidth = ensureSidebarWidth(rawSidebarWidth);
 
-      if (typeof rawVectorSearchThreshold === 'number') {
-        globalState.vectorSearchThreshold = rawVectorSearchThreshold;
-      }
-
-      if (typeof rawPinTransparent === 'boolean') {
-        globalState.pinTransparent = rawPinTransparent;
-      }
-
-      if (typeof rawPinMode === 'boolean') {
-        globalState.pinMode = rawPinMode;
-      }
+      globalState.pinTransparent = true;
+      globalState.pinMode = true;
+      void settingStorage.set('pinTransparent', true);
+      void settingStorage.set('pinMode', true);
 
       if (typeof rawToggleWindowShortcut === 'string' && rawToggleWindowShortcut.trim()) {
         globalState.toggleWindowShortcut = rawToggleWindowShortcut.trim();
@@ -324,6 +304,19 @@ export const globalActions = {
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
         globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
       }
+
+      if (typeof rawIsGalleryOpen === 'boolean') {
+        globalState.isGalleryOpen = rawIsGalleryOpen;
+      }
+
+      if (isRecord(rawLlmSettings)) {
+        globalState.llmSettings = {
+          enabled: typeof rawLlmSettings.enabled === 'boolean' ? (rawLlmSettings.enabled as boolean) : false,
+          baseUrl: typeof rawLlmSettings.baseUrl === 'string' ? (rawLlmSettings.baseUrl as string) : '',
+          key: typeof rawLlmSettings.key === 'string' ? (rawLlmSettings.key as string) : '',
+          model: typeof rawLlmSettings.model === 'string' ? (rawLlmSettings.model as string) : '',
+        };
+      }
     } catch (error) {
       console.error('Failed to hydrate settings:', error);
     }
@@ -350,9 +343,8 @@ export const globalActions = {
     globalState.activeArea = area;
   },
 
-  setVectorSearchThreshold: (threshold: number) => {
-    globalState.vectorSearchThreshold = threshold;
-    void fileStorage.set('vectorSearchThreshold', threshold);
+  setEnableVectorSearch: (enabled: boolean) => {
+    globalState.enableVectorSearch = enabled;
   },
 
   setTagColor: (tag: string, color: string) => {
@@ -360,7 +352,7 @@ export const globalActions = {
     if (!key) return;
     const next = { ...globalState.tagColors, [key]: color };
     globalState.tagColors = next;
-    void fileStorage.set('tagColors', next);
+    void settingStorage.set('tagColors', next);
   },
 
   clearTagColor: (tag: string) => {
@@ -370,7 +362,7 @@ export const globalActions = {
     const next = { ...globalState.tagColors };
     delete next[key];
     globalState.tagColors = next;
-    void fileStorage.set('tagColors', next);
+    void settingStorage.set('tagColors', next);
   },
 
   setColorSwatch: (index: number, color: string) => {
@@ -380,7 +372,7 @@ export const globalActions = {
     const next = [...globalState.colorSwatches];
     next[index] = normalizeHexColor(color);
     globalState.colorSwatches = next;
-    void fileStorage.set('colorSwatches', next);
+    void settingStorage.set('colorSwatches', next);
   },
 
   togglePinMode: () => {
@@ -389,12 +381,12 @@ export const globalActions = {
 
   setPinMode: (enabled: boolean) => {
     globalState.pinMode = enabled;
-    void fileStorage.set('pinMode', enabled);
+    void settingStorage.set('pinMode', enabled);
   },
 
   setPinTransparent: (enabled: boolean) => {
     globalState.pinTransparent = enabled;
-    void fileStorage.set('pinTransparent', enabled);
+    void settingStorage.set('pinTransparent', enabled);
   },
 
   setToggleWindowShortcut: async (accelerator: string) => {
@@ -402,12 +394,12 @@ export const globalActions = {
     if (!next) return false;
     const prev = globalState.toggleWindowShortcut;
     globalState.toggleWindowShortcut = next;
-    await fileStorage.set('toggleWindowShortcut', next);
+    await settingStorage.set('toggleWindowShortcut', next);
 
     const res = await window.electron?.setToggleWindowShortcut?.(next);
     if (res && res.success !== true) {
       globalState.toggleWindowShortcut = prev;
-      await fileStorage.set('toggleWindowShortcut', prev);
+      await settingStorage.set('toggleWindowShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -420,12 +412,12 @@ export const globalActions = {
   setCanvasOpacity: (opacity: number) => {
     const val = Math.max(0.1, Math.min(1, opacity));
     globalState.canvasOpacity = val;
-    void fileStorage.set('canvasOpacity', val);
+    void settingStorage.set('canvasOpacity', val);
   },
 
   setMouseThrough: (enabled: boolean) => {
     globalState.mouseThrough = enabled;
-    void fileStorage.set('mouseThrough', enabled);
+    void settingStorage.set('mouseThrough', enabled);
     window.electron?.setMouseThrough?.(enabled);
   },
 
@@ -434,12 +426,12 @@ export const globalActions = {
     if (!next) return false;
     const prev = globalState.canvasOpacityUpShortcut;
     globalState.canvasOpacityUpShortcut = next;
-    await fileStorage.set('canvasOpacityUpShortcut', next);
+    await settingStorage.set('canvasOpacityUpShortcut', next);
 
     const res = await window.electron?.setCanvasOpacityUpShortcut?.(next);
     if (res && res.success !== true) {
       globalState.canvasOpacityUpShortcut = prev;
-      await fileStorage.set('canvasOpacityUpShortcut', prev);
+      await settingStorage.set('canvasOpacityUpShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -454,12 +446,12 @@ export const globalActions = {
     if (!next) return false;
     const prev = globalState.canvasOpacityDownShortcut;
     globalState.canvasOpacityDownShortcut = next;
-    await fileStorage.set('canvasOpacityDownShortcut', next);
+    await settingStorage.set('canvasOpacityDownShortcut', next);
 
     const res = await window.electron?.setCanvasOpacityDownShortcut?.(next);
     if (res && res.success !== true) {
       globalState.canvasOpacityDownShortcut = prev;
-      await fileStorage.set('canvasOpacityDownShortcut', prev);
+      await settingStorage.set('canvasOpacityDownShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -474,12 +466,12 @@ export const globalActions = {
     if (!next) return false;
     const prev = globalState.toggleMouseThroughShortcut;
     globalState.toggleMouseThroughShortcut = next;
-    await fileStorage.set('toggleMouseThroughShortcut', next);
+    await settingStorage.set('toggleMouseThroughShortcut', next);
 
     const res = await window.electron?.setToggleMouseThroughShortcut?.(next);
     if (res && res.success !== true) {
       globalState.toggleMouseThroughShortcut = prev;
-      await fileStorage.set('toggleMouseThroughShortcut', prev);
+      await settingStorage.set('toggleMouseThroughShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -494,12 +486,12 @@ export const globalActions = {
     if (!next) return false;
     const prev = globalState.canvasGroupShortcut;
     globalState.canvasGroupShortcut = next;
-    await fileStorage.set('canvasGroupShortcut', next);
+    await settingStorage.set('canvasGroupShortcut', next);
 
     const res = await window.electron?.setCanvasGroupShortcut?.(next);
     if (res && res.success !== true) {
       globalState.canvasGroupShortcut = prev;
-      await fileStorage.set('canvasGroupShortcut', prev);
+      await settingStorage.set('canvasGroupShortcut', prev);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -513,7 +505,18 @@ export const globalActions = {
     globalState.sidebarWidth = width;
   },
 
+  setGalleryOpen: (isOpen: boolean) => {
+    globalState.isGalleryOpen = isOpen;
+    void settingStorage.set('isGalleryOpen', isOpen);
+  },
+
   persistSidebarWidth: () => {
-    void fileStorage.set('sidebarWidth', globalState.sidebarWidth);
+    void settingStorage.set('sidebarWidth', globalState.sidebarWidth);
+  },
+
+  setLlmSettings: (settings: Partial<LLMSettings>) => {
+    const next = { ...globalState.llmSettings, ...settings };
+    globalState.llmSettings = next;
+    void settingStorage.set('llmSettings', next);
   },
 };

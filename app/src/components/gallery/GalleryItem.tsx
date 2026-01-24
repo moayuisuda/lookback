@@ -4,6 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { type ImageMeta, type SearchResult, deriveNameFromFilename, getImageUrl } from "../../store/galleryStore";
 import { Tag } from "../Tag";
 import { useT } from "../../i18n/useT";
+import { Sparkles } from "lucide-react";
 
 interface SortableGalleryItemProps {
   image: ImageMeta;
@@ -31,7 +32,7 @@ export const SortableGalleryItem: React.FC<SortableGalleryItemProps> = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: image.image });
+  } = useSortable({ id: image.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -41,12 +42,13 @@ export const SortableGalleryItem: React.FC<SortableGalleryItemProps> = ({
     zIndex: isDragging ? 999 : "auto",
   };
 
-  const name = deriveNameFromFilename(image.image);
+  const name = deriveNameFromFilename(image.filename);
+  const score = "score" in image ? (image as SearchResult).score : undefined;
 
   return (
     <div
       ref={setNodeRef}
-      id={image.image}
+      id={image.id}
       style={style}
       {...attributes}
       {...listeners}
@@ -59,7 +61,7 @@ export const SortableGalleryItem: React.FC<SortableGalleryItemProps> = ({
         onClick={() => onClick(image)}
       >
         <img
-          src={getImageUrl(image.image)}
+          src={getImageUrl(image.imagePath)}
           alt={name || t("gallery.referenceAlt")}
           className="w-full bg-neutral-800 transition-transform duration-300 group-hover:scale-105"
           loading="lazy"
@@ -74,21 +76,30 @@ export const SortableGalleryItem: React.FC<SortableGalleryItemProps> = ({
               {name}
             </div>
           )}
-          {import.meta.env.DEV && "score" in image && (
+          {import.meta.env.DEV && score !== undefined && (
             <div
               className="px-2 py-1 rounded bg-black/30 backdrop-blur-sm text-white text-[8px] font-normal leading-none truncate w-fit max-w-full"
-              title={`Score: ${(image as SearchResult).score}`}
+              title={`Score: ${score.toFixed(4)}`}
             >
-              {(image as SearchResult).score.toFixed(4)}
+              {score.toFixed(4)}
             </div>
           )}
         </div>
 
-        {enableVectorSearch && !Array.isArray(image.vector) && (
+        {enableVectorSearch && !image.hasVector && (
           <div
             className="absolute top-2 right-2 w-2 h-2 rounded-full bg-yellow-500 shadow-sm"
             title={t("gallery.notIndexed")}
           />
+        )}
+
+        {image.isVectorResult && (
+          <div
+            className="absolute top-2 right-2 p-1 rounded bg-purple-500/80 backdrop-blur-sm text-white shadow-sm"
+            title={t("gallery.vectorResult")}
+          >
+            <Sparkles size={10} strokeWidth={3} />
+          </div>
         )}
 
         <div className="absolute bottom-0 left-0 right-0 p-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">

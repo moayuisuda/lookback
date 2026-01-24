@@ -1,35 +1,49 @@
-import { useEffect, useRef } from 'react';
-import { TitleBar } from './components/TitleBar';
-import { Gallery } from './components/Gallery';
-import { Canvas } from './components/Canvas';
-import { EnvInitModal } from './components/EnvInitModal';
-import { state as galleryState, actions as galleryActions } from './store/galleryStore';
-import { THEME } from './theme';
+import { useEffect, useRef } from "react";
+import { TitleBar } from "./components/TitleBar";
+import { Gallery } from "./components/Gallery";
+import { Canvas } from "./components/Canvas";
+import { EnvInitModal } from "./components/EnvInitModal";
+import {
+  state as galleryState,
+  actions as galleryActions,
+} from "./store/galleryStore";
+import { THEME } from "./theme";
 import {
   globalActions,
   globalState,
   envInitActions,
   type EnvInitState,
   type ToastType,
-} from './store/globalStore';
-import type { ImageMeta } from './store/galleryStore';
-import { canvasActions } from './store/canvasStore';
-import { useSnapshot } from 'valtio';
+} from "./store/globalStore";
+import type { ImageMeta } from "./store/galleryStore";
+import { canvasActions, canvasState } from "./store/canvasStore";
+import { useSnapshot } from "valtio";
+import { clsx } from "clsx";
 
-import { importFiles } from './utils/import';
-import { API_BASE_URL } from './config';
-import { useT } from './i18n/useT';
-import { isI18nKey } from '../shared/i18n/guards';
+import { createTempMetasFromFiles, importFiles } from "./utils/import";
+import { useT } from "./i18n/useT";
+import { isI18nKey } from "../shared/i18n/guards";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
+  typeof value === "object" && value !== null;
 
 const isImageMeta = (value: unknown): value is ImageMeta => {
   if (!isRecord(value)) return false;
-  if (typeof value.image !== 'string') return false;
-  if (!Array.isArray(value.tags) || !value.tags.every(t => typeof t === 'string')) return false;
-  if (typeof value.createdAt !== 'number') return false;
-  if (value.dominantColor !== undefined && value.dominantColor !== null && typeof value.dominantColor !== 'string') return false;
+  if (typeof value.id !== "string") return false;
+  if (typeof value.filename !== "string") return false;
+  if (typeof value.imagePath !== "string") return false;
+  if (
+    !Array.isArray(value.tags) ||
+    !value.tags.every((t) => typeof t === "string")
+  )
+    return false;
+  if (typeof value.createdAt !== "number") return false;
+  if (
+    value.dominantColor !== undefined &&
+    value.dominantColor !== null &&
+    typeof value.dominantColor !== "string"
+  )
+    return false;
   return true;
 };
 
@@ -37,24 +51,26 @@ function App() {
   const globalSnap = useSnapshot(globalState);
   const isResizingRef = useRef(false);
   const { t } = useT();
-  const isPinTransparent = globalSnap.pinMode && globalSnap.pinTransparent;
+  const galleryTransform = globalSnap.isGalleryOpen
+    ? "translate3d(0,0,0)"
+    : "translate3d(-100%,0,0)";
 
   // Removed useEffect for pinMode resizeWindowBy as it is now handled atomically in TitleBar
 
   useEffect(() => {
     // 监听 Electron 传来的新收藏
     const cleanupNew = window.electron?.onNewCollection((data) => {
-      console.log('New collection received:', data);
+      console.log("New collection received:", data);
       if (isImageMeta(data)) {
         galleryActions.addImage(data);
       }
     });
-    
+
     // 监听更新 (例如向量生成完毕)
     const cleanupUpdate = window.electron?.onImageUpdated((data) => {
-      console.log('Image update received:', data);
-      if (isRecord(data) && typeof data.image === 'string') {
-        galleryActions.updateImage(data.image, data as Partial<ImageMeta>);
+      console.log("Image update received:", data);
+      if (isRecord(data) && typeof data.id === "string") {
+        galleryActions.updateImage(data.id, data as Partial<ImageMeta>);
       }
     });
 
@@ -70,43 +86,22 @@ function App() {
       if (!isRecord(data)) return;
       if (!isI18nKey(data.key)) return;
       const type =
-        data.type === 'success' || data.type === 'error' || data.type === 'warning' || data.type === 'info'
+        data.type === "success" ||
+        data.type === "error" ||
+        data.type === "warning" ||
+        data.type === "info"
           ? (data.type as ToastType)
-          : 'info';
-      const params = isRecord(data.params) ? (data.params as Record<string, string | number>) : undefined;
+          : "info";
+      const params = isRecord(data.params)
+        ? (data.params as Record<string, string | number>)
+        : undefined;
       globalActions.pushToast({ key: data.key, params }, type);
     });
 
-    void (async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/images`);
-        if (!res.ok) {
-          const payload = (await res.json().catch(() => null)) as { code?: unknown } | null;
-          if (payload && payload.code === 'STORAGE_INCOMPATIBLE') {
-            globalActions.pushToast(
-              { key: 'toast.storageIncompatible' },
-              'error',
-            );
-            return;
-          }
-          throw new Error(`Failed to fetch images: ${res.status}`);
-        }
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          galleryActions.setImages(data);
-          galleryActions.setAllImages(data);
-        }
-      } catch (err) {
-        console.error('Failed to fetch images:', err);
-      } finally {
-        canvasActions.initCanvas((imagePath) => {
-          const meta =
-            galleryState.allImages.find((m) => m.image === imagePath) ||
-            galleryState.images.find((m) => m.image === imagePath);
-          return meta ?? null;
-        });
-      }
-    })();
+    canvasActions.initCanvas((imageId) => {
+      const meta = galleryState.images.find((m) => m.id === imageId);
+      return meta ?? null;
+    });
 
     return () => {
       cleanupNew?.();
@@ -119,7 +114,10 @@ function App() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizingRef.current) return;
-      const newWidth = Math.max(200, Math.min(e.clientX, document.body.clientWidth - 200));
+      const newWidth = Math.max(
+        200,
+        Math.min(e.clientX, document.body.clientWidth - 200),
+      );
       globalActions.setSidebarWidth(newWidth);
     };
 
@@ -128,53 +126,84 @@ function App() {
         globalActions.persistSidebarWidth();
       }
       isResizingRef.current = false;
-      document.body.style.cursor = 'default';
-      document.body.style.userSelect = '';
+      document.body.style.cursor = "default";
+      document.body.style.userSelect = "";
     };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
     };
   }, []);
 
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
+      if (document.hidden) return;
       // 1. Try to get files directly (works for Finder files and most screenshots)
       let files = Array.from(e.clipboardData?.files || []);
-      
+
       // 2. If no files found, check items (some browsers/OS might put image data here without populating files)
       if (files.length === 0 && e.clipboardData?.items) {
         const items = Array.from(e.clipboardData.items);
         files = items
-          .filter(item => item.type.startsWith('image/'))
-          .map(item => item.getAsFile())
+          .filter((item) => item.type.startsWith("image/"))
+          .map((item) => item.getAsFile())
           .filter((f): f is File => f !== null);
       }
 
       if (files.length > 0) {
         e.preventDefault();
-        
-        const metas = await importFiles(files);
-        void metas;
+
+        if (globalState.isGalleryOpen) {
+          await importFiles(files);
+          return;
+        }
+
+        const { canvasViewport, dimensions } = canvasState;
+        const width = dimensions.width || canvasViewport.width;
+        const height = dimensions.height || canvasViewport.height;
+        const scale = canvasViewport.scale || 1;
+        const hasViewport =
+          Number.isFinite(width) &&
+          Number.isFinite(height) &&
+          width > 0 &&
+          height > 0 &&
+          Number.isFinite(canvasViewport.x) &&
+          Number.isFinite(canvasViewport.y) &&
+          Number.isFinite(scale) &&
+          scale > 0;
+        const center = hasViewport
+          ? {
+              x: (width / 2 - canvasViewport.x) / scale,
+              y: (height / 2 - canvasViewport.y) / scale,
+            }
+          : null;
+
+        const metas = await createTempMetasFromFiles(files);
+        metas.forEach((meta, index) => {
+          if (!center) {
+            canvasActions.addToCanvas(meta);
+            return;
+          }
+          const offset = index * 24;
+          canvasActions.addToCanvas(meta, center.x + offset, center.y + offset);
+        });
       }
     };
 
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
   }, []);
 
   return (
     <div
-      onMouseEnter={() => window.electron?.focus()}
-      className={
-        isPinTransparent
-          ? 'flex flex-col h-screen bg-transparent text-white overflow-hidden'
-          : 'flex flex-col h-screen bg-neutral-950 text-white overflow-hidden'
-      }
+      className={clsx(
+        "flex flex-col h-screen text-white overflow-hidden",
+        globalSnap.mouseThrough ? "bg-transparent" : "bg-neutral-950/85",
+      )}
     >
       <TitleBar />
       <EnvInitModal />
@@ -182,13 +211,13 @@ function App() {
         <div className="fixed right-4 top-10 z-[9999] flex flex-col gap-2 no-drag">
           {globalSnap.toasts.map((toast) => {
             const tone =
-              toast.type === 'success'
-                ? 'border-emerald-700/60 bg-emerald-950/80 text-emerald-100'
-                : toast.type === 'error'
-                  ? 'border-red-700/60 bg-red-950/80 text-red-100'
-                  : toast.type === 'warning'
-                    ? 'border-yellow-700/60 bg-yellow-950/80 text-yellow-100'
-                    : 'border-neutral-700/70 bg-neutral-900/90 text-neutral-100';
+              toast.type === "success"
+                ? "border-emerald-700/60 bg-emerald-950/80 text-emerald-100"
+                : toast.type === "error"
+                  ? "border-red-700/60 bg-red-950/80 text-red-100"
+                  : toast.type === "warning"
+                    ? "border-yellow-700/60 bg-yellow-950/80 text-yellow-100"
+                    : "border-neutral-700/70 bg-neutral-900/90 text-neutral-100";
             return (
               <button
                 key={toast.id}
@@ -202,33 +231,33 @@ function App() {
           })}
         </div>
       )}
-      <div 
-        className="flex flex-1 overflow-hidden"
-        style={{ opacity: globalSnap.canvasOpacity }}
-      >
-        {!globalSnap.pinMode && (
-          <>
-            <Gallery />
-            <div
-              className="w-1 bg-neutral-800 hover:bg-[var(--resize-hover)] cursor-col-resize transition-colors z-10"
-              style={{ '--resize-hover': THEME.primary } as React.CSSProperties}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                isResizingRef.current = true;
-                document.body.style.cursor = 'col-resize';
-                document.body.style.userSelect = 'none';
-              }}
-            />
-          </>
+      <div
+        className={clsx(
+          "relative flex flex-1 overflow-hidden transition-colors duration-300",
         )}
-        <Canvas />
-      </div>
-      {isPinTransparent && (
+      >
         <div
-          className="fixed bottom-1.5 right-1.5 w-2.5 h-2.5 rounded-full z-[9999] shadow-lg draggable cursor-move"
-          style={{ backgroundColor: THEME.primary }}
-        />
-      )}
+          className={clsx(
+            "absolute top-0 left-0 bottom-0 z-20 flex h-full transition-transform duration-300 ease-in-out",
+          )}
+          style={{ transform: galleryTransform, willChange: "transform" }}
+        >
+          <Gallery />
+          <div
+            className="w-1 bg-neutral-800/50 hover:bg-[var(--resize-hover)] cursor-col-resize transition-colors"
+            style={{ "--resize-hover": THEME.primary } as React.CSSProperties}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              isResizingRef.current = true;
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+            }}
+          />
+        </div>
+        <div className="flex-1 w-full h-full">
+          <Canvas />
+        </div>
+      </div>
     </div>
   );
 }

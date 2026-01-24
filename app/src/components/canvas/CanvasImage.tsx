@@ -1,20 +1,17 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useMemo } from "react";
 import {
   Group,
   Image as KonvaImage,
   Transformer,
-  Circle,
-  Path,
 } from "react-konva";
 import useImage from "use-image";
 import Konva from "konva";
 import { type CanvasImage as CanvasImageState, getImageUrl } from "../../store/galleryStore";
 import { canvasActions } from "../../store/canvasStore";
 import { THEME } from "../../theme";
-
-const TrashIconPath = "M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3";
-const FlipIconPath = "M7 7l-3 3 3 3M17 7l3 3-3 3M4 10h16";
-const GRAYSCALE_FILTERS = [Konva.Filters.Grayscale];
+import { CanvasControlButton } from "./CanvasButton";
+import { CANVAS_ICONS } from "./CanvasIcons";
+import { getKonvaFilters, applyFilterConfigs } from "../../utils/imageFilters";
 
 interface CanvasImageProps {
   image: CanvasImageState;
@@ -30,6 +27,7 @@ interface CanvasImageProps {
   onCommit: (next: Partial<CanvasImageState>) => void;
   onDelete: () => void;
   globalGrayscale: boolean;
+  globalFilters: readonly string[];
 }
 
 export const CanvasImage: React.FC<CanvasImageProps> = ({
@@ -46,13 +44,29 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   onCommit,
   onDelete,
   globalGrayscale,
+  globalFilters = [],
 }) => {
-  const [img] = useImage(getImageUrl(image.image), "anonymous");
+  const [img] = useImage(getImageUrl(image.imagePath), "anonymous");
   const groupRef = useRef<Konva.Group>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const imgRef = useRef<Konva.Image>(null);
 
-  const isGrayscale = image.grayscale || globalGrayscale;
+  // Compute final filter list
+  const activeFilters = useMemo(() => {
+    const filters = new Set<string>();
+    
+    // Legacy support
+    if (globalGrayscale) filters.add('grayscale');
+    if (image.grayscale) filters.add('grayscale');
+
+    // New filter system
+    globalFilters.forEach(f => filters.add(f));
+    (image.filters || []).forEach(f => filters.add(f));
+
+    return Array.from(filters);
+  }, [globalGrayscale, image.grayscale, globalFilters, image.filters]);
+
+  const konvaFilters = useMemo(() => getKonvaFilters(activeFilters), [activeFilters]);
 
   useEffect(() => {
     const node = imgRef.current;
@@ -61,12 +75,15 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
     // Always clear cache first to ensure we don't have stale cache
     node.clearCache();
 
-    if (isGrayscale) {
+    if (activeFilters.length > 0) {
+      // Apply configs (like posterize levels)
+      applyFilterConfigs(node, activeFilters);
+
       // Cache is required for filters to work
       // Limit pixelRatio to 1 to avoid huge textures on retina screens which cause lag during drag
       node.cache({ pixelRatio: 1 });
     }
-  }, [isGrayscale, img, image.width, image.height]);
+  }, [activeFilters, img, image.width, image.height]);
 
   useEffect(() => {
     if (img && (image.width !== img.width || image.height !== img.height)) {
@@ -177,7 +194,7 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
       >
         <KonvaImage
           ref={imgRef}
-          filters={isGrayscale ? GRAYSCALE_FILTERS : undefined}
+          filters={konvaFilters.length > 0 ? konvaFilters : undefined}
           image={img}
           width={image.width}
           height={image.height}
@@ -216,79 +233,40 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
             e.cancelBubble = true;
           }}
         >
-          <Group
+          <CanvasControlButton
             x={0}
             y={0}
-            scaleX={btnScale}
-            scaleY={btnScale}
+            scale={btnScale}
+            size={24}
+            fill={THEME.primary}
+            stroke="white"
+            strokeWidth={2}
+            iconPath={CANVAS_ICONS.FLIP.PATH}
+            iconScale={CANVAS_ICONS.FLIP.SCALE}
+            iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
+            iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
             onClick={(e) => {
               e.cancelBubble = true;
               handleFlip();
             }}
-            onMouseEnter={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "pointer";
-            }}
-            onMouseLeave={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "default";
-            }}
-          >
-            <Circle
-              radius={12}
-              fill={THEME.primary}
-              shadowColor="black"
-              shadowBlur={5}
-              shadowOpacity={0.3}
-            />
-            <Path
-              data={FlipIconPath}
-              stroke="white"
-              strokeWidth={2}
-              lineCap="round"
-              lineJoin="round"
-              scale={{ x: 0.8, y: 0.8 }}
-              x={-10}
-              y={-8}
-            />
-          </Group>
-
-          <Group
+          />
+          <CanvasControlButton
             x={image.width || 100}
             y={0}
-            scaleX={btnScale}
-            scaleY={btnScale}
+            scale={btnScale}
+            size={24}
+            fill={THEME.danger}
+            stroke="white"
+            strokeWidth={2}
+            iconPath={CANVAS_ICONS.TRASH.PATH}
+            iconScale={CANVAS_ICONS.TRASH.SCALE}
+            iconOffsetX={CANVAS_ICONS.TRASH.OFFSET_X}
+            iconOffsetY={CANVAS_ICONS.TRASH.OFFSET_Y}
             onClick={(e) => {
               e.cancelBubble = true;
               onDelete();
             }}
-            onMouseEnter={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "pointer";
-            }}
-            onMouseLeave={(e) => {
-              const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = "default";
-            }}
-          >
-            <Circle
-              radius={12}
-              fill={THEME.danger}
-              shadowColor="black"
-              shadowBlur={5}
-              shadowOpacity={0.3}
-            />
-            <Path
-              data={TrashIconPath}
-              stroke="white"
-              strokeWidth={2}
-              lineCap="round"
-              lineJoin="round"
-              scale={{ x: 0.65, y: 0.65 }}
-              x={-8}
-              y={-9}
-            />
-          </Group>
+          />
         </Group>
       )}
     </>
