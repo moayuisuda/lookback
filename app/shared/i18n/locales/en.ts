@@ -49,6 +49,7 @@ export const en = {
   'toast.logCopyFailed': 'Failed to copy log',
   'toast.tagRenamed': 'Tag renamed',
   'toast.tagRenameFailed': 'Failed to rename tag',
+  'toast.updateTagsFailed': 'Failed to update tags',
   'toast.updateDominantColorFailed': 'Failed to update dominant color',
   'toast.updateNameFailed': 'Failed to update name',
   'toast.imageDeleted': 'Image deleted',

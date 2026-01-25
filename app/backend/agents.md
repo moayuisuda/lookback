@@ -13,19 +13,21 @@
     - `tags` / `vector` / `dominantColor` 的类型不合法（例如 tags 不是数组）
   - 新增字段缺失不视为不兼容：例如 `name` 通常会从 `image` 文件名推导并在读/索引时补齐；但对 x.com/twitter.com 与 pinterest.* 页面来源的采集，如果扩展未解析到 `name`，服务端会保持为空，前端据此不展示 name。
   - 提供索引相关 API：重新索引、批量索引缺失向量（`/api/index-missing`）。
-  - 提供检索 API：Tag 过滤 + 向量相似度检索 + 颜色近似过滤（`/api/search`）。
--  - 搜索响应策略：先返回快速结果（name/tag/color），向量相似度结果异步推送到渲染进程更新。
+-  - 检索 API 统一为 `/api/images`，文本与向量通过 `mode` 切换，返回结果带 `isVectorResult` 标记。
+-  - 搜索响应策略：文本结果先返回，向量结果异步请求后合并展示。
   - **搜索优化**：CLIP 向量检索前，会自动调用免费翻译 API 将搜索词转换为英文，以提高非英文搜索的匹配准确度。
-  - 仅使用颜色/色调筛选时，基于图库顺序筛选再分页返回。
-  - 颜色相似度使用 OKLCH 距离，并根据色度调整色相权重。
+-  - 颜色/色调过滤在 SQL 内完成，分页游标与过滤条件一致。
+-  - 颜色相似度使用 OKLCH 距离，OKLCH 分量持久化并建索引。
   - 提供元数据更新 API：Tag 更新、主体色（dominantColor）更新、名称（name）更新（用于右键菜单编辑与文件名搜索）。
   - **并发控制**：通过 `fileLock.ts` 的 `KeyedMutex`/`lockedFs` 将本地文件读写串行化。
   - 异步的颜色/色调处理使用独立错误捕获，避免未处理拒绝中断主流程。
   - 模型目录 `model/` 与 `images/`、`canvas_temp/`、`canvases/` 同级，位于 storage 根目录下。
+  - images 路由统一游标解析与 nextCursor 生成，减少分页分支重复。
 - **Database (`db.ts`)**
   - 所有更新语句使用完整命名参数绑定，避免遗漏导致运行时错误。
--  - 向量写入与检索使用 `Float32Array` 绑定，确保 sqlite-vss 参数类型稳定。
-  - 使用 vss_search 时在 vss 查询层提供 LIMIT。
+  - 向量写入与检索使用 `Float32Array` 绑定，确保 sqlite-vec 参数类型稳定。
+  - 向量写入前保证 rowid 为整数，vss 查询候选量设置上限避免大 offset 开销。
+-  - 文本检索与向量检索使用游标分页（createdAt/rowid 与 distance/rowid），颜色过滤在 SQL 内执行。
 - **Python Vector Service (`python/tagger.py`)**
   - 常驻加载 CLIP 模型，提供图片/文本向量生成能力。
   - 提供图片主体色提取能力（偏向高色彩像素聚合），用于颜色过滤。

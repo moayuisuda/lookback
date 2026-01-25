@@ -9,9 +9,9 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   setPinMode: (enabled, widthDelta) => import_electron.ipcRenderer.send("set-pin-mode", { enabled, widthDelta }),
   setPinTransparent: (enabled) => import_electron.ipcRenderer.send("set-pin-transparent", enabled),
   resizeWindowBy: (delta) => import_electron.ipcRenderer.send("resize-window-by", delta),
-  setWindowBounds: (bounds) => import_electron.ipcRenderer.send("set-window-bounds", bounds),
   setToggleWindowShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-window-shortcut", accelerator),
   setToggleMouseThroughShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-mouse-through-shortcut", accelerator),
+  setMouseThrough: (enabled) => import_electron.ipcRenderer.send("set-mouse-through", enabled),
   setIgnoreMouseEvents: (ignore, options) => import_electron.ipcRenderer.send("set-ignore-mouse-events", ignore, options),
   onRendererEvent: (callback) => {
     const handler = (_, event, ...args) => callback(event, ...args);
@@ -22,6 +22,11 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   getStorageDir: () => import_electron.ipcRenderer.invoke("get-storage-dir"),
   chooseStorageDir: () => import_electron.ipcRenderer.invoke("choose-storage-dir"),
   openExternal: (url) => import_electron.ipcRenderer.invoke("open-external", url),
+  onNewCollection: (callback) => {
+    const handler = (_, data) => callback(data);
+    import_electron.ipcRenderer.on("new-collection", handler);
+    return () => import_electron.ipcRenderer.off("new-collection", handler);
+  },
   onImageUpdated: (callback) => {
     const handler = (_, data) => callback(data);
     import_electron.ipcRenderer.on("image-updated", handler);

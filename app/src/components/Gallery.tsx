@@ -9,7 +9,7 @@ import { Tag } from "./Tag";
 import { THEME } from "../theme";
 import { SortableGalleryItem } from "./gallery/GalleryItem";
 import { importFiles, scanDroppedItems } from "../utils/import";
-import { deleteImage, fetchImages, fetchVectorImages, indexImages, localApi, updateImage, moveGalleryOrder } from "../service";
+import { indexImages, localApi, updateImage, moveGalleryOrder } from "../service";
 import {
   DndContext,
   closestCenter,
@@ -38,7 +38,6 @@ import { GalleryEmptyState } from "./gallery/EmptyState";
 import { GalleryHeader } from "./gallery/GalleryHeader";
 import { onOpenTagColorPicker } from "../events/uiEvents";
 import { useT } from "../i18n/useT";
-import { translateToClipFriendly } from "../llmService";
 
 const ensureTags = (tags: string[] | undefined | null): string[] =>
   Array.isArray(tags) ? tags : [];
@@ -151,30 +150,6 @@ export const Gallery: React.FC = () => {
   // Dynamic Columns
   const galleryRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(2);
-  const [limit, setLimit] = useState(50);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [vectorLoading, setVectorLoading] = useState(false);
-  
-  const requestSessionRef = useRef<{
-    id: number;
-    controller: AbortController;
-  } | null>(null);
-  const requestSessionIdRef = useRef(0);
-  
-  // Cache for LLM translation to avoid redundant requests on pagination
-  const translationCacheRef = useRef<{
-    original: string;
-    translated: string;
-    llmFingerprint: string;
-  } | null>(null);
-
-  const getLlmFingerprint = useCallback(() => {
-    const s = appSnap.llmSettings;
-    if (!s?.enabled) return "disabled";
-    return `${s.baseUrl}|${s.model}`;
-  }, [appSnap.llmSettings]);
 
   // DnD Sensors
   const sensors = useSensors(
@@ -187,39 +162,6 @@ export const Gallery: React.FC = () => {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
-
-  const startRequestSession = useCallback(() => {
-    requestSessionRef.current?.controller.abort();
-    const controller = new AbortController();
-    const id = requestSessionIdRef.current + 1;
-    requestSessionIdRef.current = id;
-    requestSessionRef.current = { id, controller };
-    return { id, controller };
-  }, []);
-
-  const isRequestSessionActive = useCallback(
-    (id: number, controller: AbortController) => {
-      return (
-        requestSessionRef.current?.id === id &&
-        requestSessionRef.current?.controller === controller &&
-        !controller.signal.aborted
-      );
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const query = snap.searchQuery.trim();
-    const fingerprint = getLlmFingerprint();
-    const cache = translationCacheRef.current;
-    if (!query) {
-      translationCacheRef.current = null;
-      return;
-    }
-    if (cache && (cache.original !== query || cache.llmFingerprint !== fingerprint)) {
-      translationCacheRef.current = null;
-    }
-  }, [snap.searchQuery, getLlmFingerprint]);
 
   useEffect(() => {
     return onOpenTagColorPicker(({ tag, x, y }) => {
@@ -246,195 +188,55 @@ export const Gallery: React.FC = () => {
           GALLERY_LIMIT_MIN,
           Math.round(rows * cols * GALLERY_LIMIT_BUFFER)
         );
-        setLimit((prev) =>
-          Math.abs(prev - newLimit) > GALLERY_LIMIT_DELTA ? newLimit : prev
-        );
+        // Use direct state access to avoid dependency cycle in useEffect
+        if (Math.abs(galleryState.limit - newLimit) > GALLERY_LIMIT_DELTA) {
+          actions.setLimit(newLimit);
+        }
       }
     });
     observer.observe(galleryRef.current);
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    // Reset offset when limits changes to avoid gaps
-  }, [limit]);
+  const loadImages = useCallback((isReload: boolean, currentLimit: number) => {
+    void actions.loadImages(isReload, currentLimit);
+  }, []);
 
-  useEffect(() => {
-    // Offset effect removed, handled by loadMore
-  }, [offset]);
-
-  const loadImages = useCallback(
-    async (isReload: boolean, currentLimit: number, currentOffset: number) => {
-      const { id, controller } = startRequestSession();
-
-      const isActive = () => isRequestSessionActive(id, controller);
-
-      setLoading(true);
-
-      const query = snap.searchQuery.trim();
-      const searchTags = snap.searchTags;
-      const searchColor = snap.searchColor;
-      const searchTone = snap.searchTone;
-
-      const shouldVectorSearch = Boolean(query && appSnap.enableVectorSearch);
-      setVectorLoading(shouldVectorSearch);
-
-      const textPromise = fetchImages<ImageMeta[]>(
-        {
-          query,
-          tags: [...searchTags],
-          color: searchColor,
-          tone: searchTone,
-          limit: currentLimit,
-          offset: currentOffset,
-        },
-        { signal: controller.signal },
-      );
-
-      if (shouldVectorSearch) {
-        void (async () => {
-          let searchQ = query;
-
-          if (appSnap.llmSettings?.enabled) {
-            const fingerprint = getLlmFingerprint();
-            if (
-              translationCacheRef.current?.original === query &&
-              translationCacheRef.current?.llmFingerprint === fingerprint
-            ) {
-              searchQ = translationCacheRef.current.translated;
-            } else {
-              try {
-                const translated = await translateToClipFriendly(query, appSnap.llmSettings, {
-                  signal: controller.signal,
-                });
-                if (!isActive()) return;
-                translationCacheRef.current = { original: query, translated, llmFingerprint: fingerprint };
-                searchQ = translated;
-              } catch (e) {
-                if (!isActive()) return;
-                if (
-                  e &&
-                  typeof e === "object" &&
-                  "name" in e &&
-                  (e as { name?: string }).name === "AbortError"
-                ) {
-                  return;
-                }
-                console.error("Translation failed", e);
-                globalActions.pushToast(
-                  {
-                    key: "toast.llmTranslationFailed",
-                    params: { error: (e as Error).message },
-                  },
-                  "error",
-                );
-              }
-            }
-          }
-
-          if (!isActive()) return;
-
-          try {
-            const data = await fetchVectorImages<ImageMeta[]>(
-              {
-                query: searchQ,
-                tags: [...searchTags],
-                color: searchColor,
-                tone: searchTone,
-                limit: currentLimit,
-                offset: currentOffset,
-              },
-              { signal: controller.signal },
-            );
-            if (!isActive()) return;
-            if (Array.isArray(data) && data.length > 0) {
-              const vectorData = data.map((i) => ({ ...i, isVectorResult: true }));
-              actions.mergeImages(vectorData);
-            }
-          } catch (err) {
-            if (!isActive()) return;
-            if (
-              err &&
-              typeof err === "object" &&
-              "name" in err &&
-              (err as { name?: string }).name === "AbortError"
-            ) {
-              return;
-            }
-            console.error("Vector search failed", err);
-          } finally {
-            if (isActive()) {
-              setVectorLoading(false);
-            }
-          }
-        })();
-      }
-
-      try {
-        const data = await textPromise;
-        if (!isActive()) return;
-
-        if (Array.isArray(data)) {
-          if (isReload) {
-            actions.setImages(data);
-          } else {
-            actions.appendImages(data);
-          }
-          setHasMore(data.length === currentLimit);
-        }
-      } catch (err) {
-        if (!isActive()) return;
-        const status = (err as Error & { status?: number }).status;
-        if (status === 409) {
-          globalActions.pushToast({ key: "toast.storageIncompatible" }, "error");
-        }
-      } finally {
-        if (isActive()) {
-          setLoading(false);
-        }
-      }
-    },
-    [
-      startRequestSession,
-      isRequestSessionActive,
-      snap.searchQuery,
-      snap.searchTags,
-      snap.searchColor,
-      snap.searchTone,
-      appSnap.enableVectorSearch,
-      appSnap.llmSettings,
-      getLlmFingerprint,
-    ],
+  const debouncedReload = useMemo(
+    () =>
+      debounce({ delay: 200 }, (nextLimit: number) => {
+        actions.resetSearchResults();
+        void loadImages(true, nextLimit);
+      }),
+    [loadImages],
   );
 
   // Search conditions changed: Reset and load
   useEffect(() => {
-    const handler = setTimeout(() => {
-      setOffset(0);
-      setHasMore(true);
-      actions.setImages([]);
-      void loadImages(true, limit, 0);
-    }, 200);
-
-    return () => clearTimeout(handler);
-  }, [snap.searchQuery, snap.searchTags, snap.searchColor, snap.searchTone, appSnap.enableVectorSearch, limit, loadImages]);
+    debouncedReload(snap.limit);
+    return () => {
+      debouncedReload.cancel();
+    };
+  }, [
+    snap.searchQuery,
+    snap.searchTags,
+    snap.searchColor,
+    snap.searchTone,
+    appSnap.enableVectorSearch,
+    snap.limit,
+    debouncedReload,
+  ]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    if (scrollHeight - scrollTop - clientHeight < 500 && hasMore && !loading) {
-      const nextOffset = offset + limit;
-      setOffset(nextOffset);
-      void loadImages(false, limit, nextOffset);
+    if (scrollHeight - scrollTop - clientHeight < 500 && snap.hasMore && !snap.loading) {
+      void loadImages(false, snap.limit);
     }
   };
 
   useEffect(() => {
-    // Paste handler removed in favor of App.tsx unified handler
-  }, []);
-
-  useEffect(() => {
     return () => {
-      requestSessionRef.current?.controller.abort();
+      actions.cancelLoad();
     };
   }, []);
 
@@ -636,44 +438,23 @@ export const Gallery: React.FC = () => {
   }, [debouncedUpdateDominantColor]);
 
   const handleUpdateName = async (image: ImageMeta, name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    // Cannot optimistic update name as it changes the ID (image path)
-    // We wait for server response
-
-    try {
-      const data = await updateImage<{ success?: boolean; meta?: ImageMeta }>(image.id, {
-        filename: trimmed,
-      });
-      if (data && data.success && data.meta) {
-        actions.updateImage(image.id, data.meta);
-        if (contextMenu && contextMenu.image.id === image.id) {
-          setContextMenu({
-            ...contextMenu,
-            image: data.meta,
-          });
-        }
-      } else {
-        globalActions.pushToast({ key: "toast.updateNameFailed" }, "error");
+    const newMeta = await actions.requestUpdateImageName(image, name);
+    if (newMeta) {
+      if (contextMenu && contextMenu.image.id === image.id) {
+        setContextMenu({
+          ...contextMenu,
+          image: newMeta,
+        });
       }
-    } catch (e) {
-      console.error(e);
-      globalActions.pushToast({ key: "toast.updateNameFailed" }, "error");
     }
   };
 
   const handleDelete = async () => {
     if (!contextMenu) return;
-    try {
-      await deleteImage(contextMenu.image.id);
-      actions.deleteImage(contextMenu.image.id);
-      globalActions.pushToast({ key: "toast.imageDeleted" }, "success");
-    } catch (e) {
-      console.error(e);
-      globalActions.pushToast({ key: "toast.deleteImageFailed" }, "error");
+    const success = await actions.requestDeleteImage(contextMenu.image);
+    if (success) {
+      closeContextMenu();
     }
-    closeContextMenu();
   };
 
   const handleReindex = async () => {
@@ -723,6 +504,37 @@ export const Gallery: React.FC = () => {
     }
   };
 
+  const handleUpdateTags = useCallback(
+    async (image: ImageMeta, tags: string[]) => {
+      try {
+        const data = await updateImage<{ success?: boolean; meta?: ImageMeta }>(image.id, {
+          tags,
+        });
+        if (data && data.meta) {
+          actions.updateImage(image.id, data.meta);
+          if (contextMenu && contextMenu.image.id === image.id) {
+            setContextMenu({
+              ...contextMenu,
+              image: data.meta,
+            });
+          }
+        } else {
+          actions.updateImage(image.id, { tags });
+          if (contextMenu && contextMenu.image.id === image.id) {
+            setContextMenu({
+              ...contextMenu,
+              image: { ...image, tags },
+            });
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        globalActions.pushToast({ key: "toast.updateTagsFailed" }, "error");
+      }
+    },
+    [contextMenu]
+  );
+
   const handleAddTag = async (image: ImageMeta, tag: string) => {
     const trimmed = tag.trim();
     if (!trimmed) return;
@@ -733,57 +545,14 @@ export const Gallery: React.FC = () => {
     }
 
     const newTags = [...currentTags, trimmed];
-    try {
-      const data = await updateImage<{ success?: boolean; meta?: ImageMeta }>(image.id, {
-        tags: newTags,
-      });
-      if (data && data.meta) {
-        actions.updateImage(image.id, data.meta);
-        if (contextMenu && contextMenu.image.id === image.id) {
-          setContextMenu({
-            ...contextMenu,
-            image: data.meta,
-          });
-        }
-      } else {
-        actions.updateImage(image.id, { tags: newTags });
-        if (contextMenu && contextMenu.image.id === image.id) {
-          setContextMenu({
-            ...contextMenu,
-            image: { ...image, tags: newTags },
-          });
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    await handleUpdateTags(image, newTags);
   };
 
-  const handleRemoveTag = async (tag: string) => {
-    if (!contextMenu) return;
-    const image = contextMenu.image;
-    const newTags = image.tags.filter((t) => t !== tag);
+  const handleRemoveTag = async (image: ImageMeta, tag: string) => {
+    const currentTags = ensureTags(image.tags as string[]);
+    const newTags = currentTags.filter((t) => t !== tag);
 
-    try {
-      const data = await updateImage<{ success?: boolean; meta?: ImageMeta }>(image.id, {
-        tags: newTags,
-      });
-      if (data && data.meta) {
-        actions.updateImage(image.id, data.meta);
-        setContextMenu({
-          ...contextMenu,
-          image: data.meta,
-        });
-      } else {
-        actions.updateImage(image.id, { tags: newTags });
-        setContextMenu({
-          ...contextMenu,
-          image: { ...image, tags: newTags },
-        });
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    await handleUpdateTags(image, newTags);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -829,7 +598,7 @@ export const Gallery: React.FC = () => {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <GalleryHeader loading={loading || vectorLoading} allTags={allTags} />
+        <GalleryHeader loading={snap.loading || snap.vectorLoading} allTags={allTags} />
 
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden p-4 scrollbar-hide"
@@ -896,6 +665,10 @@ export const Gallery: React.FC = () => {
         <GalleryContextMenu
           key={contextMenu.image.id}
           value={contextMenu}
+          image={
+            (snap.images.find((i) => i.id === contextMenu.image.id) as ImageMeta) ||
+            contextMenu.image
+          }
           allTags={allTags}
           enableVectorSearch={appSnap.enableVectorSearch}
           onClose={closeContextMenu}
@@ -904,7 +677,10 @@ export const Gallery: React.FC = () => {
           onReindex={handleReindex}
           onOpenDominantColorPicker={({ x, y }) => {
             const next = clampPopover(x, y + 16);
-            const current = contextMenu.image.dominantColor || THEME.primary;
+            const activeImage =
+              (snap.images.find((i) => i.id === contextMenu.image.id) as ImageMeta) ||
+              contextMenu.image;
+            const current = activeImage.dominantColor || THEME.primary;
             setDominantColorPicker({
               imageId: contextMenu.image.id,
               x: next.x,
@@ -912,9 +688,24 @@ export const Gallery: React.FC = () => {
               draft: current,
             });
           }}
-          onUpdateName={(name) => handleUpdateName(contextMenu.image, name)}
-          onAddTag={(tag) => handleAddTag(contextMenu.image, tag)}
-          onRemoveTag={handleRemoveTag}
+          onUpdateName={(name) => {
+            const activeImage =
+              (snap.images.find((i) => i.id === contextMenu.image.id) as ImageMeta) ||
+              contextMenu.image;
+            handleUpdateName(activeImage, name);
+          }}
+          onAddTag={(tag) => {
+            const activeImage =
+              (snap.images.find((i) => i.id === contextMenu.image.id) as ImageMeta) ||
+              contextMenu.image;
+            handleAddTag(activeImage, tag);
+          }}
+          onRemoveTag={(tag) => {
+            const activeImage =
+              (snap.images.find((i) => i.id === contextMenu.image.id) as ImageMeta) ||
+              contextMenu.image;
+            void handleRemoveTag(activeImage, tag);
+          }}
         />
       )}
 

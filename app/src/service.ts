@@ -210,23 +210,28 @@ export async function moveGalleryOrder(activeId: string, overId: string): Promis
 }
 
 export type ImageSearchParams = {
+  mode?: "text" | "vector";
   query?: string;
   tags?: string[];
   color?: string | null;
   tone?: string | null;
   limit?: number;
-  offset?: number;
+  cursorDistance?: number;
+  cursorRowid?: number;
+  cursorCreatedAt?: number;
+  cursorGalleryOrder?: number | null;
 };
 
 export type RequestOptions = {
   signal?: AbortSignal;
 };
 
-export async function fetchImages<T = unknown[]>(
+export async function fetchImages<T = unknown>(
   params: ImageSearchParams = {},
   options: RequestOptions = {}
 ): Promise<T> {
   const searchParams = new URLSearchParams();
+  if (params.mode) searchParams.set("mode", params.mode);
   if (params.query) searchParams.set("query", params.query);
   if (params.tags && params.tags.length > 0) {
     searchParams.set("tags", params.tags.join(","));
@@ -236,41 +241,22 @@ export async function fetchImages<T = unknown[]>(
   if (typeof params.limit === "number") {
     searchParams.set("limit", String(params.limit));
   }
-  if (typeof params.offset === "number") {
-    searchParams.set("offset", String(params.offset));
+  if (typeof params.cursorCreatedAt === "number") {
+    searchParams.set("cursorCreatedAt", String(params.cursorCreatedAt));
+  }
+  if (typeof params.cursorRowid === "number") {
+    searchParams.set("cursorRowid", String(params.cursorRowid));
+  }
+  if (typeof params.cursorGalleryOrder === "number") {
+    searchParams.set("cursorGalleryOrder", String(params.cursorGalleryOrder));
+  }
+  if (typeof params.cursorDistance === "number") {
+    searchParams.set("cursorDistance", String(params.cursorDistance));
   }
   const url = `${API_BASE_URL}/api/images${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
   const res = await fetch(url, { signal: options.signal });
   if (!res.ok) {
     const error = new Error(`Failed to fetch images: ${res.status}`);
-    (error as Error & { status?: number }).status = res.status;
-    throw error;
-  }
-  const data = (await res.json()) as T;
-  return data;
-}
-
-export async function fetchVectorImages<T = unknown[]>(
-  params: ImageSearchParams = {},
-  options: RequestOptions = {}
-): Promise<T> {
-  const searchParams = new URLSearchParams();
-  if (params.query) searchParams.set("query", params.query);
-  if (params.tags && params.tags.length > 0) {
-    searchParams.set("tags", params.tags.join(","));
-  }
-  if (params.color) searchParams.set("color", params.color);
-  if (params.tone) searchParams.set("tone", params.tone);
-  if (typeof params.limit === "number") {
-    searchParams.set("limit", String(params.limit));
-  }
-  if (typeof params.offset === "number") {
-    searchParams.set("offset", String(params.offset));
-  }
-  const url = `${API_BASE_URL}/api/images/vector${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-  const res = await fetch(url, { signal: options.signal });
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch vector images: ${res.status}`);
     (error as Error & { status?: number }).status = res.status;
     throw error;
   }

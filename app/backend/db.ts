@@ -1,6 +1,7 @@
 import path from "path";
 import Database from "better-sqlite3";
-import { load as loadVss } from "sqlite-vss";
+import * as sqliteVec from "sqlite-vec";
+import { OKLCH_FILTER } from "./constants";
 
 export class StorageIncompatibleError extends Error {
   constructor(message: string) {
@@ -20,6 +21,11 @@ export type ImageMeta = {
   tone: string | null;
   hasVector: boolean;
   score?: number;
+  vectorDistance?: number;
+  vectorRowid?: number;
+  rowid?: number;
+  galleryOrder?: number | null;
+  isVectorResult?: boolean;
 };
 
 type ImageRow = {
@@ -30,6 +36,9 @@ type ImageRow = {
   createdAt: number;
   pageUrl: string | null;
   dominantColor: string | null;
+  dominantL: number | null;
+  dominantC: number | null;
+  dominantH: number | null;
   tone: string | null;
   galleryOrder?: number | null;
 };
@@ -38,25 +47,34 @@ type TagRow = { imageId: string; name: string };
 
 export type ImageDb = {
   getImageById: (id: string) => ImageMeta | null;
-  listImages: () => ImageMeta[];
+  listImages: (params?: {
+    limit?: number;
+    tone?: string | null;
+    color?: OklchColor | null;
+    cursor?: { galleryOrder: number | null; createdAt: number; rowid: number } | null;
+  }) => ImageMeta[];
   listImagesByIds: (ids: string[]) => ImageMeta[];
   setGalleryOrder: (order: string[]) => void;
   moveGalleryOrder: (activeId: string, overId: string) => void;
   searchImages: (params: {
     vector?: number[] | null;
     limit?: number;
-    offset?: number;
     tagIds?: number[];
     tagCount?: number;
     tone?: string | null;
+    color?: OklchColor | null;
+    afterDistance?: number | null;
+    afterRowid?: number | null;
   }) => ImageMeta[];
   searchImagesByText: (params: {
     query: string;
     limit?: number;
-    offset?: number;
     tagIds?: number[];
     tagCount?: number;
     tone?: string | null;
+    color?: OklchColor | null;
+    afterCreatedAt?: number | null;
+    afterRowid?: number | null;
   }) => ImageMeta[];
   insertImage: (data: {
     id: string;
@@ -71,6 +89,9 @@ export type ImageDb = {
     imagePath?: string;
     pageUrl?: string | null;
     dominantColor?: string | null;
+    dominantL?: number | null;
+    dominantC?: number | null;
+    dominantH?: number | null;
     tone?: string | null;
   }) => void;
   deleteImage: (id: string) => { imagePath: string } | null;
@@ -85,7 +106,7 @@ export type ImageDb = {
   getTagIdsByNames: (names: string[]) => number[];
 };
 
-const schema = `
+const schemaStandard = `
 CREATE TABLE IF NOT EXISTS images (
   id TEXT PRIMARY KEY,
   filename TEXT UNIQUE NOT NULL,
@@ -93,6 +114,9 @@ CREATE TABLE IF NOT EXISTS images (
   createdAt INTEGER NOT NULL,
   pageUrl TEXT,
   dominantColor TEXT,
+  dominantL REAL,
+  dominantC REAL,
+  dominantH REAL,
   tone TEXT,
   galleryOrder INTEGER
 );
@@ -100,6 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_images_created ON images(createdAt DESC);
 CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename);
 CREATE INDEX IF NOT EXISTS idx_images_path ON images(imagePath);
 CREATE INDEX IF NOT EXISTS idx_images_gallery_order ON images(galleryOrder ASC);
+CREATE INDEX IF NOT EXISTS idx_images_oklch ON images(dominantL, dominantC, dominantH);
 
 CREATE TABLE IF NOT EXISTS tags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,11 +139,20 @@ CREATE TABLE IF NOT EXISTS image_tags (
   FOREIGN KEY (tagId) REFERENCES tags(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_image_tags_tag_image ON image_tags(tagId, imageId);
+`;
 
-CREATE VIRTUAL TABLE IF NOT EXISTS images_vss USING vss0(
-  vector(768)
+const schemaVector = `
+CREATE VIRTUAL TABLE IF NOT EXISTS images_vec USING vec0(
+  rowid INTEGER PRIMARY KEY,
+  vector float[768]
 );
 `;
+
+export type OklchColor = {
+  L: number;
+  C: number;
+  h: number;
+};
 
 const normalizeTags = (tags: string[]): string[] => {
   const normalized = tags
@@ -142,11 +176,16 @@ const resolveHasVector = (
   rowids: number[]
 ): Set<number> => {
   if (rowids.length === 0) return new Set();
-  const placeholders = rowids.map(() => "?").join(",");
-  const rows = db
-    .prepare(`SELECT rowid FROM images_vss WHERE rowid IN (${placeholders})`)
-    .all(...rowids) as { rowid: number }[];
-  return new Set(rows.map((row) => row.rowid));
+  try {
+    const placeholders = rowids.map(() => "?").join(",");
+    const rows = db
+      .prepare(`SELECT rowid FROM images_vec WHERE rowid IN (${placeholders})`)
+      .all(...rowids) as { rowid: number }[];
+    return new Set(rows.map((row) => row.rowid));
+  } catch (error) {
+    console.error("Failed to resolve vector status:", error);
+    return new Set();
+  }
 };
 
 const loadTags = (
@@ -174,6 +213,7 @@ const mapImages = (
   const vectorSet = resolveHasVector(db, rowids);
   return rows.map((row) => ({
     id: row.id,
+    rowid: row.rowid,
     filename: row.filename,
     imagePath: row.imagePath,
     createdAt: row.createdAt,
@@ -182,6 +222,7 @@ const mapImages = (
     tone: row.tone,
     tags: tagsMap.get(row.id) ?? [],
     hasVector: vectorSet.has(row.rowid),
+    galleryOrder: row.galleryOrder ?? null,
   }));
 };
 
@@ -208,24 +249,27 @@ const mapImages = (
 
 const createImageDb = (db: Database.Database): ImageDb => {
   const insertImageStmt = db.prepare(
-    `INSERT INTO images (id, filename, imagePath, createdAt, pageUrl, dominantColor, tone)
-     VALUES (@id, @filename, @imagePath, @createdAt, @pageUrl, @dominantColor, @tone)`
+    `INSERT INTO images (id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone)
+     VALUES (@id, @filename, @imagePath, @createdAt, @pageUrl, @dominantColor, @dominantL, @dominantC, @dominantH, @tone)`
   );
 
   const updateImageStmt = db.prepare(
     `UPDATE images SET
-      filename = COALESCE(@filename, filename),
-      imagePath = COALESCE(@imagePath, imagePath),
-      pageUrl = COALESCE(@pageUrl, pageUrl),
-      dominantColor = COALESCE(@dominantColor, dominantColor),
-      tone = COALESCE(@tone, tone)
+      filename = CASE WHEN @setFilename = 1 THEN @filename ELSE filename END,
+      imagePath = CASE WHEN @setImagePath = 1 THEN @imagePath ELSE imagePath END,
+      pageUrl = CASE WHEN @setPageUrl = 1 THEN @pageUrl ELSE pageUrl END,
+      dominantColor = CASE WHEN @setDominantColor = 1 THEN @dominantColor ELSE dominantColor END,
+      dominantL = CASE WHEN @setDominantColor = 1 THEN @dominantL ELSE dominantL END,
+      dominantC = CASE WHEN @setDominantColor = 1 THEN @dominantC ELSE dominantC END,
+      dominantH = CASE WHEN @setDominantColor = 1 THEN @dominantH ELSE dominantH END,
+      tone = CASE WHEN @setTone = 1 THEN @tone ELSE tone END
      WHERE id = @id`
   );
 
   const getImageRowById = (id: string): ImageRow | null => {
     const row = db
       .prepare(
-        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id = ?`
+        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE id = ?`
       )
       .get(id) as ImageRow | undefined;
     return row ?? null;
@@ -234,7 +278,7 @@ const createImageDb = (db: Database.Database): ImageDb => {
   const getImageRowByFilename = (filename: string): ImageRow | null => {
     const row = db
       .prepare(
-        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE filename = ?`
+        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE filename = ?`
       )
       .get(filename) as ImageRow | undefined;
     return row ?? null;
@@ -253,12 +297,43 @@ const createImageDb = (db: Database.Database): ImageDb => {
     return mapImages(db, [row])[0] ?? null;
   };
 
-  const listImages = (): ImageMeta[] => {
+  const listImages = (params?: {
+    limit?: number;
+    tone?: string | null;
+    color?: OklchColor | null;
+    cursor?: { galleryOrder: number | null; createdAt: number; rowid: number } | null;
+  }): ImageMeta[] => {
+    const { limit, tone, color, cursor } = params ?? {};
+    const colorSql = buildColorFilterSql("i", color);
+    const orderKey = "COALESCE(i.galleryOrder, -1)";
+    const hasCursor =
+      typeof cursor?.createdAt === "number" &&
+      typeof cursor?.rowid === "number" &&
+      cursor?.galleryOrder !== undefined;
+    const limitValue = typeof limit === "number" && limit > 0 ? limit : null;
+    const sql = `SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder
+         FROM images i
+         WHERE (@tone IS NULL OR i.tone = @tone)
+           ${colorSql.sql}
+           AND (
+             @hasCursor = 0
+             OR ${orderKey} > @cursorOrderKey
+             OR (${orderKey} = @cursorOrderKey AND i.createdAt < @cursorCreatedAt)
+             OR (${orderKey} = @cursorOrderKey AND i.createdAt = @cursorCreatedAt AND i.rowid < @cursorRowid)
+           )
+         ORDER BY ${orderKey} ASC, i.createdAt DESC, i.rowid DESC
+         ${limitValue ? "LIMIT @limit" : ""}`;
     const rows = db
-      .prepare(
-        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images ORDER BY galleryOrder ASC, createdAt DESC`
-      )
-      .all() as ImageRow[];
+      .prepare(sql)
+      .all({
+        tone: tone ?? null,
+        hasCursor: hasCursor ? 1 : 0,
+        cursorOrderKey: hasCursor ? (cursor?.galleryOrder ?? -1) : 0,
+        cursorCreatedAt: hasCursor ? cursor?.createdAt : 0,
+        cursorRowid: hasCursor ? cursor?.rowid : 0,
+        limit: limitValue,
+        ...colorSql.params,
+      }) as ImageRow[];
     return mapImages(db, rows);
   };
 
@@ -267,7 +342,7 @@ const createImageDb = (db: Database.Database): ImageDb => {
     const placeholders = ids.map(() => "?").join(",");
     const rows = db
       .prepare(
-        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id IN (${placeholders})`
+        `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE id IN (${placeholders})`
       )
       .all(...ids) as ImageRow[];
     const map = new Map(rows.map((row) => [row.id, row]));
@@ -287,6 +362,9 @@ const createImageDb = (db: Database.Database): ImageDb => {
     const info = insertImageStmt.run({
       ...data,
       dominantColor: null,
+      dominantL: null,
+      dominantC: null,
+      dominantH: null,
       tone: null,
     });
     return { rowid: Number(info.lastInsertRowid) };
@@ -298,22 +376,42 @@ const createImageDb = (db: Database.Database): ImageDb => {
     imagePath?: string;
     pageUrl?: string | null;
     dominantColor?: string | null;
+    dominantL?: number | null;
+    dominantC?: number | null;
+    dominantH?: number | null;
     tone?: string | null;
   }) => {
+    const hasFilename = data.filename !== undefined;
+    const hasImagePath = data.imagePath !== undefined;
+    const hasPageUrl = data.pageUrl !== undefined;
+    const hasDominantColor = data.dominantColor !== undefined;
+    const hasTone = data.tone !== undefined;
     updateImageStmt.run({
       id: data.id,
-      filename: data.filename ?? null,
-      imagePath: data.imagePath ?? null,
-      pageUrl: data.pageUrl ?? null,
-      dominantColor: data.dominantColor ?? null,
-      tone: data.tone ?? null,
+      setFilename: hasFilename ? 1 : 0,
+      filename: hasFilename ? data.filename : null,
+      setImagePath: hasImagePath ? 1 : 0,
+      imagePath: hasImagePath ? data.imagePath : null,
+      setPageUrl: hasPageUrl ? 1 : 0,
+      pageUrl: hasPageUrl ? data.pageUrl : null,
+      setDominantColor: hasDominantColor ? 1 : 0,
+      dominantColor: hasDominantColor ? data.dominantColor ?? null : null,
+      dominantL: hasDominantColor ? data.dominantL ?? null : null,
+      dominantC: hasDominantColor ? data.dominantC ?? null : null,
+      dominantH: hasDominantColor ? data.dominantH ?? null : null,
+      setTone: hasTone ? 1 : 0,
+      tone: hasTone ? data.tone ?? null : null,
     });
   };
 
   const deleteImage = (id: string): { imagePath: string } | null => {
     const row = getImageRowById(id);
     if (!row) return null;
-    db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(row.rowid);
+    try {
+      db.prepare(`DELETE FROM images_vec WHERE rowid = ?`).run(row.rowid);
+    } catch {
+      // Ignore if vector table doesn't exist
+    }
     db.prepare(`DELETE FROM images WHERE id = ?`).run(id);
     db.prepare(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tagId FROM image_tags)`).run();
     return { imagePath: row.imagePath };
@@ -364,17 +462,27 @@ const createImageDb = (db: Database.Database): ImageDb => {
   };
 
   const setImageVector = (rowid: number, vector: number[]) => {
-    const tx = db.transaction(() => {
-      db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(rowid);
-      const normalizedVector = new Float32Array(vector);
-      db.prepare(
-        `INSERT INTO images_vss (rowid, vector) VALUES (@rowid, @vector)`
-      ).run({
-        rowid,
-        vector: normalizedVector,
+    try {
+      const normalizedRowid = Number(rowid);
+      if (!Number.isFinite(normalizedRowid) || !Number.isInteger(normalizedRowid)) {
+        console.error("Failed to set image vector: invalid rowid", rowid);
+        return;
+      }
+      const rowidValue = BigInt(normalizedRowid);
+      const tx = db.transaction(() => {
+        db.prepare(`DELETE FROM images_vec WHERE rowid = ?`).run(rowidValue);
+        const normalizedVector = new Float32Array(vector);
+        db.prepare(
+          `INSERT INTO images_vec (rowid, vector) VALUES (@rowid, @vector)`
+        ).run({
+          rowid: rowidValue,
+          vector: normalizedVector,
+        });
       });
-    });
-    tx();
+      tx();
+    } catch (error) {
+      console.error("Failed to set image vector:", error);
+    }
   };
 
   const setGalleryOrder = (order: string[]) => {
@@ -460,30 +568,36 @@ const createImageDb = (db: Database.Database): ImageDb => {
   const searchImages = (params: {
     vector?: number[] | null;
     limit?: number;
-    offset?: number;
     tagIds?: number[];
     tagCount?: number;
     tone?: string | null;
+    color?: OklchColor | null;
+    afterDistance?: number | null;
+    afterRowid?: number | null;
   }) => {
-    const { vector, limit, offset, tagIds, tagCount, tone } = params;
+    const { vector, limit, tagIds, tagCount, tone, color, afterDistance, afterRowid } = params;
     if (!vector || vector.length === 0) return [];
-    const idsJson = JSON.stringify(tagIds ?? []);
-    const stmt = db.prepare(
-      `
+    try {
+      const idsJson = JSON.stringify(tagIds ?? []);
+      const colorSql = buildColorFilterSql("i", color);
+      const stmt = db.prepare(
+        `
       WITH tag_ids AS (
         SELECT DISTINCT value AS tagId
         FROM json_each(@tagIds)
       ),
       vss_matches AS (
         SELECT rowid, distance
-        FROM images_vss
-        WHERE vss_search(vector, @vector)
+        FROM images_vec
+        WHERE vector MATCH @vector
+        ORDER BY distance
         LIMIT @vssLimit
       )
-      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder, v.distance
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder, v.distance
       FROM vss_matches v
       JOIN images i ON v.rowid = i.rowid
       WHERE (@tone IS NULL OR i.tone = @tone)
+        ${colorSql.sql}
         AND (
           @hasTags = 0 OR EXISTS (
             SELECT 1 FROM image_tags it
@@ -493,41 +607,73 @@ const createImageDb = (db: Database.Database): ImageDb => {
             HAVING COUNT(DISTINCT it.tagId) = @tagCount
           )
         )
-      ORDER BY v.distance ASC
-      LIMIT @limit OFFSET @offset
+        AND (
+          @hasCursor = 0
+          OR v.distance > @cursorDistance
+          OR (v.distance = @cursorDistance AND v.rowid > @cursorRowid)
+        )
+      ORDER BY v.distance ASC, v.rowid ASC
+      LIMIT @limit
     `
-    );
-    const normalizedVector = new Float32Array(vector);
-    const effectiveLimit = typeof limit === "number" && limit > 0 ? limit : 100;
-    const effectiveOffset = typeof offset === "number" && offset >= 0 ? offset : 0;
-    const rows = stmt.all({
-      vector: normalizedVector,
-      tagIds: idsJson,
-      hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
-      tagCount: tagCount ?? 0,
-      limit: effectiveLimit,
-      offset: effectiveOffset,
-      vssLimit: effectiveLimit + effectiveOffset, // VSS search needs to find enough candidates
-      tone: tone ?? null,
-    }) as (ImageRow & { distance: number })[];
-    const metas = mapImages(db, rows);
-    const scores = new Map(rows.map((row) => [row.id, row.distance]));
-    return metas.map((meta) => {
-      const distance = scores.get(meta.id);
-      const score = typeof distance === "number" ? 1 - distance : undefined;
-      return score !== undefined ? { ...meta, score } : meta;
-    });
+      );
+      const normalizedVector = new Float32Array(vector);
+      const effectiveLimit = typeof limit === "number" && limit > 0 ? limit : 100;
+      const hasCursor =
+        typeof afterDistance === "number" && typeof afterRowid === "number";
+      const cursorDistance = hasCursor ? afterDistance : 0;
+      const cursorRowid = hasCursor ? afterRowid : 0;
+      const maxVssLimit = Math.max(effectiveLimit * 20, 500);
+      const vssLimitBase = effectiveLimit * 20;
+      const vssLimit = Math.min(vssLimitBase, maxVssLimit);
+      const rows = stmt.all({
+        vector: normalizedVector,
+        tagIds: idsJson,
+        hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
+        tagCount: tagCount ?? 0,
+        limit: effectiveLimit,
+        vssLimit,
+        hasCursor: hasCursor ? 1 : 0,
+        cursorDistance,
+        cursorRowid,
+        tone: tone ?? null,
+        ...colorSql.params,
+      }) as (ImageRow & { distance: number })[];
+      const metas = mapImages(db, rows);
+      const scores = new Map(rows.map((row) => [row.id, row.distance]));
+      const cursorMap = new Map(
+        rows.map((row) => [row.id, { distance: row.distance, rowid: row.rowid }])
+      );
+      return metas.map((meta) => {
+        const distance = scores.get(meta.id);
+        const score = typeof distance === "number" ? 1 - distance : undefined;
+        const cursor = cursorMap.get(meta.id);
+        if (!cursor) {
+          return score !== undefined ? { ...meta, score } : meta;
+        }
+        return {
+          ...meta,
+          score,
+          vectorDistance: cursor.distance,
+          vectorRowid: cursor.rowid,
+        };
+      });
+    } catch (error) {
+      console.error("Vector search failed:", error);
+      return [];
+    }
   };
 
   const searchImagesByText = (params: {
     query: string;
     limit?: number;
-    offset?: number;
     tagIds?: number[];
     tagCount?: number;
     tone?: string | null;
+    color?: OklchColor | null;
+    afterCreatedAt?: number | null;
+    afterRowid?: number | null;
   }) => {
-    const { query, limit, offset, tagIds, tagCount, tone } = params;
+    const { query, limit, tagIds, tagCount, tone, color, afterCreatedAt, afterRowid } = params;
     const tokens = query
       .trim()
       .toLowerCase()
@@ -536,6 +682,7 @@ const createImageDb = (db: Database.Database): ImageDb => {
     if (tokens.length === 0) return [];
 
     const idsJson = JSON.stringify(tagIds ?? []);
+    const colorSql = buildColorFilterSql("i", color);
 
     // Build dynamic SQL for text search
     const textConditions = tokens
@@ -550,9 +697,10 @@ const createImageDb = (db: Database.Database): ImageDb => {
         SELECT DISTINCT value AS tagId
         FROM json_each(@tagIds)
       )
-      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder
       FROM images i
       WHERE (@tone IS NULL OR i.tone = @tone)
+        ${colorSql.sql}
         AND (
           @hasTags = 0 OR EXISTS (
             SELECT 1 FROM image_tags it
@@ -563,19 +711,29 @@ const createImageDb = (db: Database.Database): ImageDb => {
           )
         )
         AND (${textConditions})
-      ORDER BY i.createdAt DESC
-      LIMIT @limit OFFSET @offset
+        AND (
+          @hasCursor = 0
+          OR i.createdAt < @cursorCreatedAt
+          OR (i.createdAt = @cursorCreatedAt AND i.rowid < @cursorRowid)
+        )
+      ORDER BY i.createdAt DESC, i.rowid DESC
+      LIMIT @limit
     `;
 
     const stmt = db.prepare(sql);
 
+    const hasCursor =
+      typeof afterCreatedAt === "number" && typeof afterRowid === "number";
     const queryParams: Record<string, unknown> = {
       tagIds: idsJson,
       hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
       tagCount: tagCount ?? 0,
       limit: typeof limit === "number" && limit > 0 ? limit : 100,
-      offset: typeof offset === "number" && offset >= 0 ? offset : 0,
       tone: tone ?? null,
+      hasCursor: hasCursor ? 1 : 0,
+      cursorCreatedAt: hasCursor ? afterCreatedAt : 0,
+      cursorRowid: hasCursor ? afterRowid : 0,
+      ...colorSql.params,
     };
 
     tokens.forEach((token, i) => {
@@ -624,8 +782,53 @@ export const createDatabase = (
   // }
   const dbPath = path.join(storageDir, "meta.sqlite");
   const db = new Database(dbPath);
-  loadVss(db);
+  try {
+    sqliteVec.load(db);
+    console.log("sqlite-vec loaded successfully");
+  } catch (e) {
+    console.error("Failed to load sqlite-vec:", e);
+  }
   db.pragma("journal_mode = WAL");
-  db.exec(schema);
+  
+  try {
+    db.exec(schemaStandard);
+  } catch (e) {
+    console.error("Failed to execute standard schema:", e);
+    // If standard schema fails, we probably can't do anything.
+    throw e;
+  }
+
+  try {
+    db.exec(schemaVector);
+  } catch (e) {
+    console.error("Failed to execute vector schema:", e);
+    // Proceed without vector search
+  }
+
   return { db, imageDb: createImageDb(db), incompatibleError: null };
+};
+
+const buildColorFilterSql = (alias: string, color: OklchColor | null | undefined) => {
+  if (!color) return { sql: "", params: {} as Record<string, unknown> };
+  const hueDiff = `MIN(ABS(${alias}.dominantH - @colorH), ${OKLCH_FILTER.tau} - ABS(${alias}.dominantH - @colorH))`;
+  const avgC = `((${alias}.dominantC + @colorC) / 2)`;
+  const dH = `(CASE WHEN ${avgC} < ${OKLCH_FILTER.neutralChromaCutoff} THEN 0 ELSE 2 * SQRT(${alias}.dominantC * @colorC) * SIN((${hueDiff}) / 2) END)`;
+  const deltaE = `SQRT(((${alias}.dominantL - @colorL) * (${alias}.dominantL - @colorL)) + ((${alias}.dominantC - @colorC) * (${alias}.dominantC - @colorC)) + (${dH} * ${dH}))`;
+  const sql = `
+    AND ${alias}.dominantL IS NOT NULL
+    AND ${alias}.dominantC IS NOT NULL
+    AND ${alias}.dominantH IS NOT NULL
+    AND (
+      (${avgC} <= ${OKLCH_FILTER.chromaThreshold} OR ${hueDiff} <= ${OKLCH_FILTER.maxHueDiff})
+      AND ${deltaE} <= ${OKLCH_FILTER.deltaE}
+    )
+  `;
+  return {
+    sql,
+    params: {
+      colorL: color.L,
+      colorC: color.C,
+      colorH: color.h,
+    },
+  };
 };

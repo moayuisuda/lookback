@@ -20,7 +20,6 @@ import { createModelRouter } from "./routes/model";
 import { lockedFs, withFileLock } from "./fileLock";
 
 export type RendererChannel =
-  | "new-collection"
   | "image-updated"
   | "search-updated"
   | "model-download-progress"
@@ -186,14 +185,15 @@ const initializeStorage = async () => {
   initDatabase();
 };
 
-class PythonMetaService {
-  private process: ChildProcess | null = null;
-  private queue: {
+class BasePythonService {
+  protected process: ChildProcess | null = null;
+  protected queue: {
     resolve: (val: unknown) => void;
     reject: (err: Error) => void;
   }[] = [];
+  protected serviceName: string = "Python Service";
 
-  private getUvCandidates(): string[] {
+  protected getUvCandidates(): string[] {
     const candidates: string[] = [];
 
     // 1. Try bundled UV (High priority)
@@ -252,9 +252,9 @@ class PythonMetaService {
     return uniq;
   }
 
-  private attachProcess(proc: ChildProcess) {
+  protected attachProcess(proc: ChildProcess) {
     if (!proc.stdout) {
-      console.error("Failed to spawn python process stdout");
+      console.error(`Failed to spawn ${this.serviceName} stdout`);
       return;
     }
 
@@ -267,7 +267,7 @@ class PythonMetaService {
           const res = JSON.parse(line) as unknown;
           task.resolve(res);
         } catch (e) {
-          console.error("JSON parse error from python:", e);
+          console.error(`JSON parse error from ${this.serviceName}:`, e);
           task.resolve({ error: "invalid-json" });
         }
       }
@@ -283,15 +283,15 @@ class PythonMetaService {
           line.includes("Python vector service started") ||
           line.includes("Model loaded")
         ) {
-          console.log("[Python Service]", line.replace("[INFO]", "").trim());
+          console.log(`[${this.serviceName}]`, line.replace("[INFO]", "").trim());
         } else {
-          console.error("[Python Error]", line);
+          console.error(`[${this.serviceName} Error]`, line);
         }
       }
     });
 
     proc.on("exit", (code: number) => {
-      console.log("Python process exited with code", code);
+      console.log(`${this.serviceName} exited with code`, code);
       const pending = this.queue.splice(0, this.queue.length);
       for (const task of pending) {
         task.resolve(null);
@@ -303,7 +303,7 @@ class PythonMetaService {
     });
   }
 
-  private spawnProcess(
+  protected spawnProcess(
     command: string,
     args: string[],
     cwd: string
@@ -341,7 +341,7 @@ class PythonMetaService {
 
     const trySpawn = async (index: number) => {
       if (index >= uvCandidates.length) {
-        console.error("Failed to spawn python vector service: uv not found");
+        console.error(`Failed to spawn ${this.serviceName}: uv not found`);
         this.process = null;
         return;
       }
@@ -366,7 +366,7 @@ class PythonMetaService {
           trySpawn(index + 1);
           return;
         }
-        console.error("Failed to spawn python vector service", err);
+        console.error(`Failed to spawn ${this.serviceName}`, err);
         if (this.process === proc) {
           this.process = null;
         }
@@ -374,6 +374,27 @@ class PythonMetaService {
     };
 
     void trySpawn(0);
+  }
+
+  protected async sendRequest(req: unknown): Promise<unknown> {
+    if (!this.process) {
+      this.start();
+    }
+    return new Promise<unknown>((resolve, reject) => {
+      this.queue.push({ resolve, reject });
+      if (this.process?.stdin) {
+        this.process.stdin.write(JSON.stringify(req) + "\n");
+      } else {
+        resolve({ error: "stdin-unavailable" });
+      }
+    });
+  }
+}
+
+class PythonVectorService extends BasePythonService {
+  constructor() {
+    super();
+    this.serviceName = "Python Vector Service";
   }
 
   downloadModel(onProgress: (data: unknown) => void): Promise<void> {
@@ -458,17 +479,7 @@ class PythonMetaService {
     mode: "encode-image" | "encode-text",
     arg: string
   ): Promise<number[] | null> {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise<unknown>((resolve, reject) => {
-      this.queue.push({ resolve, reject });
-      if (this.process?.stdin) {
-        this.process.stdin.write(JSON.stringify({ mode, arg }) + "\n");
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode, arg });
 
     if (!raw || typeof raw !== "object") {
       throw new Error("Invalid vector response");
@@ -483,25 +494,16 @@ class PythonMetaService {
     }
     throw new Error("Vector missing");
   }
+}
+
+class PythonMetaService extends BasePythonService {
+  constructor() {
+    super();
+    this.serviceName = "Python Meta Service";
+  }
 
   async runDominantColor(arg: string): Promise<string | null> {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise<unknown>((resolve, reject) => {
-      this.queue.push({ resolve, reject });
-      if (this.process?.stdin) {
-        console.log(
-          "Sending dominant-color request:",
-          JSON.stringify({ mode: "dominant-color", arg })
-        );
-        this.process.stdin.write(
-          JSON.stringify({ mode: "dominant-color", arg }) + "\n"
-        );
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode: "dominant-color", arg });
 
     if (!raw || typeof raw !== "object") return null;
     const res = raw as { dominantColor?: unknown; error?: unknown };
@@ -513,23 +515,7 @@ class PythonMetaService {
   }
 
   async runTone(arg: string): Promise<string | null> {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise<unknown>((resolve, reject) => {
-      this.queue.push({ resolve, reject });
-      if (this.process?.stdin) {
-        // console.log(
-        //   "Sending calculate-tone request:",
-        //   JSON.stringify({ mode: "calculate-tone", arg })
-        // );
-        this.process.stdin.write(
-          JSON.stringify({ mode: "calculate-tone", arg }) + "\n"
-        );
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode: "calculate-tone", arg });
 
     if (!raw || typeof raw !== "object") return null;
     const res = raw as { tone?: unknown; error?: unknown };
@@ -632,8 +618,11 @@ export async function startServer(sendToRenderer?: SendToRenderer) {
   server.use(cors());
   server.use(bodyParser.json({ limit: "25mb" }));
 
-  const vectorService = new PythonMetaService();
+  const vectorService = new PythonVectorService();
   vectorService.start();
+
+  const metaService = new PythonMetaService();
+  metaService.start();
 
   const runPythonVector = async (
     mode: "encode-image" | "encode-text",
@@ -643,11 +632,11 @@ export async function startServer(sendToRenderer?: SendToRenderer) {
   };
 
   const runPythonDominantColor = async (arg: string) => {
-    return vectorService.runDominantColor(arg);
+    return metaService.runDominantColor(arg);
   };
 
   const runPythonTone = async (arg: string) => {
-    return vectorService.runTone(arg);
+    return metaService.runTone(arg);
   };
 
   const sendRenderer = sendToRenderer;

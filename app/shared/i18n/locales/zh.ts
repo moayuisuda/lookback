@@ -51,6 +51,7 @@ export const zh: I18nDict = {
   'toast.logCopyFailed': '复制日志失败',
   'toast.tagRenamed': '标签已重命名',
   'toast.tagRenameFailed': '重命名标签失败',
+  'toast.updateTagsFailed': '更新标签失败',
   'toast.updateDominantColorFailed': '更新主色失败',
   'toast.updateNameFailed': '更新名称失败',
   'toast.imageDeleted': '图片已删除',

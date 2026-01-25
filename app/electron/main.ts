@@ -12,6 +12,7 @@ import fs from "fs-extra";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
 import { spawn, type ChildProcess } from "child_process";
+import { lockedFs, withFileLock } from "../backend/fileLock";
 
 // Ensure app name is correct for log paths
 if (!app.isPackaged) {
@@ -27,11 +28,12 @@ log.transports.file.maxSize = 5 * 1024 * 1024;
 log.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
   const info = path.parse(filePath);
-  try {
-    fs.renameSync(filePath, path.join(info.dir, info.name + ".old" + info.ext));
-  } catch (e) {
+  const dest = path.join(info.dir, info.name + ".old" + info.ext);
+
+  // Use async lock even though callback is void
+  lockedFs.rename(filePath, dest).catch((e) => {
     console.warn("Could not rotate log", e);
-  }
+  });
 };
 
 import readline from "readline";
@@ -45,8 +47,10 @@ import {
 } from "../backend/server";
 import { t as translate } from "../shared/i18n/t";
 import type { I18nKey, I18nParams, Locale } from "../shared/i18n/types";
+import { debounce } from "radash";
 
 let mainWindow: BrowserWindow | null = null;
+let isAppHidden = false;
 let lastGalleryDockDelta = 0;
 let localeCache: { locale: Locale; mtimeMs: number } | null = null;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
@@ -86,11 +90,11 @@ const isLocale = (value: unknown): value is Locale =>
 async function getLocale(): Promise<Locale> {
   try {
     const settingsPath = path.join(getStorageDir(), "settings.json");
-    const stat = await fs.stat(settingsPath).catch(() => null);
+    const stat = await lockedFs.stat(settingsPath).catch(() => null);
     if (!stat) return "en";
     if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
       return localeCache.locale;
-    const settings = await fs.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     const raw =
       settings && typeof settings === "object"
         ? (settings as { language?: unknown }).language
@@ -106,7 +110,7 @@ async function getLocale(): Promise<Locale> {
 async function loadShortcuts(): Promise<void> {
   try {
     const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = await fs.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
 
     const rawToggle = (settings as Record<string, unknown>)
@@ -128,7 +132,7 @@ async function loadShortcuts(): Promise<void> {
 async function loadWindowPinState(): Promise<void> {
   try {
     const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = await fs.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const raw = settings as { pinMode?: unknown; pinTransparent?: unknown };
     if (typeof raw.pinMode === "boolean") {
@@ -213,13 +217,50 @@ function setupAutoUpdater() {
   }
 }
 
-function createWindow(options?: { load?: boolean }) {
+async function saveWindowBounds() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
+  try {
+    const bounds = mainWindow.getBounds();
+    const settingsPath = path.join(getStorageDir(), "settings.json");
+    const settings = (await lockedFs
+      .readJson(settingsPath)
+      .catch(() => ({}))) as object;
+
+    await lockedFs.writeJson(settingsPath, {
+      ...settings,
+      windowBounds: bounds,
+    });
+  } catch (e) {
+    log.error("Failed to save window bounds", e);
+  }
+}
+
+const debouncedSaveWindowBounds = debounce({ delay: 1000 }, saveWindowBounds);
+
+async function createWindow(options?: { load?: boolean }) {
   log.info("Creating main window...");
+  isAppHidden = false;
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
+  let windowState: Partial<Electron.Rectangle> = {};
+  try {
+    const settingsPath = path.join(getStorageDir(), "settings.json");
+    if (await lockedFs.pathExists(settingsPath)) {
+      const settings: any = await lockedFs.readJson(settingsPath);
+      if (settings.windowBounds) {
+        windowState = settings.windowBounds;
+      }
+    }
+  } catch (e) {
+    log.error("Failed to load window bounds", e);
+  }
+
   mainWindow = new BrowserWindow({
-    width: Math.floor(width * 0.6),
-    height: Math.floor(height * 0.8),
+    width: windowState.width || Math.floor(width * 0.6),
+    height: windowState.height || Math.floor(height * 0.8),
+    x: windowState.x,
+    y: windowState.y,
     icon: path.join(__dirname, "../resources/icon.svg"),
     webPreferences: {
       nodeIntegration: false,
@@ -233,13 +274,16 @@ function createWindow(options?: { load?: boolean }) {
     hasShadow: true,
   });
 
+  mainWindow.on("resize", debouncedSaveWindowBounds);
+  mainWindow.on("move", debouncedSaveWindowBounds);
+
   mainWindow.webContents.on("did-finish-load", () => {
     log.info("Renderer process finished loading");
   });
 
   // Open DevTools in development
   if (!app.isPackaged) {
-    // mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
   mainWindow.webContents.on(
@@ -354,6 +398,20 @@ function createWindow(options?: { load?: boolean }) {
     });
   });
 
+  ipcMain.on(
+    "set-window-bounds",
+    (_event, bounds: Partial<Electron.Rectangle>) => {
+      if (!mainWindow) return;
+      const current = mainWindow.getBounds();
+      mainWindow.setBounds({
+        x: bounds.x ?? current.x,
+        y: bounds.y ?? current.y,
+        width: bounds.width ?? current.width,
+        height: bounds.height ?? current.height,
+      });
+    },
+  );
+
   ipcMain.on("log-message", (_event, level: string, ...args: unknown[]) => {
     if (typeof log[level as keyof typeof log] === "function") {
       // @ts-expect-error dynamic log level access
@@ -366,23 +424,24 @@ function createWindow(options?: { load?: boolean }) {
   ipcMain.handle("get-log-content", async () => {
     try {
       const logPath = log.transports.file.getFile().path;
-      if (await fs.pathExists(logPath)) {
+      if (await lockedFs.pathExists(logPath)) {
         // Read last 50KB or so to avoid reading huge files
-        const stats = await fs.stat(logPath);
+        const stats = await lockedFs.stat(logPath);
         const size = stats.size;
         const READ_SIZE = 50 * 1024; // 50KB
         const start = Math.max(0, size - READ_SIZE);
 
-        const stream = fs.createReadStream(logPath, {
-          start,
-          encoding: "utf8",
-        });
-        const chunks: string[] = [];
-
-        return new Promise<string>((resolve, reject) => {
-          stream.on("data", (chunk) => chunks.push(chunk.toString()));
-          stream.on("end", () => resolve(chunks.join("")));
-          stream.on("error", reject);
+        return await withFileLock(logPath, () => {
+          return new Promise<string>((resolve, reject) => {
+            const stream = fs.createReadStream(logPath, {
+              start,
+              encoding: "utf8",
+            });
+            const chunks: string[] = [];
+            stream.on("data", (chunk) => chunks.push(chunk.toString()));
+            stream.on("end", () => resolve(chunks.join("")));
+            stream.on("error", reject);
+          });
         });
       }
       return "No log file found.";
@@ -438,15 +497,27 @@ function createWindow(options?: { load?: boolean }) {
 
 function toggleMainWindowVisibility() {
   if (!mainWindow) return;
-  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
-    mainWindow.hide();
-    return;
-  }
-  mainWindow.show();
+
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+    mainWindow.focus();
+    return;
   }
-  mainWindow.focus();
+
+  if (isAppHidden) {
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    isAppHidden = true;
+    mainWindow.setIgnoreMouseEvents(true, { forward: false });
+    mainWindow.webContents.send("renderer-event", "app-visibility", false);
+  }
 }
 
 function registerShortcut(
@@ -546,7 +617,9 @@ function registerAnchorShortcuts() {
     // Save: Cmd+Shift+Key / Ctrl+Shift+Key
     // Note: Cmd+Shift+3 is a system screenshot shortcut on macOS, it might be intercepted by system.
     const saveAccel =
-      process.platform === "darwin" ? `Command+Shift+${key}` : `Ctrl+Shift+${key}`;
+      process.platform === "darwin"
+        ? `Command+Shift+${key}`
+        : `Ctrl+Shift+${key}`;
     globalShortcut.register(saveAccel, () => {
       mainWindow?.webContents.send("renderer-event", "save-anchor", key);
     });
@@ -558,14 +631,16 @@ function getModelDir(): string {
 }
 
 async function hasRequiredModelFiles(modelDir: string): Promise<boolean> {
-  const hasConfig = await fs.pathExists(path.join(modelDir, "config.json"));
-  const hasWeights = await fs.pathExists(
+  const hasConfig = await lockedFs.pathExists(
+    path.join(modelDir, "config.json"),
+  );
+  const hasWeights = await lockedFs.pathExists(
     path.join(modelDir, "model.safetensors"),
   );
-  const hasProcessor = await fs.pathExists(
+  const hasProcessor = await lockedFs.pathExists(
     path.join(modelDir, "preprocessor_config.json"),
   );
-  const hasTokenizer = await fs.pathExists(
+  const hasTokenizer = await lockedFs.pathExists(
     path.join(modelDir, "tokenizer.json"),
   );
   return hasConfig && hasWeights && hasProcessor && hasTokenizer;
@@ -615,15 +690,18 @@ function spawnUvPython(
 ): Promise<ChildProcess> {
   const candidates = getUvCandidates();
   return new Promise((resolve, reject) => {
-    const trySpawn = (index: number) => {
+    const trySpawn = async (index: number) => {
       if (index >= candidates.length) {
         reject(new Error("uv not found"));
         return;
       }
       const command = candidates[index];
-      if (path.isAbsolute(command) && !fs.pathExistsSync(command)) {
-        trySpawn(index + 1);
-        return;
+      if (path.isAbsolute(command)) {
+        const exists = await lockedFs.pathExists(command);
+        if (!exists) {
+          trySpawn(index + 1);
+          return;
+        }
       }
 
       const proc = spawn(command, args, {
@@ -829,18 +907,23 @@ function downloadBuffer(
 async function ensureUvInstalled(
   onProgress?: (percent: number) => void,
 ): Promise<string> {
-  const existing = getUvCandidates().find(
-    (c) => path.isAbsolute(c) && fs.pathExistsSync(c),
-  );
+  const candidates = getUvCandidates();
+  let existing = "";
+  for (const c of candidates) {
+    if (path.isAbsolute(c) && (await lockedFs.pathExists(c))) {
+      existing = c;
+      break;
+    }
+  }
   if (existing) return existing;
 
   const uvPath = getManagedUvPath();
-  if (await fs.pathExists(uvPath)) {
+  if (await lockedFs.pathExists(uvPath)) {
     process.env.PROREF_UV_PATH = uvPath;
     return uvPath;
   }
 
-  await fs.ensureDir(path.dirname(uvPath));
+  await lockedFs.ensureDir(path.dirname(uvPath));
   const { url, kind } = resolveUvReleaseAsset();
   log.info(`Downloading uv from: ${url}`);
   const buf = await downloadBuffer(url, (current, total) => {
@@ -866,9 +949,9 @@ async function ensureUvInstalled(
     throw new Error("Failed to extract uv binary");
   }
 
-  await fs.writeFile(uvPath, binary);
+  await lockedFs.writeFile(uvPath, binary);
   if (process.platform !== "win32") {
-    await fs.chmod(uvPath, 0o755);
+    await withFileLock(uvPath, () => fs.chmod(uvPath, 0o755));
   }
   process.env.PROREF_UV_PATH = uvPath;
   return uvPath;
@@ -978,14 +1061,14 @@ async function ensureModelReady(
   if (!force) {
     try {
       const settingsPath = path.join(getStorageDir(), "settings.json");
-      if (await fs.pathExists(settingsPath)) {
-        const settings = await fs.readJson(settingsPath);
-        if (!settings.enableVectorSearch && !modelMissing) {
+      if (await lockedFs.pathExists(settingsPath)) {
+        const settings: any = await lockedFs.readJson(settingsPath);
+        if (!settings.enableVectorSearch) {
           if (debug)
             console.log("[model] Vector search disabled, skipping model check");
           return;
         }
-      } else if (!modelMissing) {
+      } else {
         // Default is disabled if no settings file
         if (debug)
           console.log("[model] No settings file, skipping model check");
@@ -1317,13 +1400,6 @@ ipcMain.handle(
     return registerToggleMouseThroughShortcut(accelerator);
   },
 );
-
-ipcMain.on("set-mouse-through", (_event, enabled: boolean) => {
-  // If disabling, ensure we reset ignore mouse events (just in case)
-  if (!enabled && mainWindow) {
-    mainWindow.setIgnoreMouseEvents(false);
-  }
-});
 
 ipcMain.on(
   "set-ignore-mouse-events",

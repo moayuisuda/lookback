@@ -50,6 +50,7 @@ export type ContextMenuState = { x: number; y: number; image: ImageMeta };
 
 interface GalleryContextMenuProps {
   value: ContextMenuState;
+  image: ImageMeta;
   allTags: string[];
   enableVectorSearch: boolean;
   onClose: () => void;
@@ -67,6 +68,7 @@ const ensureTags = (tags: string[] | undefined | null): string[] =>
 
 export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
   value,
+  image,
   allTags,
   enableVectorSearch,
   onClose,
@@ -112,10 +114,10 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
       el.style.bottom = "auto";
       el.style.maxHeight = `${window.innerHeight - value.y - padding}px`;
     }
-  }, [value.x, value.y, value.image.id]);
+  }, [value.x, value.y, image.id]);
 
   const [menuName, setMenuName] = useState(() =>
-    deriveNameFromFilename(value.image.filename)
+    deriveNameFromFilename(image.filename)
   );
 
   const debouncedUpdateName = useMemo(
@@ -128,12 +130,12 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
     [onUpdateName]
   );
 
-  const dominantColor = value.image.dominantColor;
+  const dominantColor = image.dominantColor;
 
   const needle = menuTagInput.trim().toLowerCase();
   const suggestions = allTags
     .filter((t) => t.toLowerCase().includes(needle))
-    .filter((t) => !ensureTags(value.image.tags).includes(t))
+    .filter((t) => !ensureTags(image.tags).includes(t))
     .slice(0, 20);
 
   return (
@@ -168,10 +170,10 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
             debouncedUpdateName.cancel();
             const trimmed = menuName.trim();
             if (!trimmed) {
-              setMenuName(deriveNameFromFilename(value.image.filename));
+              setMenuName(deriveNameFromFilename(image.filename));
               return;
             }
-            if (trimmed !== deriveNameFromFilename(value.image.filename)) {
+            if (trimmed !== deriveNameFromFilename(image.filename)) {
               onUpdateName(trimmed);
             }
           }}
@@ -186,17 +188,17 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
 
       <div className="border-t border-neutral-800 my-1"></div>
 
-      {value.image.pageUrl && (
+      {image.pageUrl && (
         <>
           <div className="flex justify-between">
             <div className="px-4 py-1 text-xs text-neutral-400">{t("gallery.contextMenu.linkLabel")}</div>
             <a
-              href={value.image.pageUrl}
+              href={image.pageUrl}
               className="flex items-center gap-2 px-4 py-1.5 text-neutral-400 hover:text-white hover:bg-neutral-800 truncate transition-colors"
-              title={value.image.pageUrl}
+              title={image.pageUrl}
               onClick={(e) => {
                 e.preventDefault();
-                const url = value.image.pageUrl;
+                const url = image.pageUrl;
                 if (!url) return;
                 if (window.electron?.openExternal) {
                   void window.electron.openExternal(url);
@@ -210,9 +212,9 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
               <span className="truncate text-[10px]">
                 {(() => {
                   try {
-                    return new URL(value.image.pageUrl || "").hostname;
+                    return new URL(image.pageUrl || "").hostname;
                   } catch {
-                    return value.image.pageUrl;
+                    return image.pageUrl;
                   }
                 })()}
               </span>
@@ -235,7 +237,7 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
             }
             onClick={() => menuInputRef.current?.focus()}
           >
-            {ensureTags(value.image.tags).map((tag) => (
+            {ensureTags(image.tags).map((tag) => (
               <Tag
                 key={tag}
                 tag={tag}
@@ -248,7 +250,7 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
               ref={menuInputRef}
               className="flex-1 bg-transparent text-white text-xs outline-none min-w-[60px] placeholder-neutral-600"
               placeholder={
-                ensureTags(value.image.tags).length === 0
+                ensureTags(image.tags).length === 0
                   ? t("gallery.contextMenu.addTagPlaceholder")
                   : ""
               }
@@ -263,9 +265,9 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
                 } else if (
                   e.key === "Backspace" &&
                   menuTagInput === "" &&
-                  ensureTags(value.image.tags).length > 0
+                  ensureTags(image.tags).length > 0
                 ) {
-                  const tags = ensureTags(value.image.tags);
+                  const tags = ensureTags(image.tags);
                   onRemoveTag(tags[tags.length - 1]);
                 }
               }}
@@ -328,14 +330,14 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
               className="w-4 h-4 rounded border border-neutral-700"
               style={{
                 background:
-                  value.image.tone && TONE_GRADIENTS[value.image.tone]
-                    ? TONE_GRADIENTS[value.image.tone]
+                  image.tone && TONE_GRADIENTS[image.tone]
+                    ? TONE_GRADIENTS[image.tone]
                     : "transparent",
               }}
             />
             <span className="text-xs text-neutral-300">
-              {value.image.tone
-                ? t(TONE_LABEL_KEYS[value.image.tone] ?? "tone.unknown")
+              {image.tone
+                ? t(TONE_LABEL_KEYS[image.tone] ?? "tone.unknown")
                 : t("common.notSet")}
             </span>
           </div>
@@ -354,7 +356,7 @@ export const GalleryContextMenu: React.FC<GalleryContextMenuProps> = ({
 
       <div className="border-t border-neutral-800 my-1"></div>
 
-      {enableVectorSearch && !value.image.hasVector && (
+      {enableVectorSearch && !image.hasVector && (
         <div
           className="flex items-center gap-2 px-4 py-2 text-white hover:bg-neutral-800 cursor-pointer transition-colors"
           onClick={onReindex}

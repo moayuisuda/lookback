@@ -67,6 +67,7 @@ def _download_model_with_progress(model_dir: str) -> None:
         "preprocessor_config.json",
         "tokenizer.json",
     ]
+    optional_files: List[str] = []
 
     weights_candidates = ["model.safetensors"]
     total = len(required_files) + len(weights_candidates)

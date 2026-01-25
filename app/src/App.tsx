@@ -25,28 +25,10 @@ import { useT } from "./i18n/useT";
 import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 
+import { WindowResizer } from "./components/WindowResizer";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
-
-const isImageMeta = (value: unknown): value is ImageMeta => {
-  if (!isRecord(value)) return false;
-  if (typeof value.id !== "string") return false;
-  if (typeof value.filename !== "string") return false;
-  if (typeof value.imagePath !== "string") return false;
-  if (
-    !Array.isArray(value.tags) ||
-    !value.tags.every((t) => typeof t === "string")
-  )
-    return false;
-  if (typeof value.createdAt !== "number") return false;
-  if (
-    value.dominantColor !== undefined &&
-    value.dominantColor !== null &&
-    typeof value.dominantColor !== "string"
-  )
-    return false;
-  return true;
-};
 
 function App() {
   useAppShortcuts();
@@ -60,14 +42,6 @@ function App() {
   // Removed useEffect for pinMode resizeWindowBy as it is now handled atomically in TitleBar
 
   useEffect(() => {
-    // 监听 Electron 传来的新收藏
-    const cleanupNew = window.electron?.onNewCollection((data) => {
-      console.log("New collection received:", data);
-      if (isImageMeta(data)) {
-        galleryActions.addImage(data);
-      }
-    });
-
     // 监听更新 (例如向量生成完毕)
     const cleanupUpdate = window.electron?.onImageUpdated((data) => {
       console.log("Image update received:", data);
@@ -103,11 +77,20 @@ function App() {
     // 初始化加载
     anchorActions.loadAnchors();
 
+    const cleanupVisibility = window.electron?.onRendererEvent?.(
+      (event: string, ...args: unknown[]) => {
+        if (event === "app-visibility") {
+          const visible = args[0] as boolean;
+          globalActions.setAppHidden(!visible);
+        }
+      }
+    );
+
     return () => {
-      cleanupNew?.();
       cleanupUpdate?.();
       cleanupEnv?.();
       cleanupToast?.();
+      cleanupVisibility?.();
     };
   }, []);
 
@@ -201,10 +184,12 @@ function App() {
   return (
     <div
       className={clsx(
-        "flex flex-col h-screen text-white overflow-hidden transition-colors",
+        "relative flex flex-col h-screen text-white overflow-hidden transition-colors",
         globalSnap.mouseThrough ? "bg-transparent" : "bg-neutral-950/85",
+        globalSnap.isAppHidden && "hidden"
       )}
     >
+      <WindowResizer />
       <TitleBar />
       <EnvInitModal />
       {globalSnap.toasts.length > 0 && (

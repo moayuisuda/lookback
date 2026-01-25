@@ -121,6 +121,7 @@ export interface GlobalState {
   isGalleryOpen: boolean;
   enableVectorSearch: boolean;
   llmSettings: LLMSettings;
+  isAppHidden: boolean;
 }
 
 export interface LLMSettings {
@@ -211,6 +212,7 @@ export const globalState = proxy<GlobalState>({
     key: '',
     model: '',
   },
+  isAppHidden: false,
 });
 
 export const globalActions = {
@@ -430,7 +432,7 @@ export const globalActions = {
   setMouseThrough: (enabled: boolean) => {
     globalState.mouseThrough = enabled;
     void settingStorage.set('mouseThrough', enabled);
-    window.electron?.setMouseThrough?.(enabled);
+    window.electron?.setIgnoreMouseEvents?.(enabled, { forward: true });
   },
 
   setCanvasOpacityUpShortcut: async (accelerator: string) => {
@@ -502,5 +504,9 @@ export const globalActions = {
     const next = { ...globalState.llmSettings, ...settings };
     globalState.llmSettings = next;
     void settingStorage.set('llmSettings', next);
+  },
+
+  setAppHidden: (hidden: boolean) => {
+    globalState.isAppHidden = hidden;
   },
 };

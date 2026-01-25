@@ -100,9 +100,6 @@ export const Canvas: React.FC = () => {
     snapshots: new Map(),
   });
 
-  const isMouseOverCanvasRef = useRef(false);
-  const isIgnoringMouseRef = useRef(false);
-
   const setSelectedIds = (ids: Set<string>) => {
     canvasState.selectedIds = ids;
   };
@@ -174,41 +171,10 @@ export const Canvas: React.FC = () => {
   };
 
   const handleCanvasMouseEnter = () => {
-    isMouseOverCanvasRef.current = true;
-    if (shouldEnableMouseThrough && !isIgnoringMouseRef.current) {
-      window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-      isIgnoringMouseRef.current = true;
+    if (shouldEnableMouseThrough) {
+      // window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
     }
   };
-
-  const handleCanvasMouseLeave = () => {
-    isMouseOverCanvasRef.current = false;
-    if (isIgnoringMouseRef.current) {
-      window.electron?.setIgnoreMouseEvents?.(false);
-      isIgnoringMouseRef.current = false;
-    }
-  };
-
-  useEffect(() => {
-    if (!shouldEnableMouseThrough && isIgnoringMouseRef.current) {
-      window.electron?.setIgnoreMouseEvents?.(false);
-      isIgnoringMouseRef.current = false;
-    }
-    if (
-      shouldEnableMouseThrough &&
-      isMouseOverCanvasRef.current &&
-      !isIgnoringMouseRef.current
-    ) {
-      window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-      isIgnoringMouseRef.current = true;
-    }
-    return () => {
-      if (isIgnoringMouseRef.current) {
-        window.electron?.setIgnoreMouseEvents?.(false);
-        isIgnoringMouseRef.current = false;
-      }
-    };
-  }, [shouldEnableMouseThrough]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -231,8 +197,6 @@ export const Canvas: React.FC = () => {
       height: containerRef.current.offsetHeight,
     };
   }, [appSnap.pinMode, appSnap.sidebarWidth]);
-
-
 
   useEffect(() => {
     const handleDropRequest = (e: Event) => {
@@ -474,7 +438,7 @@ export const Canvas: React.FC = () => {
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * newScale,
     };
-    
+
     canvasActions.setCanvasViewport({
       x: newPos.x,
       y: newPos.y,
@@ -656,9 +620,9 @@ export const Canvas: React.FC = () => {
       // because stage.x() might not be updated yet in React render cycle
       // However, for smooth dragging, we usually rely on event deltas.
       // Since we are now controlled, we should base on canvasViewport.
-      
+
       const nextPos = { x: canvasViewport.x + dx, y: canvasViewport.y + dy };
-      
+
       canvasActions.setCanvasViewport({
         x: nextPos.x,
         y: nextPos.y,
@@ -1033,9 +997,7 @@ export const Canvas: React.FC = () => {
     }
     const snapshots = new Map<string, { x: number; y: number }>();
     currentSelected.forEach((selectedId) => {
-      const target = canvasItems.find(
-        (it) => it.canvasId === selectedId,
-      );
+      const target = canvasItems.find((it) => it.canvasId === selectedId);
       if (target) snapshots.set(selectedId, { x: target.x, y: target.y });
     });
     multiDragRef.current = {
@@ -1066,9 +1028,7 @@ export const Canvas: React.FC = () => {
       }
     >();
     currentSelected.forEach((selectedId) => {
-      const target = canvasItems.find(
-        (it) => it.canvasId === selectedId,
-      );
+      const target = canvasItems.find((it) => it.canvasId === selectedId);
       if (!target) return;
       if (target.type === "text") {
         snapshots.set(selectedId, {
@@ -1210,7 +1170,6 @@ export const Canvas: React.FC = () => {
       onClick={() => globalActions.setActiveArea("canvas")}
       onMouseDown={() => globalActions.setActiveArea("canvas")}
       onMouseEnter={handleCanvasMouseEnter}
-      onMouseLeave={handleCanvasMouseLeave}
     >
       <CanvasToolbar
         canvasFilters={canvasFilters}
@@ -1222,8 +1181,9 @@ export const Canvas: React.FC = () => {
         onRequestClear={() => setIsClearModalOpen(true)}
         onToggleExpanded={() => canvasActions.toggleCanvasToolbarExpanded()}
       />
+      {/* 四个定位角 */}
       {appSnap.mouseThrough && (
-        <div className="absolute inset-0 pointer-events-none z-50">
+        <div className="inset-0 pointer-events-none z-1">
           {[
             { position: "top-1 right-1", path: "M2 2H22V22" },
             { position: "bottom-1 right-1", path: "M2 22H22V2" },
@@ -1231,7 +1191,7 @@ export const Canvas: React.FC = () => {
           ].map((corner) => (
             <svg
               key={corner.position}
-              className={`absolute pointer-events-auto draggable ${corner.position}`}
+              className={`absolute ${corner.position}`}
               width="24"
               height="24"
               viewBox="0 0 24 24"
@@ -1276,7 +1236,9 @@ export const Canvas: React.FC = () => {
                   item={item}
                   isSelected={selectedIds.has(item.canvasId)}
                   showControls={
-                    selectedIds.size === 1 && selectedIds.has(item.canvasId) && !appSnap.mouseThrough
+                    selectedIds.size === 1 &&
+                    selectedIds.has(item.canvasId) &&
+                    !appSnap.mouseThrough
                   }
                   isPanModifierActive={isSpaceDown}
                   stageScale={stageScale}
@@ -1326,7 +1288,9 @@ export const Canvas: React.FC = () => {
                 image={item as CanvasImageState}
                 isSelected={selectedIds.has(item.canvasId)}
                 showControls={
-                  selectedIds.size === 1 && selectedIds.has(item.canvasId) && !appSnap.mouseThrough
+                  selectedIds.size === 1 &&
+                  selectedIds.has(item.canvasId) &&
+                  !appSnap.mouseThrough
                 }
                 isPanModifierActive={isSpaceDown}
                 stageScale={stageScale}

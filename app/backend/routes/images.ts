@@ -29,6 +29,54 @@ const ensureTags = (tags: unknown): string[] => {
   return tags.filter((tag): tag is string => typeof tag === "string");
 };
 
+const parseNumber = (raw: unknown): number | null => {
+  if (typeof raw !== "string") return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const parseLimit = (raw: unknown): number | undefined => {
+  const parsed = parseNumber(raw);
+  if (typeof parsed !== "number") return undefined;
+  return parsed > 0 ? parsed : undefined;
+};
+
+const parseTextCursor = (query: Record<string, unknown>) => {
+  const createdAt = parseNumber(query.cursorCreatedAt);
+  const rowid = parseNumber(query.cursorRowid);
+  const galleryOrder = parseNumber(query.cursorGalleryOrder);
+  if (typeof createdAt !== "number" || typeof rowid !== "number") return null;
+  return { createdAt, rowid, galleryOrder: typeof galleryOrder === "number" ? galleryOrder : null };
+};
+
+const parseVectorCursor = (query: Record<string, unknown>) => {
+  const distance = parseNumber(query.cursorDistance);
+  const rowid = parseNumber(query.cursorRowid);
+  if (typeof distance !== "number" || typeof rowid !== "number") return null;
+  return { distance, rowid };
+};
+
+const buildTextCursor = (items: ImageMeta[]) => {
+  const last = items[items.length - 1];
+  if (!last) return null;
+  if (typeof last.createdAt !== "number" || typeof last.rowid !== "number") return null;
+  return { createdAt: last.createdAt, rowid: last.rowid, galleryOrder: last.galleryOrder ?? null };
+};
+
+const buildVectorCursor = (items: ImageMeta[]) => {
+  const last = items[items.length - 1];
+  if (!last) return null;
+  if (
+    typeof last.vectorDistance !== "number" ||
+    typeof last.vectorRowid !== "number"
+  ) {
+    return null;
+  }
+  return { distance: last.vectorDistance, rowid: last.vectorRowid };
+};
+
+type OklchColor = { L: number; C: number; h: number };
+
 const sanitizeBase = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) return "image";
@@ -96,11 +144,14 @@ const parseTags = (raw: unknown): string[] => {
 
 const normalizeHexColor = (raw: unknown): string | null => {
   if (typeof raw !== "string") return null;
-  const val = raw.trim();
+  const val = raw.trim().toLowerCase();
   if (!val) return null;
   const withHash = val.startsWith("#") ? val : `#${val}`;
-  if (!/^#[0-9a-fA-F]{6}$/.test(withHash)) return null;
-  return withHash.toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(withHash)) return withHash;
+  if (/^#[0-9a-f]{3}$/.test(withHash)) {
+    return `#${withHash[1]}${withHash[1]}${withHash[2]}${withHash[2]}${withHash[3]}${withHash[3]}`;
+  }
+  return null;
 };
 
 const hexToRgb = (
@@ -143,40 +194,24 @@ const rgbToOklab = (rgb: {
   };
 };
 
-const COLOR_MATCH_DELTA_E = 0.17;
-const COLOR_MATCH_MAX_HUE_DIFF = 0.55;
-
 const oklabToOklch = (lab: { L: number; a: number; b: number }) => {
   const C = Math.hypot(lab.a, lab.b);
   const h = Math.atan2(lab.b, lab.a);
   return { L: lab.L, C, h };
 };
 
-const isSimilarColor = (
-  a: string | null | undefined,
-  b: string
-): boolean => {
-  if (!a) return false;
-  const aNorm = normalizeHexColor(a);
-  if (!aNorm) return false;
-  const rgbA = hexToRgb(aNorm);
-  const rgbB = hexToRgb(b);
-  if (!rgbA || !rgbB) return false;
-  const labA = rgbToOklab(rgbA);
-  const labB = rgbToOklab(rgbB);
-  const lchA = oklabToOklch(labA);
-  const lchB = oklabToOklch(labB);
-  const dL = lchA.L - lchB.L;
-  const dC = lchA.C - lchB.C;
-  const avgC = (lchA.C + lchB.C) / 2;
-  const rawHueDiff = Math.abs(lchA.h - lchB.h);
-  const hueDiff = rawHueDiff > Math.PI ? 2 * Math.PI - rawHueDiff : rawHueDiff;
-  // Ignore hue when both colors are near neutral, but enforce hue separation for chromatic colors.
-  if (avgC > 0.04 && hueDiff > COLOR_MATCH_MAX_HUE_DIFF) return false;
-  // DeltaE in OKLCH space with hue term weighted by chroma.
-  const dH = avgC < 0.02 ? 0 : 2 * Math.sqrt(lchA.C * lchB.C) * Math.sin(hueDiff / 2);
-  const deltaE = Math.sqrt(dL * dL + dC * dC + dH * dH);
-  return deltaE <= COLOR_MATCH_DELTA_E;
+const hexToOklch = (hex: string): OklchColor | null => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return null;
+  return oklabToOklch(rgbToOklab(rgb));
+};
+
+const resolveOklchPayload = (raw: string): { color: string; oklch: OklchColor } | null => {
+  const normalized = normalizeHexColor(raw);
+  if (!normalized) return null;
+  const oklch = hexToOklch(normalized);
+  if (!oklch) return null;
+  return { color: normalized, oklch };
 };
 
 export const createImagesRouter = (deps: ImagesRouteDeps) => {
@@ -197,6 +232,7 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
     try {
       if (guardStorage(res)) return;
       const imageDb = deps.getImageDb();
+      const mode = typeof req.query.mode === "string" ? req.query.mode.trim() : "";
       const query =
         typeof req.query.query === "string" ? req.query.query.trim() : "";
       const tags = parseTags(req.query.tags);
@@ -204,126 +240,73 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
         typeof req.query.tone === "string" && req.query.tone.trim()
           ? req.query.tone.trim()
           : null;
-      const color = normalizeHexColor(req.query.color);
-      const limit =
-        typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-      const offset =
-        typeof req.query.offset === "string" ? Number(req.query.offset) : undefined;
-      const effectiveLimit =
-        typeof limit === "number" && Number.isFinite(limit) && limit > 0
-          ? limit
-          : undefined;
-      const effectiveOffset =
-        typeof offset === "number" && Number.isFinite(offset) && offset >= 0
-          ? offset
-          : 0;
-
-      const hasFilters = Boolean(query || tags.length || color || tone);
-      if (!hasFilters) {
-        const items = imageDb.listImages();
-        if (typeof effectiveLimit === "number") {
-          res.json(items.slice(effectiveOffset, effectiveOffset + effectiveLimit));
-        } else {
-          res.json(items.slice(effectiveOffset));
+      const colorHex = normalizeHexColor(req.query.color);
+      const color = colorHex ? hexToOklch(colorHex) : null;
+      const effectiveLimit = parseLimit(req.query.limit) ?? 100;
+      if (mode === "vector") {
+        if (!query) {
+          res.json({ items: [], nextCursor: null });
+          return;
         }
+        const settings = await deps.readSettings();
+        const enableVectorSearch = Boolean(settings.enableVectorSearch);
+        if (!enableVectorSearch) {
+          res.json({ items: [], nextCursor: null });
+          return;
+        }
+        const vectorCursor = parseVectorCursor(req.query as Record<string, unknown>);
+        const tagIds = imageDb.getTagIdsByNames(tags);
+        const tagCount = tags.length;
+        const vector = await deps.runPythonVector("encode-text", query);
+        if (!vector) {
+          res.json({ items: [], nextCursor: null });
+          return;
+        }
+        const results = imageDb.searchImages({
+          vector,
+          limit: effectiveLimit,
+          tagIds,
+          tagCount,
+          tone,
+          color,
+          afterDistance: vectorCursor?.distance ?? null,
+          afterRowid: vectorCursor?.rowid ?? null,
+        });
+        const nextCursor = buildVectorCursor(results);
+        const items = results.map((item) => ({ ...item, isVectorResult: true }));
+        res.json({ items, nextCursor });
         return;
       }
 
-      const tagIds = imageDb.getTagIdsByNames(tags);
-      const tagCount = tags.length;
-      let results: ImageMeta[] = [];
+      const textCursor = parseTextCursor(req.query as Record<string, unknown>);
       if (!query && tags.length === 0) {
-        const items = imageDb.listImages();
-        const filteredByTone = tone ? items.filter((item) => item.tone === tone) : items;
-        const filteredByColor = color
-          ? filteredByTone.filter((item) => isSimilarColor(item.dominantColor, color))
-          : filteredByTone;
-        if (typeof effectiveLimit === "number") {
-          res.json(
-            filteredByColor.slice(effectiveOffset, effectiveOffset + effectiveLimit)
-          );
-        } else {
-          res.json(filteredByColor.slice(effectiveOffset));
-        }
+        const items = imageDb.listImages({
+          limit: effectiveLimit,
+          tone,
+          color,
+          cursor: textCursor,
+        });
+        const nextCursor = buildTextCursor(items);
+        res.json({ items, nextCursor });
         return;
       }
-
-      if (query) {
-        results = imageDb.searchImagesByText({
-          query,
-          limit,
-          offset,
-          tagIds,
-          tagCount,
-          tone,
-        });
-      } else {
-        results = imageDb.searchImagesByText({
-          query: tags.join(" "),
-          limit,
-          offset,
-          tagIds,
-          tagCount,
-          tone,
-        });
-      }
-
-      const filtered = color
-        ? results.filter((item) => isSimilarColor(item.dominantColor, color))
-        : results;
-      res.json(filtered);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-
-  router.get("/api/images/vector", async (req, res) => {
-    try {
-      if (guardStorage(res)) return;
-      const imageDb = deps.getImageDb();
-      const query =
-        typeof req.query.query === "string" ? req.query.query.trim() : "";
-      
-      if (!query) {
-        res.json([]);
-        return;
-      }
-
-      const tags = parseTags(req.query.tags);
-      const tone =
-        typeof req.query.tone === "string" && req.query.tone.trim()
-          ? req.query.tone.trim()
-          : null;
-      const color = normalizeHexColor(req.query.color);
-      const limit =
-        typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-      const offset =
-        typeof req.query.offset === "string" ? Number(req.query.offset) : undefined;
 
       const tagIds = imageDb.getTagIdsByNames(tags);
       const tagCount = tags.length;
-
-      const vector = await deps.runPythonVector("encode-text", query);
-      if (!vector) {
-        res.json([]);
-        return;
-      }
-
-      const results = imageDb.searchImages({
-        vector,
-        limit,
-        offset,
+      const searchQuery = query || tags.join(" ");
+      const results = imageDb.searchImagesByText({
+        query: searchQuery,
+        limit: effectiveLimit,
         tagIds,
         tagCount,
         tone,
+        color,
+        afterCreatedAt: textCursor?.createdAt ?? null,
+        afterRowid: textCursor?.rowid ?? null,
       });
 
-      const filtered = color
-        ? results.filter((item) => isSimilarColor(item.dominantColor, color))
-        : results;
-        
-      res.json(filtered);
+      const nextCursor = buildTextCursor(results);
+      res.json({ items: results, nextCursor });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
@@ -415,19 +398,25 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
         }
       }
 
-      let nextDominantColor = current.dominantColor;
+      let nextDominantColor: string | null | undefined = undefined;
+      let nextDominantOklch: OklchColor | null | undefined = undefined;
       if (body.dominantColor !== undefined) {
         if (body.dominantColor === null) {
           nextDominantColor = null;
+          nextDominantOklch = null;
         } else if (typeof body.dominantColor === "string") {
           const trimmed = body.dominantColor.trim();
           if (!trimmed) {
             nextDominantColor = null;
-          } else if (/^#[0-9a-fA-F]{6}$/.test(trimmed) || /^#[0-9a-fA-F]{3}$/.test(trimmed)) {
-            nextDominantColor = trimmed;
+            nextDominantOklch = null;
           } else {
-            res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
-            return;
+            const resolved = resolveOklchPayload(trimmed);
+            if (!resolved) {
+              res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
+              return;
+            }
+            nextDominantColor = resolved.color;
+            nextDominantOklch = resolved.oklch;
           }
         } else {
           res.status(400).json({ error: "dominantColor must be a string or null" });
@@ -435,7 +424,7 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
         }
       }
 
-      let nextTone = current.tone;
+      let nextTone: string | null | undefined = undefined;
       if (body.tone !== undefined) {
         if (body.tone === null) {
           nextTone = null;
@@ -448,7 +437,7 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
         }
       }
 
-      let nextPageUrl = current.pageUrl;
+      let nextPageUrl: string | null | undefined = undefined;
       if (body.pageUrl !== undefined) {
         if (body.pageUrl === null) {
           nextPageUrl = null;
@@ -463,6 +452,9 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
       imageDb.updateImage({
         id,
         dominantColor: nextDominantColor,
+        dominantL: nextDominantOklch?.L,
+        dominantC: nextDominantOklch?.C,
+        dominantH: nextDominantOklch?.h,
         tone: nextTone,
         pageUrl: nextPageUrl,
       });
@@ -683,7 +675,6 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
       };
 
       res.json({ success: true, meta });
-      deps.sendToRenderer?.("new-collection", meta);
 
       void (async () => {
         const settings = await deps.readSettings();
@@ -714,8 +705,17 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
         try {
           const dominantColor = await deps.runPythonDominantColor(localPath);
           if (dominantColor) {
-            imageDb.updateImage({ id, dominantColor });
-            deps.sendToRenderer?.("image-updated", { id, dominantColor });
+            const resolved = resolveOklchPayload(dominantColor);
+            if (resolved) {
+              imageDb.updateImage({
+                id,
+                dominantColor: resolved.color,
+                dominantL: resolved.oklch.L,
+                dominantC: resolved.oklch.C,
+                dominantH: resolved.oklch.h,
+              });
+              deps.sendToRenderer?.("image-updated", { id, dominantColor: resolved.color });
+            }
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -829,14 +829,22 @@ export const createImagesRouter = (deps: ImagesRouteDeps) => {
           newItems.push(meta);
           existingNames.add(filename);
           created += 1;
-          deps.sendToRenderer?.("new-collection", meta);
 
           void (async () => {
             try {
               const dominantColor = await deps.runPythonDominantColor(localPath);
               if (dominantColor) {
-                imageDb.updateImage({ id, dominantColor });
-                deps.sendToRenderer?.("image-updated", { id, dominantColor });
+                const resolved = resolveOklchPayload(dominantColor);
+                if (resolved) {
+                  imageDb.updateImage({
+                    id,
+                    dominantColor: resolved.color,
+                    dominantL: resolved.oklch.L,
+                    dominantC: resolved.oklch.C,
+                    dominantH: resolved.oklch.h,
+                  });
+                  deps.sendToRenderer?.("image-updated", { id, dominantColor: resolved.color });
+                }
               }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);

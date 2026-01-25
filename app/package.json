@@ -60,8 +60,8 @@
     }
   },
   "scripts": {
-    "dev": "concurrently \"tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --watch --onSuccess 'electron .'\" \"vite\"",
-    "build": "tsc -b && vite build && tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron && electron-builder",
+    "dev": "concurrently \"tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --external sqlite-vec --watch --onSuccess \\\"electron .\\\"\" \"vite\"",
+    "build": "tsc -b && vite build && tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --external sqlite-vec && electron-builder",
     "build:mac": "npm run build -- --mac --arm64",
     "build:win": "tsc -b && vite build && tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron && electron-builder --win",
     "lint": "eslint .",
@@ -92,7 +92,7 @@
     "react-masonry-css": "^1.0.16",
     "react-moveable": "^0.56.0",
     "react-selecto": "^1.26.3",
-    "sqlite-vss": "^0.1.2",
+    "sqlite-vec": "^0.1.7-alpha.2",
     "tailwind-merge": "^3.4.0",
     "use-image": "^1.1.4",
     "uuid": "^13.0.0",
@@ -126,5 +126,8 @@
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "wait-on": "^9.0.3"
+  },
+  "optionalDependencies": {
+    "sqlite-vss-windows-x64": "*"
   }
 }

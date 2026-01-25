@@ -28,6 +28,73 @@ var import_fs_extra7 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
 var import_electron_updater = require("electron-updater");
 var import_child_process2 = require("child_process");
+
+// backend/fileLock.ts
+var import_fs_extra = __toESM(require("fs-extra"), 1);
+var import_path = __toESM(require("path"), 1);
+var KeyedMutex = class {
+  locks = /* @__PURE__ */ new Map();
+  async run(key, task) {
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release = () => {
+    };
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    const chain = previous.then(() => current);
+    this.locks.set(key, chain);
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.locks.get(key) === chain) {
+        this.locks.delete(key);
+      }
+    }
+  }
+};
+var mutex = new KeyedMutex();
+var normalizeKey = (target) => {
+  if (!target) return "unknown";
+  try {
+    return import_path.default.resolve(target);
+  } catch {
+    return target;
+  }
+};
+var withFileLock = async (target, task) => {
+  return mutex.run(normalizeKey(target), task);
+};
+var withFileLocks = async (targets, task) => {
+  const keys = Array.from(new Set(targets.map(normalizeKey))).sort();
+  const run = async (index) => {
+    if (index >= keys.length) return task();
+    return mutex.run(keys[index], () => run(index + 1));
+  };
+  return run(0);
+};
+var lockedFs = {
+  pathExists: (target) => withFileLock(target, () => import_fs_extra.default.pathExists(target)),
+  ensureDir: (target) => withFileLock(target, () => import_fs_extra.default.ensureDir(target)),
+  ensureFile: (target) => withFileLock(target, () => import_fs_extra.default.ensureFile(target)),
+  readJson: (target) => withFileLock(target, () => import_fs_extra.default.readJson(target)),
+  writeJson: (target, data) => withFileLock(target, () => import_fs_extra.default.writeJson(target, data)),
+  readFile: (target, options) => withFileLock(target, () => import_fs_extra.default.readFile(target, options)),
+  writeFile: (target, data, options) => withFileLock(
+    target,
+    () => import_fs_extra.default.writeFile(target, data, options)
+  ),
+  appendFile: (target, data) => withFileLock(target, () => import_fs_extra.default.appendFile(target, data)),
+  readdir: (target, options) => withFileLock(target, () => import_fs_extra.default.readdir(target, options)),
+  stat: (target) => withFileLock(target, () => import_fs_extra.default.stat(target)),
+  rename: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.rename(src, dest)),
+  copy: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.copy(src, dest)),
+  remove: (target) => withFileLock(target, () => import_fs_extra.default.remove(target)),
+  unlink: (target) => withFileLock(target, () => import_fs_extra.default.unlink(target))
+};
+
+// electron/main.ts
 var import_readline2 = __toESM(require("readline"), 1);
 var import_https2 = __toESM(require("https"), 1);
 var import_zlib = __toESM(require("zlib"), 1);
@@ -45,10 +112,21 @@ var import_child_process = require("child_process");
 var import_readline = __toESM(require("readline"), 1);
 
 // backend/db.ts
-var import_path = __toESM(require("path"), 1);
+var import_path2 = __toESM(require("path"), 1);
 var import_better_sqlite3 = __toESM(require("better-sqlite3"), 1);
-var import_sqlite_vss = require("sqlite-vss");
-var schema = `
+var sqliteVec = __toESM(require("sqlite-vec"), 1);
+
+// backend/constants.ts
+var OKLCH_FILTER = {
+  deltaE: 0.17,
+  maxHueDiff: 0.55,
+  chromaThreshold: 0.04,
+  neutralChromaCutoff: 0.02,
+  tau: Math.PI * 2
+};
+
+// backend/db.ts
+var schemaStandard = `
 CREATE TABLE IF NOT EXISTS images (
   id TEXT PRIMARY KEY,
   filename TEXT UNIQUE NOT NULL,
@@ -56,6 +134,9 @@ CREATE TABLE IF NOT EXISTS images (
   createdAt INTEGER NOT NULL,
   pageUrl TEXT,
   dominantColor TEXT,
+  dominantL REAL,
+  dominantC REAL,
+  dominantH REAL,
   tone TEXT,
   galleryOrder INTEGER
 );
@@ -63,6 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_images_created ON images(createdAt DESC);
 CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename);
 CREATE INDEX IF NOT EXISTS idx_images_path ON images(imagePath);
 CREATE INDEX IF NOT EXISTS idx_images_gallery_order ON images(galleryOrder ASC);
+CREATE INDEX IF NOT EXISTS idx_images_oklch ON images(dominantL, dominantC, dominantH);
 
 CREATE TABLE IF NOT EXISTS tags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,9 +159,11 @@ CREATE TABLE IF NOT EXISTS image_tags (
   FOREIGN KEY (tagId) REFERENCES tags(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_image_tags_tag_image ON image_tags(tagId, imageId);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS images_vss USING vss0(
-  vector(768)
+`;
+var schemaVector = `
+CREATE VIRTUAL TABLE IF NOT EXISTS images_vec USING vec0(
+  rowid INTEGER PRIMARY KEY,
+  vector float[768]
 );
 `;
 var normalizeTags = (tags) => {
@@ -97,9 +181,14 @@ var buildTagsMap = (rows) => {
 };
 var resolveHasVector = (db, rowids) => {
   if (rowids.length === 0) return /* @__PURE__ */ new Set();
-  const placeholders = rowids.map(() => "?").join(",");
-  const rows = db.prepare(`SELECT rowid FROM images_vss WHERE rowid IN (${placeholders})`).all(...rowids);
-  return new Set(rows.map((row) => row.rowid));
+  try {
+    const placeholders = rowids.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT rowid FROM images_vec WHERE rowid IN (${placeholders})`).all(...rowids);
+    return new Set(rows.map((row) => row.rowid));
+  } catch (error) {
+    console.error("Failed to resolve vector status:", error);
+    return /* @__PURE__ */ new Set();
+  }
 };
 var loadTags = (db, imageIds) => {
   if (imageIds.length === 0) return /* @__PURE__ */ new Map();
@@ -117,6 +206,7 @@ var mapImages = (db, rows) => {
   const vectorSet = resolveHasVector(db, rowids);
   return rows.map((row) => ({
     id: row.id,
+    rowid: row.rowid,
     filename: row.filename,
     imagePath: row.imagePath,
     createdAt: row.createdAt,
@@ -124,32 +214,36 @@ var mapImages = (db, rows) => {
     dominantColor: row.dominantColor,
     tone: row.tone,
     tags: tagsMap.get(row.id) ?? [],
-    hasVector: vectorSet.has(row.rowid)
+    hasVector: vectorSet.has(row.rowid),
+    galleryOrder: row.galleryOrder ?? null
   }));
 };
 var createImageDb = (db) => {
   const insertImageStmt = db.prepare(
-    `INSERT INTO images (id, filename, imagePath, createdAt, pageUrl, dominantColor, tone)
-     VALUES (@id, @filename, @imagePath, @createdAt, @pageUrl, @dominantColor, @tone)`
+    `INSERT INTO images (id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone)
+     VALUES (@id, @filename, @imagePath, @createdAt, @pageUrl, @dominantColor, @dominantL, @dominantC, @dominantH, @tone)`
   );
   const updateImageStmt = db.prepare(
     `UPDATE images SET
-      filename = COALESCE(@filename, filename),
-      imagePath = COALESCE(@imagePath, imagePath),
-      pageUrl = COALESCE(@pageUrl, pageUrl),
-      dominantColor = COALESCE(@dominantColor, dominantColor),
-      tone = COALESCE(@tone, tone)
+      filename = CASE WHEN @setFilename = 1 THEN @filename ELSE filename END,
+      imagePath = CASE WHEN @setImagePath = 1 THEN @imagePath ELSE imagePath END,
+      pageUrl = CASE WHEN @setPageUrl = 1 THEN @pageUrl ELSE pageUrl END,
+      dominantColor = CASE WHEN @setDominantColor = 1 THEN @dominantColor ELSE dominantColor END,
+      dominantL = CASE WHEN @setDominantColor = 1 THEN @dominantL ELSE dominantL END,
+      dominantC = CASE WHEN @setDominantColor = 1 THEN @dominantC ELSE dominantC END,
+      dominantH = CASE WHEN @setDominantColor = 1 THEN @dominantH ELSE dominantH END,
+      tone = CASE WHEN @setTone = 1 THEN @tone ELSE tone END
      WHERE id = @id`
   );
   const getImageRowById = (id) => {
     const row = db.prepare(
-      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id = ?`
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE id = ?`
     ).get(id);
     return row ?? null;
   };
   const getImageRowByFilename = (filename) => {
     const row = db.prepare(
-      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE filename = ?`
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE filename = ?`
     ).get(filename);
     return row ?? null;
   };
@@ -162,17 +256,40 @@ var createImageDb = (db) => {
     if (!row) return null;
     return mapImages(db, [row])[0] ?? null;
   };
-  const listImages = () => {
-    const rows = db.prepare(
-      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images ORDER BY galleryOrder ASC, createdAt DESC`
-    ).all();
+  const listImages = (params) => {
+    const { limit, tone, color, cursor } = params ?? {};
+    const colorSql = buildColorFilterSql("i", color);
+    const orderKey = "COALESCE(i.galleryOrder, -1)";
+    const hasCursor = typeof (cursor == null ? void 0 : cursor.createdAt) === "number" && typeof (cursor == null ? void 0 : cursor.rowid) === "number" && (cursor == null ? void 0 : cursor.galleryOrder) !== void 0;
+    const limitValue = typeof limit === "number" && limit > 0 ? limit : null;
+    const sql = `SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder
+         FROM images i
+         WHERE (@tone IS NULL OR i.tone = @tone)
+           ${colorSql.sql}
+           AND (
+             @hasCursor = 0
+             OR ${orderKey} > @cursorOrderKey
+             OR (${orderKey} = @cursorOrderKey AND i.createdAt < @cursorCreatedAt)
+             OR (${orderKey} = @cursorOrderKey AND i.createdAt = @cursorCreatedAt AND i.rowid < @cursorRowid)
+           )
+         ORDER BY ${orderKey} ASC, i.createdAt DESC, i.rowid DESC
+         ${limitValue ? "LIMIT @limit" : ""}`;
+    const rows = db.prepare(sql).all({
+      tone: tone ?? null,
+      hasCursor: hasCursor ? 1 : 0,
+      cursorOrderKey: hasCursor ? (cursor == null ? void 0 : cursor.galleryOrder) ?? -1 : 0,
+      cursorCreatedAt: hasCursor ? cursor == null ? void 0 : cursor.createdAt : 0,
+      cursorRowid: hasCursor ? cursor == null ? void 0 : cursor.rowid : 0,
+      limit: limitValue,
+      ...colorSql.params
+    });
     return mapImages(db, rows);
   };
   const listImagesByIds = (ids) => {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(",");
     const rows = db.prepare(
-      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, tone, galleryOrder FROM images WHERE id IN (${placeholders})`
+      `SELECT rowid, id, filename, imagePath, createdAt, pageUrl, dominantColor, dominantL, dominantC, dominantH, tone, galleryOrder FROM images WHERE id IN (${placeholders})`
     ).all(...ids);
     const map = new Map(rows.map((row) => [row.id, row]));
     const orderedRows = ids.map((id) => map.get(id)).filter((row) => Boolean(row));
@@ -182,24 +299,43 @@ var createImageDb = (db) => {
     const info = insertImageStmt.run({
       ...data,
       dominantColor: null,
+      dominantL: null,
+      dominantC: null,
+      dominantH: null,
       tone: null
     });
     return { rowid: Number(info.lastInsertRowid) };
   };
   const updateImage = (data) => {
+    const hasFilename = data.filename !== void 0;
+    const hasImagePath = data.imagePath !== void 0;
+    const hasPageUrl = data.pageUrl !== void 0;
+    const hasDominantColor = data.dominantColor !== void 0;
+    const hasTone = data.tone !== void 0;
     updateImageStmt.run({
       id: data.id,
-      filename: data.filename ?? null,
-      imagePath: data.imagePath ?? null,
-      pageUrl: data.pageUrl ?? null,
-      dominantColor: data.dominantColor ?? null,
-      tone: data.tone ?? null
+      setFilename: hasFilename ? 1 : 0,
+      filename: hasFilename ? data.filename : null,
+      setImagePath: hasImagePath ? 1 : 0,
+      imagePath: hasImagePath ? data.imagePath : null,
+      setPageUrl: hasPageUrl ? 1 : 0,
+      pageUrl: hasPageUrl ? data.pageUrl : null,
+      setDominantColor: hasDominantColor ? 1 : 0,
+      dominantColor: hasDominantColor ? data.dominantColor ?? null : null,
+      dominantL: hasDominantColor ? data.dominantL ?? null : null,
+      dominantC: hasDominantColor ? data.dominantC ?? null : null,
+      dominantH: hasDominantColor ? data.dominantH ?? null : null,
+      setTone: hasTone ? 1 : 0,
+      tone: hasTone ? data.tone ?? null : null
     });
   };
   const deleteImage = (id) => {
     const row = getImageRowById(id);
     if (!row) return null;
-    db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(row.rowid);
+    try {
+      db.prepare(`DELETE FROM images_vec WHERE rowid = ?`).run(row.rowid);
+    } catch {
+    }
     db.prepare(`DELETE FROM images WHERE id = ?`).run(id);
     db.prepare(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tagId FROM image_tags)`).run();
     return { imagePath: row.imagePath };
@@ -240,17 +376,27 @@ var createImageDb = (db) => {
     tx();
   };
   const setImageVector = (rowid, vector) => {
-    const tx = db.transaction(() => {
-      db.prepare(`DELETE FROM images_vss WHERE rowid = ?`).run(rowid);
-      const normalizedVector = new Float32Array(vector);
-      db.prepare(
-        `INSERT INTO images_vss (rowid, vector) VALUES (@rowid, @vector)`
-      ).run({
-        rowid,
-        vector: normalizedVector
+    try {
+      const normalizedRowid = Number(rowid);
+      if (!Number.isFinite(normalizedRowid) || !Number.isInteger(normalizedRowid)) {
+        console.error("Failed to set image vector: invalid rowid", rowid);
+        return;
+      }
+      const rowidValue = BigInt(normalizedRowid);
+      const tx = db.transaction(() => {
+        db.prepare(`DELETE FROM images_vec WHERE rowid = ?`).run(rowidValue);
+        const normalizedVector = new Float32Array(vector);
+        db.prepare(
+          `INSERT INTO images_vec (rowid, vector) VALUES (@rowid, @vector)`
+        ).run({
+          rowid: rowidValue,
+          vector: normalizedVector
+        });
       });
-    });
-    tx();
+      tx();
+    } catch (error) {
+      console.error("Failed to set image vector:", error);
+    }
   };
   const setGalleryOrder = (order) => {
     const resetStmt = db.prepare(`UPDATE images SET galleryOrder = NULL WHERE galleryOrder IS NOT NULL`);
@@ -319,25 +465,29 @@ var createImageDb = (db) => {
     tx();
   };
   const searchImages = (params) => {
-    const { vector, limit, offset, tagIds, tagCount, tone } = params;
+    const { vector, limit, tagIds, tagCount, tone, color, afterDistance, afterRowid } = params;
     if (!vector || vector.length === 0) return [];
-    const idsJson = JSON.stringify(tagIds ?? []);
-    const stmt = db.prepare(
-      `
+    try {
+      const idsJson = JSON.stringify(tagIds ?? []);
+      const colorSql = buildColorFilterSql("i", color);
+      const stmt = db.prepare(
+        `
       WITH tag_ids AS (
         SELECT DISTINCT value AS tagId
         FROM json_each(@tagIds)
       ),
       vss_matches AS (
         SELECT rowid, distance
-        FROM images_vss
-        WHERE vss_search(vector, @vector)
+        FROM images_vec
+        WHERE vector MATCH @vector
+        ORDER BY distance
         LIMIT @vssLimit
       )
-      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder, v.distance
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder, v.distance
       FROM vss_matches v
       JOIN images i ON v.rowid = i.rowid
       WHERE (@tone IS NULL OR i.tone = @tone)
+        ${colorSql.sql}
         AND (
           @hasTags = 0 OR EXISTS (
             SELECT 1 FROM image_tags it
@@ -347,37 +497,66 @@ var createImageDb = (db) => {
             HAVING COUNT(DISTINCT it.tagId) = @tagCount
           )
         )
-      ORDER BY v.distance ASC
-      LIMIT @limit OFFSET @offset
+        AND (
+          @hasCursor = 0
+          OR v.distance > @cursorDistance
+          OR (v.distance = @cursorDistance AND v.rowid > @cursorRowid)
+        )
+      ORDER BY v.distance ASC, v.rowid ASC
+      LIMIT @limit
     `
-    );
-    const normalizedVector = new Float32Array(vector);
-    const effectiveLimit = typeof limit === "number" && limit > 0 ? limit : 100;
-    const effectiveOffset = typeof offset === "number" && offset >= 0 ? offset : 0;
-    const rows = stmt.all({
-      vector: normalizedVector,
-      tagIds: idsJson,
-      hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
-      tagCount: tagCount ?? 0,
-      limit: effectiveLimit,
-      offset: effectiveOffset,
-      vssLimit: effectiveLimit + effectiveOffset,
-      // VSS search needs to find enough candidates
-      tone: tone ?? null
-    });
-    const metas = mapImages(db, rows);
-    const scores = new Map(rows.map((row) => [row.id, row.distance]));
-    return metas.map((meta) => {
-      const distance = scores.get(meta.id);
-      const score = typeof distance === "number" ? 1 - distance : void 0;
-      return score !== void 0 ? { ...meta, score } : meta;
-    });
+      );
+      const normalizedVector = new Float32Array(vector);
+      const effectiveLimit = typeof limit === "number" && limit > 0 ? limit : 100;
+      const hasCursor = typeof afterDistance === "number" && typeof afterRowid === "number";
+      const cursorDistance = hasCursor ? afterDistance : 0;
+      const cursorRowid = hasCursor ? afterRowid : 0;
+      const maxVssLimit = Math.max(effectiveLimit * 20, 500);
+      const vssLimitBase = effectiveLimit * 20;
+      const vssLimit = Math.min(vssLimitBase, maxVssLimit);
+      const rows = stmt.all({
+        vector: normalizedVector,
+        tagIds: idsJson,
+        hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
+        tagCount: tagCount ?? 0,
+        limit: effectiveLimit,
+        vssLimit,
+        hasCursor: hasCursor ? 1 : 0,
+        cursorDistance,
+        cursorRowid,
+        tone: tone ?? null,
+        ...colorSql.params
+      });
+      const metas = mapImages(db, rows);
+      const scores = new Map(rows.map((row) => [row.id, row.distance]));
+      const cursorMap = new Map(
+        rows.map((row) => [row.id, { distance: row.distance, rowid: row.rowid }])
+      );
+      return metas.map((meta) => {
+        const distance = scores.get(meta.id);
+        const score = typeof distance === "number" ? 1 - distance : void 0;
+        const cursor = cursorMap.get(meta.id);
+        if (!cursor) {
+          return score !== void 0 ? { ...meta, score } : meta;
+        }
+        return {
+          ...meta,
+          score,
+          vectorDistance: cursor.distance,
+          vectorRowid: cursor.rowid
+        };
+      });
+    } catch (error) {
+      console.error("Vector search failed:", error);
+      return [];
+    }
   };
   const searchImagesByText = (params) => {
-    const { query, limit, offset, tagIds, tagCount, tone } = params;
+    const { query, limit, tagIds, tagCount, tone, color, afterCreatedAt, afterRowid } = params;
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return [];
     const idsJson = JSON.stringify(tagIds ?? []);
+    const colorSql = buildColorFilterSql("i", color);
     const textConditions = tokens.map(
       (_, i) => `(lower(i.filename) LIKE @token${i} OR lower(i.imagePath) LIKE @token${i})`
     ).join(" AND ");
@@ -386,9 +565,10 @@ var createImageDb = (db) => {
         SELECT DISTINCT value AS tagId
         FROM json_each(@tagIds)
       )
-      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.tone, i.galleryOrder
+      SELECT i.rowid, i.id, i.filename, i.imagePath, i.createdAt, i.pageUrl, i.dominantColor, i.dominantL, i.dominantC, i.dominantH, i.tone, i.galleryOrder
       FROM images i
       WHERE (@tone IS NULL OR i.tone = @tone)
+        ${colorSql.sql}
         AND (
           @hasTags = 0 OR EXISTS (
             SELECT 1 FROM image_tags it
@@ -399,17 +579,26 @@ var createImageDb = (db) => {
           )
         )
         AND (${textConditions})
-      ORDER BY i.createdAt DESC
-      LIMIT @limit OFFSET @offset
+        AND (
+          @hasCursor = 0
+          OR i.createdAt < @cursorCreatedAt
+          OR (i.createdAt = @cursorCreatedAt AND i.rowid < @cursorRowid)
+        )
+      ORDER BY i.createdAt DESC, i.rowid DESC
+      LIMIT @limit
     `;
     const stmt = db.prepare(sql);
+    const hasCursor = typeof afterCreatedAt === "number" && typeof afterRowid === "number";
     const queryParams = {
       tagIds: idsJson,
       hasTags: tagIds && tagIds.length > 0 ? 1 : 0,
       tagCount: tagCount ?? 0,
       limit: typeof limit === "number" && limit > 0 ? limit : 100,
-      offset: typeof offset === "number" && offset >= 0 ? offset : 0,
-      tone: tone ?? null
+      tone: tone ?? null,
+      hasCursor: hasCursor ? 1 : 0,
+      cursorCreatedAt: hasCursor ? afterCreatedAt : 0,
+      cursorRowid: hasCursor ? afterRowid : 0,
+      ...colorSql.params
     };
     tokens.forEach((token, i) => {
       queryParams[`token${i}`] = `%${token}%`;
@@ -440,12 +629,51 @@ var createImageDb = (db) => {
   };
 };
 var createDatabase = (storageDir) => {
-  const dbPath = import_path.default.join(storageDir, "meta.sqlite");
+  const dbPath = import_path2.default.join(storageDir, "meta.sqlite");
   const db = new import_better_sqlite3.default(dbPath);
-  (0, import_sqlite_vss.load)(db);
+  try {
+    sqliteVec.load(db);
+    console.log("sqlite-vec loaded successfully");
+  } catch (e) {
+    console.error("Failed to load sqlite-vec:", e);
+  }
   db.pragma("journal_mode = WAL");
-  db.exec(schema);
+  try {
+    db.exec(schemaStandard);
+  } catch (e) {
+    console.error("Failed to execute standard schema:", e);
+    throw e;
+  }
+  try {
+    db.exec(schemaVector);
+  } catch (e) {
+    console.error("Failed to execute vector schema:", e);
+  }
   return { db, imageDb: createImageDb(db), incompatibleError: null };
+};
+var buildColorFilterSql = (alias, color) => {
+  if (!color) return { sql: "", params: {} };
+  const hueDiff = `MIN(ABS(${alias}.dominantH - @colorH), ${OKLCH_FILTER.tau} - ABS(${alias}.dominantH - @colorH))`;
+  const avgC = `((${alias}.dominantC + @colorC) / 2)`;
+  const dH = `(CASE WHEN ${avgC} < ${OKLCH_FILTER.neutralChromaCutoff} THEN 0 ELSE 2 * SQRT(${alias}.dominantC * @colorC) * SIN((${hueDiff}) / 2) END)`;
+  const deltaE = `SQRT(((${alias}.dominantL - @colorL) * (${alias}.dominantL - @colorL)) + ((${alias}.dominantC - @colorC) * (${alias}.dominantC - @colorC)) + (${dH} * ${dH}))`;
+  const sql = `
+    AND ${alias}.dominantL IS NOT NULL
+    AND ${alias}.dominantC IS NOT NULL
+    AND ${alias}.dominantH IS NOT NULL
+    AND (
+      (${avgC} <= ${OKLCH_FILTER.chromaThreshold} OR ${hueDiff} <= ${OKLCH_FILTER.maxHueDiff})
+      AND ${deltaE} <= ${OKLCH_FILTER.deltaE}
+    )
+  `;
+  return {
+    sql,
+    params: {
+      colorL: color.L,
+      colorC: color.C,
+      colorH: color.h
+    }
+  };
 };
 
 // backend/server.ts
@@ -457,76 +685,46 @@ var import_express = __toESM(require("express"), 1);
 var import_electron = require("electron");
 var import_uuid = require("uuid");
 var import_fs_extra2 = __toESM(require("fs-extra"), 1);
-
-// backend/fileLock.ts
-var import_fs_extra = __toESM(require("fs-extra"), 1);
-var import_path2 = __toESM(require("path"), 1);
-var KeyedMutex = class {
-  locks = /* @__PURE__ */ new Map();
-  async run(key, task) {
-    const previous = this.locks.get(key) ?? Promise.resolve();
-    let release = () => {
-    };
-    const current = new Promise((resolve) => {
-      release = resolve;
-    });
-    const chain = previous.then(() => current);
-    this.locks.set(key, chain);
-    await previous;
-    try {
-      return await task();
-    } finally {
-      release();
-      if (this.locks.get(key) === chain) {
-        this.locks.delete(key);
-      }
-    }
-  }
-};
-var mutex = new KeyedMutex();
-var normalizeKey = (target) => {
-  if (!target) return "unknown";
-  try {
-    return import_path2.default.resolve(target);
-  } catch {
-    return target;
-  }
-};
-var withFileLock = async (target, task) => {
-  return mutex.run(normalizeKey(target), task);
-};
-var withFileLocks = async (targets, task) => {
-  const keys = Array.from(new Set(targets.map(normalizeKey))).sort();
-  const run = async (index) => {
-    if (index >= keys.length) return task();
-    return mutex.run(keys[index], () => run(index + 1));
-  };
-  return run(0);
-};
-var lockedFs = {
-  pathExists: (target) => withFileLock(target, () => import_fs_extra.default.pathExists(target)),
-  ensureDir: (target) => withFileLock(target, () => import_fs_extra.default.ensureDir(target)),
-  ensureFile: (target) => withFileLock(target, () => import_fs_extra.default.ensureFile(target)),
-  readJson: (target) => withFileLock(target, () => import_fs_extra.default.readJson(target)),
-  writeJson: (target, data) => withFileLock(target, () => import_fs_extra.default.writeJson(target, data)),
-  readFile: (target, options) => withFileLock(target, () => import_fs_extra.default.readFile(target, options)),
-  writeFile: (target, data, options) => withFileLock(
-    target,
-    () => import_fs_extra.default.writeFile(target, data, options)
-  ),
-  appendFile: (target, data) => withFileLock(target, () => import_fs_extra.default.appendFile(target, data)),
-  readdir: (target, options) => withFileLock(target, () => import_fs_extra.default.readdir(target, options)),
-  stat: (target) => withFileLock(target, () => import_fs_extra.default.stat(target)),
-  rename: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.rename(src, dest)),
-  copy: (src, dest) => withFileLocks([src, dest], () => import_fs_extra.default.copy(src, dest)),
-  remove: (target) => withFileLock(target, () => import_fs_extra.default.remove(target)),
-  unlink: (target) => withFileLock(target, () => import_fs_extra.default.unlink(target))
-};
-
-// backend/routes/images.ts
 var ensureTags = (tags) => {
   if (!Array.isArray(tags)) return [];
   return tags.filter((tag) => typeof tag === "string");
+};
+var parseNumber = (raw) => {
+  if (typeof raw !== "string") return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+var parseLimit = (raw) => {
+  const parsed = parseNumber(raw);
+  if (typeof parsed !== "number") return void 0;
+  return parsed > 0 ? parsed : void 0;
+};
+var parseTextCursor = (query) => {
+  const createdAt = parseNumber(query.cursorCreatedAt);
+  const rowid = parseNumber(query.cursorRowid);
+  const galleryOrder = parseNumber(query.cursorGalleryOrder);
+  if (typeof createdAt !== "number" || typeof rowid !== "number") return null;
+  return { createdAt, rowid, galleryOrder: typeof galleryOrder === "number" ? galleryOrder : null };
+};
+var parseVectorCursor = (query) => {
+  const distance = parseNumber(query.cursorDistance);
+  const rowid = parseNumber(query.cursorRowid);
+  if (typeof distance !== "number" || typeof rowid !== "number") return null;
+  return { distance, rowid };
+};
+var buildTextCursor = (items) => {
+  const last = items[items.length - 1];
+  if (!last) return null;
+  if (typeof last.createdAt !== "number" || typeof last.rowid !== "number") return null;
+  return { createdAt: last.createdAt, rowid: last.rowid, galleryOrder: last.galleryOrder ?? null };
+};
+var buildVectorCursor = (items) => {
+  const last = items[items.length - 1];
+  if (!last) return null;
+  if (typeof last.vectorDistance !== "number" || typeof last.vectorRowid !== "number") {
+    return null;
+  }
+  return { distance: last.vectorDistance, rowid: last.vectorRowid };
 };
 var sanitizeBase = (raw) => {
   const trimmed = raw.trim();
@@ -583,11 +781,14 @@ var parseTags = (raw) => {
 };
 var normalizeHexColor = (raw) => {
   if (typeof raw !== "string") return null;
-  const val = raw.trim();
+  const val = raw.trim().toLowerCase();
   if (!val) return null;
   const withHash = val.startsWith("#") ? val : `#${val}`;
-  if (!/^#[0-9a-fA-F]{6}$/.test(withHash)) return null;
-  return withHash.toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(withHash)) return withHash;
+  if (/^#[0-9a-f]{3}$/.test(withHash)) {
+    return `#${withHash[1]}${withHash[1]}${withHash[2]}${withHash[2]}${withHash[3]}${withHash[3]}`;
+  }
+  return null;
 };
 var hexToRgb = (hex) => {
   if (!/^#[0-9a-f]{6}$/i.test(hex)) return null;
@@ -617,33 +818,22 @@ var rgbToOklab = (rgb) => {
     b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_
   };
 };
-var COLOR_MATCH_DELTA_E = 0.17;
-var COLOR_MATCH_MAX_HUE_DIFF = 0.55;
 var oklabToOklch = (lab) => {
   const C = Math.hypot(lab.a, lab.b);
   const h = Math.atan2(lab.b, lab.a);
   return { L: lab.L, C, h };
 };
-var isSimilarColor = (a, b) => {
-  if (!a) return false;
-  const aNorm = normalizeHexColor(a);
-  if (!aNorm) return false;
-  const rgbA = hexToRgb(aNorm);
-  const rgbB = hexToRgb(b);
-  if (!rgbA || !rgbB) return false;
-  const labA = rgbToOklab(rgbA);
-  const labB = rgbToOklab(rgbB);
-  const lchA = oklabToOklch(labA);
-  const lchB = oklabToOklch(labB);
-  const dL = lchA.L - lchB.L;
-  const dC = lchA.C - lchB.C;
-  const avgC = (lchA.C + lchB.C) / 2;
-  const rawHueDiff = Math.abs(lchA.h - lchB.h);
-  const hueDiff = rawHueDiff > Math.PI ? 2 * Math.PI - rawHueDiff : rawHueDiff;
-  if (avgC > 0.04 && hueDiff > COLOR_MATCH_MAX_HUE_DIFF) return false;
-  const dH = avgC < 0.02 ? 0 : 2 * Math.sqrt(lchA.C * lchB.C) * Math.sin(hueDiff / 2);
-  const deltaE = Math.sqrt(dL * dL + dC * dC + dH * dH);
-  return deltaE <= COLOR_MATCH_DELTA_E;
+var hexToOklch = (hex) => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return null;
+  return oklabToOklch(rgbToOklab(rgb));
+};
+var resolveOklchPayload = (raw) => {
+  const normalized = normalizeHexColor(raw);
+  if (!normalized) return null;
+  const oklch = hexToOklch(normalized);
+  if (!oklch) return null;
+  return { color: normalized, oklch };
 };
 var createImagesRouter = (deps) => {
   const router = import_express.default.Router();
@@ -661,97 +851,74 @@ var createImagesRouter = (deps) => {
     try {
       if (guardStorage(res)) return;
       const imageDb2 = deps.getImageDb();
+      const mode = typeof req.query.mode === "string" ? req.query.mode.trim() : "";
       const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
       const tags = parseTags(req.query.tags);
       const tone = typeof req.query.tone === "string" && req.query.tone.trim() ? req.query.tone.trim() : null;
-      const color = normalizeHexColor(req.query.color);
-      const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : void 0;
-      const offset = typeof req.query.offset === "string" ? Number(req.query.offset) : void 0;
-      const effectiveLimit = typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? limit : void 0;
-      const effectiveOffset = typeof offset === "number" && Number.isFinite(offset) && offset >= 0 ? offset : 0;
-      const hasFilters = Boolean(query || tags.length || color || tone);
-      if (!hasFilters) {
-        const items = imageDb2.listImages();
-        if (typeof effectiveLimit === "number") {
-          res.json(items.slice(effectiveOffset, effectiveOffset + effectiveLimit));
-        } else {
-          res.json(items.slice(effectiveOffset));
+      const colorHex = normalizeHexColor(req.query.color);
+      const color = colorHex ? hexToOklch(colorHex) : null;
+      const effectiveLimit = parseLimit(req.query.limit) ?? 100;
+      if (mode === "vector") {
+        if (!query) {
+          res.json({ items: [], nextCursor: null });
+          return;
         }
+        const settings = await deps.readSettings();
+        const enableVectorSearch = Boolean(settings.enableVectorSearch);
+        if (!enableVectorSearch) {
+          res.json({ items: [], nextCursor: null });
+          return;
+        }
+        const vectorCursor = parseVectorCursor(req.query);
+        const tagIds2 = imageDb2.getTagIdsByNames(tags);
+        const tagCount2 = tags.length;
+        const vector = await deps.runPythonVector("encode-text", query);
+        if (!vector) {
+          res.json({ items: [], nextCursor: null });
+          return;
+        }
+        const results2 = imageDb2.searchImages({
+          vector,
+          limit: effectiveLimit,
+          tagIds: tagIds2,
+          tagCount: tagCount2,
+          tone,
+          color,
+          afterDistance: (vectorCursor == null ? void 0 : vectorCursor.distance) ?? null,
+          afterRowid: (vectorCursor == null ? void 0 : vectorCursor.rowid) ?? null
+        });
+        const nextCursor2 = buildVectorCursor(results2);
+        const items = results2.map((item) => ({ ...item, isVectorResult: true }));
+        res.json({ items, nextCursor: nextCursor2 });
         return;
       }
-      const tagIds = imageDb2.getTagIdsByNames(tags);
-      const tagCount = tags.length;
-      let results = [];
+      const textCursor = parseTextCursor(req.query);
       if (!query && tags.length === 0) {
-        const items = imageDb2.listImages();
-        const filteredByTone = tone ? items.filter((item) => item.tone === tone) : items;
-        const filteredByColor = color ? filteredByTone.filter((item) => isSimilarColor(item.dominantColor, color)) : filteredByTone;
-        if (typeof effectiveLimit === "number") {
-          res.json(
-            filteredByColor.slice(effectiveOffset, effectiveOffset + effectiveLimit)
-          );
-        } else {
-          res.json(filteredByColor.slice(effectiveOffset));
-        }
+        const items = imageDb2.listImages({
+          limit: effectiveLimit,
+          tone,
+          color,
+          cursor: textCursor
+        });
+        const nextCursor2 = buildTextCursor(items);
+        res.json({ items, nextCursor: nextCursor2 });
         return;
       }
-      if (query) {
-        results = imageDb2.searchImagesByText({
-          query,
-          limit,
-          offset,
-          tagIds,
-          tagCount,
-          tone
-        });
-      } else {
-        results = imageDb2.searchImagesByText({
-          query: tags.join(" "),
-          limit,
-          offset,
-          tagIds,
-          tagCount,
-          tone
-        });
-      }
-      const filtered = color ? results.filter((item) => isSimilarColor(item.dominantColor, color)) : results;
-      res.json(filtered);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-  router.get("/api/images/vector", async (req, res) => {
-    try {
-      if (guardStorage(res)) return;
-      const imageDb2 = deps.getImageDb();
-      const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
-      if (!query) {
-        res.json([]);
-        return;
-      }
-      const tags = parseTags(req.query.tags);
-      const tone = typeof req.query.tone === "string" && req.query.tone.trim() ? req.query.tone.trim() : null;
-      const color = normalizeHexColor(req.query.color);
-      const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : void 0;
-      const offset = typeof req.query.offset === "string" ? Number(req.query.offset) : void 0;
       const tagIds = imageDb2.getTagIdsByNames(tags);
       const tagCount = tags.length;
-      const vector = await deps.runPythonVector("encode-text", query);
-      if (!vector) {
-        res.json([]);
-        return;
-      }
-      const results = imageDb2.searchImages({
-        vector,
-        limit,
-        offset,
+      const searchQuery = query || tags.join(" ");
+      const results = imageDb2.searchImagesByText({
+        query: searchQuery,
+        limit: effectiveLimit,
         tagIds,
         tagCount,
-        tone
+        tone,
+        color,
+        afterCreatedAt: (textCursor == null ? void 0 : textCursor.createdAt) ?? null,
+        afterRowid: (textCursor == null ? void 0 : textCursor.rowid) ?? null
       });
-      const filtered = color ? results.filter((item) => isSimilarColor(item.dominantColor, color)) : results;
-      res.json(filtered);
+      const nextCursor = buildTextCursor(results);
+      res.json({ items: results, nextCursor });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
@@ -831,26 +998,32 @@ var createImagesRouter = (deps) => {
           nextImagePath = newRelPath;
         }
       }
-      let nextDominantColor = current.dominantColor;
+      let nextDominantColor = void 0;
+      let nextDominantOklch = void 0;
       if (body.dominantColor !== void 0) {
         if (body.dominantColor === null) {
           nextDominantColor = null;
+          nextDominantOklch = null;
         } else if (typeof body.dominantColor === "string") {
           const trimmed = body.dominantColor.trim();
           if (!trimmed) {
             nextDominantColor = null;
-          } else if (/^#[0-9a-fA-F]{6}$/.test(trimmed) || /^#[0-9a-fA-F]{3}$/.test(trimmed)) {
-            nextDominantColor = trimmed;
+            nextDominantOklch = null;
           } else {
-            res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
-            return;
+            const resolved = resolveOklchPayload(trimmed);
+            if (!resolved) {
+              res.status(400).json({ error: "dominantColor must be a hex color like #RRGGBB" });
+              return;
+            }
+            nextDominantColor = resolved.color;
+            nextDominantOklch = resolved.oklch;
           }
         } else {
           res.status(400).json({ error: "dominantColor must be a string or null" });
           return;
         }
       }
-      let nextTone = current.tone;
+      let nextTone = void 0;
       if (body.tone !== void 0) {
         if (body.tone === null) {
           nextTone = null;
@@ -862,7 +1035,7 @@ var createImagesRouter = (deps) => {
           return;
         }
       }
-      let nextPageUrl = current.pageUrl;
+      let nextPageUrl = void 0;
       if (body.pageUrl !== void 0) {
         if (body.pageUrl === null) {
           nextPageUrl = null;
@@ -876,6 +1049,9 @@ var createImagesRouter = (deps) => {
       imageDb2.updateImage({
         id,
         dominantColor: nextDominantColor,
+        dominantL: nextDominantOklch == null ? void 0 : nextDominantOklch.L,
+        dominantC: nextDominantOklch == null ? void 0 : nextDominantOklch.C,
+        dominantH: nextDominantOklch == null ? void 0 : nextDominantOklch.h,
         tone: nextTone,
         pageUrl: nextPageUrl
       });
@@ -950,7 +1126,6 @@ var createImagesRouter = (deps) => {
     }
   });
   router.post("/api/import", async (req, res) => {
-    var _a;
     try {
       if (guardStorage(res)) return;
       const imageDb2 = deps.getImageDb();
@@ -1041,9 +1216,8 @@ var createImagesRouter = (deps) => {
         hasVector: false
       };
       res.json({ success: true, meta });
-      (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "new-collection", meta);
       void (async () => {
-        var _a2;
+        var _a;
         const settings = await deps.readSettings();
         const enableVectorSearch = Boolean(settings.enableVectorSearch);
         console.log("[VectorIndex] start import", {
@@ -1061,19 +1235,28 @@ var createImagesRouter = (deps) => {
               rowid,
               length: vector.length
             });
-            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, hasVector: true });
+            (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "image-updated", { id, hasVector: true });
           } else {
             console.error("[VectorIndex] vector missing import", { id, rowid });
           }
         }
       })();
       void (async () => {
-        var _a2;
+        var _a;
         try {
           const dominantColor = await deps.runPythonDominantColor(localPath);
           if (dominantColor) {
-            imageDb2.updateImage({ id, dominantColor });
-            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, dominantColor });
+            const resolved = resolveOklchPayload(dominantColor);
+            if (resolved) {
+              imageDb2.updateImage({
+                id,
+                dominantColor: resolved.color,
+                dominantL: resolved.oklch.L,
+                dominantC: resolved.oklch.C,
+                dominantH: resolved.oklch.h
+              });
+              (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "image-updated", { id, dominantColor: resolved.color });
+            }
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1081,12 +1264,12 @@ var createImagesRouter = (deps) => {
         }
       })();
       void (async () => {
-        var _a2;
+        var _a;
         try {
           const tone = await deps.runPythonTone(localPath);
           if (tone) {
             imageDb2.updateImage({ id, tone });
-            (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, tone });
+            (_a = deps.sendToRenderer) == null ? void 0 : _a.call(deps, "image-updated", { id, tone });
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1099,7 +1282,7 @@ var createImagesRouter = (deps) => {
     }
   });
   router.post("/api/index", async (req, res) => {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e;
     try {
       if (guardStorage(res)) return;
       const imageDb2 = deps.getImageDb();
@@ -1180,14 +1363,22 @@ var createImagesRouter = (deps) => {
           newItems.push(meta);
           existingNames.add(filename);
           created += 1;
-          (_b = deps.sendToRenderer) == null ? void 0 : _b.call(deps, "new-collection", meta);
           void (async () => {
             var _a2;
             try {
               const dominantColor = await deps.runPythonDominantColor(localPath);
               if (dominantColor) {
-                imageDb2.updateImage({ id, dominantColor });
-                (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, dominantColor });
+                const resolved = resolveOklchPayload(dominantColor);
+                if (resolved) {
+                  imageDb2.updateImage({
+                    id,
+                    dominantColor: resolved.color,
+                    dominantL: resolved.oklch.L,
+                    dominantC: resolved.oklch.C,
+                    dominantH: resolved.oklch.h
+                  });
+                  (_a2 = deps.sendToRenderer) == null ? void 0 : _a2.call(deps, "image-updated", { id, dominantColor: resolved.color });
+                }
               }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
@@ -1217,7 +1408,7 @@ var createImagesRouter = (deps) => {
           res.json({ success: true, created, updated: 0, total });
           return;
         }
-        (_c = deps.sendToRenderer) == null ? void 0 : _c.call(deps, "indexing-progress", {
+        (_b = deps.sendToRenderer) == null ? void 0 : _b.call(deps, "indexing-progress", {
           current: 0,
           total,
           statusKey: "indexing.starting"
@@ -1226,7 +1417,7 @@ var createImagesRouter = (deps) => {
         for (const item of candidates) {
           current += 1;
           if (current % 2 === 0 || current === total || current === 1) {
-            (_d = deps.sendToRenderer) == null ? void 0 : _d.call(deps, "indexing-progress", {
+            (_c = deps.sendToRenderer) == null ? void 0 : _c.call(deps, "indexing-progress", {
               current,
               total,
               statusKey: "indexing.progress",
@@ -1250,7 +1441,7 @@ var createImagesRouter = (deps) => {
           if (vector) {
             imageDb2.setImageVector(rowid, vector);
             updated += 1;
-            (_e = deps.sendToRenderer) == null ? void 0 : _e.call(deps, "image-updated", { id: item.id, hasVector: true });
+            (_d = deps.sendToRenderer) == null ? void 0 : _d.call(deps, "image-updated", { id: item.id, hasVector: true });
             console.log("[VectorIndex] stored batch", {
               id: item.id,
               rowid,
@@ -1263,7 +1454,7 @@ var createImagesRouter = (deps) => {
             });
           }
         }
-        (_f = deps.sendToRenderer) == null ? void 0 : _f.call(deps, "indexing-progress", {
+        (_e = deps.sendToRenderer) == null ? void 0 : _e.call(deps, "indexing-progress", {
           current: total,
           total,
           statusKey: "indexing.completed"
@@ -1983,9 +2174,10 @@ var initializeStorage = async () => {
   await ensureStorageDirs(STORAGE_DIR);
   initDatabase();
 };
-var PythonMetaService = class {
+var BasePythonService = class {
   process = null;
   queue = [];
+  serviceName = "Python Service";
   getUvCandidates() {
     var _a, _b;
     const candidates = [];
@@ -2042,7 +2234,7 @@ var PythonMetaService = class {
   attachProcess(proc) {
     var _a;
     if (!proc.stdout) {
-      console.error("Failed to spawn python process stdout");
+      console.error(`Failed to spawn ${this.serviceName} stdout`);
       return;
     }
     const rl = import_readline.default.createInterface({ input: proc.stdout });
@@ -2053,7 +2245,7 @@ var PythonMetaService = class {
           const res = JSON.parse(line);
           task.resolve(res);
         } catch (e) {
-          console.error("JSON parse error from python:", e);
+          console.error(`JSON parse error from ${this.serviceName}:`, e);
           task.resolve({ error: "invalid-json" });
         }
       }
@@ -2063,14 +2255,14 @@ var PythonMetaService = class {
       const lines = output.split(/\r?\n/).filter((l) => l.trim().length > 0);
       for (const line of lines) {
         if (line.startsWith("[INFO]") || line.includes("Python vector service started") || line.includes("Model loaded")) {
-          console.log("[Python Service]", line.replace("[INFO]", "").trim());
+          console.log(`[${this.serviceName}]`, line.replace("[INFO]", "").trim());
         } else {
-          console.error("[Python Error]", line);
+          console.error(`[${this.serviceName} Error]`, line);
         }
       }
     });
     proc.on("exit", (code) => {
-      console.log("Python process exited with code", code);
+      console.log(`${this.serviceName} exited with code`, code);
       const pending = this.queue.splice(0, this.queue.length);
       for (const task of pending) {
         task.resolve(null);
@@ -2111,7 +2303,7 @@ var PythonMetaService = class {
     const uvCandidates = this.getUvCandidates();
     const trySpawn = async (index) => {
       if (index >= uvCandidates.length) {
-        console.error("Failed to spawn python vector service: uv not found");
+        console.error(`Failed to spawn ${this.serviceName}: uv not found`);
         this.process = null;
         return;
       }
@@ -2134,13 +2326,33 @@ var PythonMetaService = class {
           trySpawn(index + 1);
           return;
         }
-        console.error("Failed to spawn python vector service", err);
+        console.error(`Failed to spawn ${this.serviceName}`, err);
         if (this.process === proc) {
           this.process = null;
         }
       });
     };
     void trySpawn(0);
+  }
+  async sendRequest(req) {
+    if (!this.process) {
+      this.start();
+    }
+    return new Promise((resolve, reject) => {
+      var _a;
+      this.queue.push({ resolve, reject });
+      if ((_a = this.process) == null ? void 0 : _a.stdin) {
+        this.process.stdin.write(JSON.stringify(req) + "\n");
+      } else {
+        resolve({ error: "stdin-unavailable" });
+      }
+    });
+  }
+};
+var PythonVectorService = class extends BasePythonService {
+  constructor() {
+    super();
+    this.serviceName = "Python Vector Service";
   }
   downloadModel(onProgress) {
     return new Promise((resolve, reject) => {
@@ -2210,18 +2422,7 @@ var PythonMetaService = class {
     });
   }
   async run(mode, arg) {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise((resolve, reject) => {
-      var _a;
-      this.queue.push({ resolve, reject });
-      if ((_a = this.process) == null ? void 0 : _a.stdin) {
-        this.process.stdin.write(JSON.stringify({ mode, arg }) + "\n");
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode, arg });
     if (!raw || typeof raw !== "object") {
       throw new Error("Invalid vector response");
     }
@@ -2235,25 +2436,14 @@ var PythonMetaService = class {
     }
     throw new Error("Vector missing");
   }
+};
+var PythonMetaService = class extends BasePythonService {
+  constructor() {
+    super();
+    this.serviceName = "Python Meta Service";
+  }
   async runDominantColor(arg) {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise((resolve, reject) => {
-      var _a;
-      this.queue.push({ resolve, reject });
-      if ((_a = this.process) == null ? void 0 : _a.stdin) {
-        console.log(
-          "Sending dominant-color request:",
-          JSON.stringify({ mode: "dominant-color", arg })
-        );
-        this.process.stdin.write(
-          JSON.stringify({ mode: "dominant-color", arg }) + "\n"
-        );
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode: "dominant-color", arg });
     if (!raw || typeof raw !== "object") return null;
     const res = raw;
     if (res.error) return null;
@@ -2263,20 +2453,7 @@ var PythonMetaService = class {
     return null;
   }
   async runTone(arg) {
-    if (!this.process) {
-      this.start();
-    }
-    const raw = await new Promise((resolve, reject) => {
-      var _a;
-      this.queue.push({ resolve, reject });
-      if ((_a = this.process) == null ? void 0 : _a.stdin) {
-        this.process.stdin.write(
-          JSON.stringify({ mode: "calculate-tone", arg }) + "\n"
-        );
-      } else {
-        resolve({ error: "stdin-unavailable" });
-      }
-    });
+    const raw = await this.sendRequest({ mode: "calculate-tone", arg });
     if (!raw || typeof raw !== "object") return null;
     const res = raw;
     if (res.error) return null;
@@ -2366,16 +2543,18 @@ async function startServer(sendToRenderer) {
   const server = (0, import_express8.default)();
   server.use((0, import_cors.default)());
   server.use(import_body_parser.default.json({ limit: "25mb" }));
-  const vectorService = new PythonMetaService();
+  const vectorService = new PythonVectorService();
   vectorService.start();
+  const metaService = new PythonMetaService();
+  metaService.start();
   const runPythonVector = async (mode, arg) => {
     return vectorService.run(mode, arg);
   };
   const runPythonDominantColor = async (arg) => {
-    return vectorService.runDominantColor(arg);
+    return metaService.runDominantColor(arg);
   };
   const runPythonTone = async (arg) => {
-    return vectorService.runTone(arg);
+    return metaService.runTone(arg);
   };
   const sendRenderer = sendToRenderer;
   const logErrorToFile = async (error, req) => {
@@ -2520,6 +2699,7 @@ var en = {
   "toast.logCopyFailed": "Failed to copy log",
   "toast.tagRenamed": "Tag renamed",
   "toast.tagRenameFailed": "Failed to rename tag",
+  "toast.updateTagsFailed": "Failed to update tags",
   "toast.updateDominantColorFailed": "Failed to update dominant color",
   "toast.updateNameFailed": "Failed to update name",
   "toast.imageDeleted": "Image deleted",
@@ -2701,6 +2881,7 @@ var zh = {
   "toast.logCopyFailed": "\u590D\u5236\u65E5\u5FD7\u5931\u8D25",
   "toast.tagRenamed": "\u6807\u7B7E\u5DF2\u91CD\u547D\u540D",
   "toast.tagRenameFailed": "\u91CD\u547D\u540D\u6807\u7B7E\u5931\u8D25",
+  "toast.updateTagsFailed": "\u66F4\u65B0\u6807\u7B7E\u5931\u8D25",
   "toast.updateDominantColorFailed": "\u66F4\u65B0\u4E3B\u8272\u5931\u8D25",
   "toast.updateNameFailed": "\u66F4\u65B0\u540D\u79F0\u5931\u8D25",
   "toast.imageDeleted": "\u56FE\u7247\u5DF2\u5220\u9664",
@@ -2848,6 +3029,7 @@ function t(locale, key, params) {
 }
 
 // electron/main.ts
+var import_radash2 = require("radash");
 if (!import_electron3.app.isPackaged) {
   import_electron3.app.setName("LookBack");
 }
@@ -2857,13 +3039,13 @@ import_electron_log.default.transports.file.maxSize = 5 * 1024 * 1024;
 import_electron_log.default.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
   const info = import_path8.default.parse(filePath);
-  try {
-    import_fs_extra7.default.renameSync(filePath, import_path8.default.join(info.dir, info.name + ".old" + info.ext));
-  } catch (e) {
+  const dest = import_path8.default.join(info.dir, info.name + ".old" + info.ext);
+  lockedFs.rename(filePath, dest).catch((e) => {
     console.warn("Could not rotate log", e);
-  }
+  });
 };
 var mainWindow = null;
+var isAppHidden = false;
 var lastGalleryDockDelta = 0;
 var localeCache = null;
 var DEFAULT_TOGGLE_WINDOW_SHORTCUT = process.platform === "darwin" ? "Command+L" : "Ctrl+L";
@@ -2894,11 +3076,11 @@ var isLocale = (value) => value === "en" || value === "zh";
 async function getLocale() {
   try {
     const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
-    const stat = await import_fs_extra7.default.stat(settingsPath).catch(() => null);
+    const stat = await lockedFs.stat(settingsPath).catch(() => null);
     if (!stat) return "en";
     if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
       return localeCache.locale;
-    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     const raw = settings && typeof settings === "object" ? settings.language : void 0;
     const locale = isLocale(raw) ? raw : "en";
     localeCache = { locale, mtimeMs: stat.mtimeMs };
@@ -2910,7 +3092,7 @@ async function getLocale() {
 async function loadShortcuts() {
   try {
     const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const rawToggle = settings.toggleWindowShortcut;
     if (typeof rawToggle === "string" && rawToggle.trim()) {
@@ -2926,7 +3108,7 @@ async function loadShortcuts() {
 async function loadWindowPinState() {
   try {
     const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
-    const settings = await import_fs_extra7.default.readJson(settingsPath).catch(() => null);
+    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
     const raw = settings;
     if (typeof raw.pinMode === "boolean") {
@@ -2986,12 +3168,43 @@ function setupAutoUpdater() {
     import_electron_updater.autoUpdater.checkForUpdatesAndNotify();
   }
 }
-function createWindow(options) {
+async function saveWindowBounds() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
+  try {
+    const bounds = mainWindow.getBounds();
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+    const settings = await lockedFs.readJson(settingsPath).catch(() => ({}));
+    await lockedFs.writeJson(settingsPath, {
+      ...settings,
+      windowBounds: bounds
+    });
+  } catch (e) {
+    import_electron_log.default.error("Failed to save window bounds", e);
+  }
+}
+var debouncedSaveWindowBounds = (0, import_radash2.debounce)({ delay: 1e3 }, saveWindowBounds);
+async function createWindow(options) {
   import_electron_log.default.info("Creating main window...");
+  isAppHidden = false;
   const { width, height } = import_electron3.screen.getPrimaryDisplay().workAreaSize;
+  let windowState = {};
+  try {
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
+    if (await lockedFs.pathExists(settingsPath)) {
+      const settings = await lockedFs.readJson(settingsPath);
+      if (settings.windowBounds) {
+        windowState = settings.windowBounds;
+      }
+    }
+  } catch (e) {
+    import_electron_log.default.error("Failed to load window bounds", e);
+  }
   mainWindow = new import_electron3.BrowserWindow({
-    width: Math.floor(width * 0.6),
-    height: Math.floor(height * 0.8),
+    width: windowState.width || Math.floor(width * 0.6),
+    height: windowState.height || Math.floor(height * 0.8),
+    x: windowState.x,
+    y: windowState.y,
     icon: import_path8.default.join(__dirname, "../resources/icon.svg"),
     webPreferences: {
       nodeIntegration: false,
@@ -3004,10 +3217,13 @@ function createWindow(options) {
     alwaysOnTop: false,
     hasShadow: true
   });
+  mainWindow.on("resize", debouncedSaveWindowBounds);
+  mainWindow.on("move", debouncedSaveWindowBounds);
   mainWindow.webContents.on("did-finish-load", () => {
     import_electron_log.default.info("Renderer process finished loading");
   });
   if (!import_electron3.app.isPackaged) {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   }
   mainWindow.webContents.on(
     "did-fail-load",
@@ -3101,6 +3317,19 @@ function createWindow(options) {
       height: h
     });
   });
+  import_electron3.ipcMain.on(
+    "set-window-bounds",
+    (_event, bounds) => {
+      if (!mainWindow) return;
+      const current = mainWindow.getBounds();
+      mainWindow.setBounds({
+        x: bounds.x ?? current.x,
+        y: bounds.y ?? current.y,
+        width: bounds.width ?? current.width,
+        height: bounds.height ?? current.height
+      });
+    }
+  );
   import_electron3.ipcMain.on("log-message", (_event, level, ...args) => {
     if (typeof import_electron_log.default[level] === "function") {
       import_electron_log.default[level](...args);
@@ -3111,20 +3340,22 @@ function createWindow(options) {
   import_electron3.ipcMain.handle("get-log-content", async () => {
     try {
       const logPath = import_electron_log.default.transports.file.getFile().path;
-      if (await import_fs_extra7.default.pathExists(logPath)) {
-        const stats = await import_fs_extra7.default.stat(logPath);
+      if (await lockedFs.pathExists(logPath)) {
+        const stats = await lockedFs.stat(logPath);
         const size = stats.size;
         const READ_SIZE = 50 * 1024;
         const start = Math.max(0, size - READ_SIZE);
-        const stream = import_fs_extra7.default.createReadStream(logPath, {
-          start,
-          encoding: "utf8"
-        });
-        const chunks = [];
-        return new Promise((resolve, reject) => {
-          stream.on("data", (chunk) => chunks.push(chunk.toString()));
-          stream.on("end", () => resolve(chunks.join("")));
-          stream.on("error", reject);
+        return await withFileLock(logPath, () => {
+          return new Promise((resolve, reject) => {
+            const stream = import_fs_extra7.default.createReadStream(logPath, {
+              start,
+              encoding: "utf8"
+            });
+            const chunks = [];
+            stream.on("data", (chunk) => chunks.push(chunk.toString()));
+            stream.on("end", () => resolve(chunks.join("")));
+            stream.on("error", reject);
+          });
         });
       }
       return "No log file found.";
@@ -3165,15 +3396,25 @@ function createWindow(options) {
 }
 function toggleMainWindowVisibility() {
   if (!mainWindow) return;
-  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
-    mainWindow.hide();
-    return;
-  }
-  mainWindow.show();
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+    mainWindow.focus();
+    return;
   }
-  mainWindow.focus();
+  if (isAppHidden) {
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    isAppHidden = true;
+    mainWindow.setIgnoreMouseEvents(true, { forward: false });
+    mainWindow.webContents.send("renderer-event", "app-visibility", false);
+  }
 }
 function registerShortcut(accelerator, currentVar, updateVar, action, checkSettingsOpen = false) {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
@@ -3259,14 +3500,16 @@ function getModelDir() {
   return import_path8.default.join(getStorageDir(), "model");
 }
 async function hasRequiredModelFiles(modelDir) {
-  const hasConfig = await import_fs_extra7.default.pathExists(import_path8.default.join(modelDir, "config.json"));
-  const hasWeights = await import_fs_extra7.default.pathExists(
+  const hasConfig = await lockedFs.pathExists(
+    import_path8.default.join(modelDir, "config.json")
+  );
+  const hasWeights = await lockedFs.pathExists(
     import_path8.default.join(modelDir, "model.safetensors")
   );
-  const hasProcessor = await import_fs_extra7.default.pathExists(
+  const hasProcessor = await lockedFs.pathExists(
     import_path8.default.join(modelDir, "preprocessor_config.json")
   );
-  const hasTokenizer = await import_fs_extra7.default.pathExists(
+  const hasTokenizer = await lockedFs.pathExists(
     import_path8.default.join(modelDir, "tokenizer.json")
   );
   return hasConfig && hasWeights && hasProcessor && hasTokenizer;
@@ -3305,15 +3548,18 @@ function getUvCandidates() {
 function spawnUvPython(args, cwd, env) {
   const candidates = getUvCandidates();
   return new Promise((resolve, reject) => {
-    const trySpawn = (index) => {
+    const trySpawn = async (index) => {
       if (index >= candidates.length) {
         reject(new Error("uv not found"));
         return;
       }
       const command = candidates[index];
-      if (import_path8.default.isAbsolute(command) && !import_fs_extra7.default.pathExistsSync(command)) {
-        trySpawn(index + 1);
-        return;
+      if (import_path8.default.isAbsolute(command)) {
+        const exists = await lockedFs.pathExists(command);
+        if (!exists) {
+          trySpawn(index + 1);
+          return;
+        }
       }
       const proc = (0, import_child_process2.spawn)(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
@@ -3482,16 +3728,21 @@ function downloadBuffer(url, onProgress) {
   });
 }
 async function ensureUvInstalled(onProgress) {
-  const existing = getUvCandidates().find(
-    (c) => import_path8.default.isAbsolute(c) && import_fs_extra7.default.pathExistsSync(c)
-  );
+  const candidates = getUvCandidates();
+  let existing = "";
+  for (const c of candidates) {
+    if (import_path8.default.isAbsolute(c) && await lockedFs.pathExists(c)) {
+      existing = c;
+      break;
+    }
+  }
   if (existing) return existing;
   const uvPath = getManagedUvPath();
-  if (await import_fs_extra7.default.pathExists(uvPath)) {
+  if (await lockedFs.pathExists(uvPath)) {
     process.env.PROREF_UV_PATH = uvPath;
     return uvPath;
   }
-  await import_fs_extra7.default.ensureDir(import_path8.default.dirname(uvPath));
+  await lockedFs.ensureDir(import_path8.default.dirname(uvPath));
   const { url, kind } = resolveUvReleaseAsset();
   import_electron_log.default.info(`Downloading uv from: ${url}`);
   const buf = await downloadBuffer(url, (current, total) => {
@@ -3515,9 +3766,9 @@ async function ensureUvInstalled(onProgress) {
   if (!binary) {
     throw new Error("Failed to extract uv binary");
   }
-  await import_fs_extra7.default.writeFile(uvPath, binary);
+  await lockedFs.writeFile(uvPath, binary);
   if (process.platform !== "win32") {
-    await import_fs_extra7.default.chmod(uvPath, 493);
+    await withFileLock(uvPath, () => import_fs_extra7.default.chmod(uvPath, 493));
   }
   process.env.PROREF_UV_PATH = uvPath;
   return uvPath;
@@ -3603,14 +3854,14 @@ async function ensureModelReady(parent, force = false) {
   if (!force) {
     try {
       const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
-      if (await import_fs_extra7.default.pathExists(settingsPath)) {
-        const settings = await import_fs_extra7.default.readJson(settingsPath);
-        if (!settings.enableVectorSearch && !modelMissing) {
+      if (await lockedFs.pathExists(settingsPath)) {
+        const settings = await lockedFs.readJson(settingsPath);
+        if (!settings.enableVectorSearch) {
           if (debug)
             console.log("[model] Vector search disabled, skipping model check");
           return;
         }
-      } else if (!modelMissing) {
+      } else {
         if (debug)
           console.log("[model] No settings file, skipping model check");
         return;
@@ -3854,11 +4105,6 @@ import_electron3.ipcMain.handle(
     return registerToggleMouseThroughShortcut(accelerator);
   }
 );
-import_electron3.ipcMain.on("set-mouse-through", (_event, enabled) => {
-  if (!enabled && mainWindow) {
-    mainWindow.setIgnoreMouseEvents(false);
-  }
-});
 import_electron3.ipcMain.on(
   "set-ignore-mouse-events",
   (_event, ignore, options) => {

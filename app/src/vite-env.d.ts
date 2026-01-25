@@ -10,16 +10,15 @@ interface Window {
     setPinMode: (enabled: boolean, widthDelta: number) => void;
     setPinTransparent: (enabled: boolean) => void;
     resizeWindowBy: (delta: number) => void;
+    setWindowBounds: (bounds: { x?: number; y?: number; width?: number; height?: number }) => void;
     setToggleWindowShortcut: (
       accelerator: string,
     ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
     setToggleMouseThroughShortcut: (
       accelerator: string,
     ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
-    setMouseThrough: (enabled: boolean) => void;
     setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => void;
     setSettingsOpen: (open: boolean) => void;
-    onNewCollection: (callback: (data: unknown) => void) => () => void;
     onImageUpdated: (callback: (data: unknown) => void) => () => void;
     onSearchUpdated: (callback: (data: unknown) => void) => () => void;
     onModelDownloadProgress: (callback: (data: unknown) => void) => () => void;

@@ -21,6 +21,7 @@ import {
   modelProgressActions,
   modelProgressState,
 } from "../store/globalStore";
+import { actions as galleryActions } from "../store/galleryStore";
 import { canvasActions, canvasState } from "../store/canvasStore";
 import { THEME } from "../theme";
 import { useSnapshot } from "valtio";
@@ -97,7 +98,9 @@ export const TitleBar: React.FC = () => {
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(canvasMenuRef, () => setCanvasMenuOpen(false));
-  useClickOutside<HTMLElement>([settingsBtnRef, settingsMenuRef], () => setSettingsOpen(false));
+  useClickOutside<HTMLElement>([settingsBtnRef, settingsMenuRef], () =>
+    setSettingsOpen(false),
+  );
 
   const canvasSnap = useSnapshot(canvasState);
   const [canvases, setCanvases] = useState<CanvasMeta[]>([]);
@@ -105,7 +108,6 @@ export const TitleBar: React.FC = () => {
   const [isCreatingCanvas, setIsCreatingCanvas] = useState(false);
   const [editingCanvas, setEditingCanvas] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
-  const isIgnoringRightAreaRef = useRef(false);
 
   const refreshCanvases = async () => {
     try {
@@ -129,15 +131,6 @@ export const TitleBar: React.FC = () => {
     }
   }, [canvasMenuOpen]);
 
-  useEffect(() => {
-    return () => {
-      if (isIgnoringRightAreaRef.current) {
-        window.electron?.setIgnoreMouseEvents?.(false);
-        isIgnoringRightAreaRef.current = false;
-      }
-    };
-  }, []);
-
   const handleCreateCanvas = async () => {
     if (!newCanvasName.trim()) return;
     try {
@@ -155,7 +148,9 @@ export const TitleBar: React.FC = () => {
     await canvasActions.switchCanvas(name);
   };
 
-  const [deleteConfirmCanvas, setDeleteConfirmCanvas] = useState<string | null>(null);
+  const [deleteConfirmCanvas, setDeleteConfirmCanvas] = useState<string | null>(
+    null,
+  );
 
   const handleDeleteCanvas = (name: string) => {
     setDeleteConfirmCanvas(name);
@@ -449,6 +444,7 @@ export const TitleBar: React.FC = () => {
         { key: "toast.indexCompleted", params: { created, updated } },
         "success",
       );
+      galleryActions.reload();
     } catch (e) {
       console.error(e);
       globalActions.pushToast({ key: "toast.indexFailed" }, "error");
@@ -540,6 +536,44 @@ export const TitleBar: React.FC = () => {
     return cleanup;
   }, []);
 
+  const titleBarRef = useRef<HTMLDivElement>(null);
+  const isIgnoringMouseRef = useRef(false);
+
+  useEffect(() => {
+    if (!snap.mouseThrough) return;
+    
+    // Initial state assumption: when entering mouseThrough, it's ignored (true)
+    isIgnoringMouseRef.current = true;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!titleBarRef.current) return;
+      
+      const rect = titleBarRef.current.getBoundingClientRect();
+      const inTitleBar = 
+        e.clientX >= rect.left && 
+        e.clientX <= rect.right && 
+        e.clientY >= rect.top && 
+        e.clientY <= rect.bottom;
+
+      if (inTitleBar) {
+        if (isIgnoringMouseRef.current) {
+          window.electron?.setIgnoreMouseEvents?.(false);
+          isIgnoringMouseRef.current = false;
+        }
+      } else {
+        if (!isIgnoringMouseRef.current) {
+          window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
+          isIgnoringMouseRef.current = true;
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", handleGlobalMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", handleGlobalMouseMove);
+    };
+  }, [snap.mouseThrough]);
+
   const handleCanvasOpacityChange = (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
@@ -547,23 +581,12 @@ export const TitleBar: React.FC = () => {
     globalActions.setCanvasOpacity(val);
   };
 
-  const handleRightAreaEnter = () => {
-    if (isIgnoringRightAreaRef.current) return;
-    window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-    isIgnoringRightAreaRef.current = true;
-  };
-
-  const handleRightAreaLeave = () => {
-    if (!isIgnoringRightAreaRef.current) return;
-    window.electron?.setIgnoreMouseEvents?.(false);
-    isIgnoringRightAreaRef.current = false;
-  };
-
   return (
     <div className="flex w-full">
       <div
+        ref={titleBarRef}
         className={clsx(
-          "relative draggable z-[100] bg-neutral-900 h-8 transition-all inline-flex items-center select-none border-b border-neutral-800",
+          "relative z-[100] bg-neutral-900 h-8 transition-all inline-flex items-center select-none border-b border-neutral-800",
           snap.mouseThrough
             ? "justify-start rounded-tr-xl w-auto flex-none"
             : "justify-between w-auto flex-1 pr-2 pl-2",
@@ -571,7 +594,10 @@ export const TitleBar: React.FC = () => {
           snap.mouseThrough ? "px-2" : "",
         )}
       >
-        <div className="flex items-center gap-2 text-neutral-400 text-xs font-bold mr-2">
+        {/* Draggable area - leaves top 8px (top-2) for window resizing */}
+        <div className="absolute inset-x-0 bottom-0 top-2 draggable" />
+
+        <div className="relative z-10 flex items-center gap-2 text-neutral-400 text-xs font-bold mr-2">
           <span
             style={{
               color: isWindowActive ? THEME.primary : "#6b7280",
@@ -586,7 +612,7 @@ export const TitleBar: React.FC = () => {
                 "p-1 hover:bg-neutral-800 rounded transition-colors no-drag",
                 snap.isGalleryOpen && "bg-neutral-800",
               )}
-              style={{ color: snap.isGalleryOpen ? THEME.primary : 'white' }}
+              style={{ color: snap.isGalleryOpen ? THEME.primary : "white" }}
               title={t("common.close")}
             >
               <Sidebar size={14} />
@@ -594,7 +620,7 @@ export const TitleBar: React.FC = () => {
           )}
         </div>
 
-        <div className="flex items-center gap-1 no-drag">
+        <div className="relative z-10 flex items-center gap-1 no-drag">
           <div className="relative" ref={canvasMenuRef}>
             <button
               onClick={() => setCanvasMenuOpen(!canvasMenuOpen)}
@@ -1140,10 +1166,11 @@ export const TitleBar: React.FC = () => {
           "h-full no-drag ease-in-out",
           snap.mouseThrough ? "flex-1" : "flex-none w-0",
         )}
-        onMouseEnter={handleRightAreaEnter}
-        onMouseLeave={handleRightAreaLeave}
+        onMouseEnter={() => {
+          window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
+        }}
       />
-      
+
       <ConfirmModal
         isOpen={!!deleteConfirmCanvas}
         title={t("settings.canvas.deleteTitle")}
