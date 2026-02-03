@@ -11,7 +11,6 @@ import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
-import { spawn, type ChildProcess } from "child_process";
 import { lockedFs, withFileLock } from "../backend/fileLock";
 
 // Ensure app name is correct for log paths
@@ -36,23 +35,19 @@ log.transports.file.archiveLog = (file) => {
   });
 };
 
-import readline from "readline";
-import https from "https";
-import zlib from "zlib";
 import {
   startServer as startApiServer,
   getStorageDir,
   setStorageRoot,
-  type RendererChannel,
+  readSettings,
 } from "../backend/server";
 import { t as translate } from "../shared/i18n/t";
-import type { I18nKey, I18nParams, Locale } from "../shared/i18n/types";
+import type { Locale } from "../shared/i18n/types";
 import { debounce } from "radash";
 
 let mainWindow: BrowserWindow | null = null;
 let isAppHidden = false;
 let lastGalleryDockDelta = 0;
-let localeCache: { locale: Locale; mtimeMs: number } | null = null;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
   process.platform === "darwin" ? "Command+L" : "Ctrl+L";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
@@ -89,18 +84,13 @@ const isLocale = (value: unknown): value is Locale =>
 
 async function getLocale(): Promise<Locale> {
   try {
-    const settingsPath = path.join(getStorageDir(), "settings.json");
-    const stat = await lockedFs.stat(settingsPath).catch(() => null);
-    if (!stat) return "en";
-    if (localeCache && localeCache.mtimeMs === stat.mtimeMs)
-      return localeCache.locale;
-    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
+    const settings = await readSettings();
     const raw =
       settings && typeof settings === "object"
         ? (settings as { language?: unknown }).language
         : undefined;
     const locale = isLocale(raw) ? raw : "en";
-    localeCache = { locale, mtimeMs: stat.mtimeMs };
+    localeCache = locale;
     return locale;
   } catch {
     return "en";
@@ -247,9 +237,14 @@ async function createWindow(options?: { load?: boolean }) {
   try {
     const settingsPath = path.join(getStorageDir(), "settings.json");
     if (await lockedFs.pathExists(settingsPath)) {
-      const settings: any = await lockedFs.readJson(settingsPath);
-      if (settings.windowBounds) {
-        windowState = settings.windowBounds;
+      const settingsRaw = await lockedFs.readJson(settingsPath);
+      if (settingsRaw && typeof settingsRaw === "object") {
+        const settings = settingsRaw as {
+          windowBounds?: Electron.Rectangle;
+        };
+        if (settings.windowBounds) {
+          windowState = settings.windowBounds;
+        }
       }
     }
   } catch (e) {
@@ -451,30 +446,6 @@ async function createWindow(options?: { load?: boolean }) {
     }
   });
 
-  ipcMain.handle("ensure-model-ready", async () => {
-    if (!mainWindow) return;
-    try {
-      // Force check/download even if settings check passes inside ensureModelReady?
-      // ensureModelReady checks settings. We should probably update settings BEFORE calling this.
-      // Frontend updates settings via API, then calls this.
-      // But ensureModelReady reads settings from disk. We need to make sure disk is updated.
-      // The API call to update settings awaits file write, so it should be fine.
-
-      // However, ensureModelReady has a check:
-      // if (!settings.enableVectorSearch) return;
-      // If we just updated settings to true, this check will pass.
-
-      // Also ensure runtime just in case
-      await ensurePythonRuntime(mainWindow);
-      // Force check since user explicitly requested it
-      await ensureModelReady(mainWindow, true);
-      return { success: true };
-    } catch (e) {
-      log.error("Manual ensure model failed:", e);
-      return { success: false, error: String(e) };
-    }
-  });
-
   ipcMain.handle("open-external", async (_event, rawUrl: string) => {
     try {
       if (typeof rawUrl !== "string") {
@@ -626,698 +597,8 @@ function registerAnchorShortcuts() {
   });
 }
 
-function getModelDir(): string {
-  return path.join(getStorageDir(), "model");
-}
-
-async function hasRequiredModelFiles(modelDir: string): Promise<boolean> {
-  const hasConfig = await lockedFs.pathExists(
-    path.join(modelDir, "config.json"),
-  );
-  const hasWeights = await lockedFs.pathExists(
-    path.join(modelDir, "model.safetensors"),
-  );
-  const hasProcessor = await lockedFs.pathExists(
-    path.join(modelDir, "preprocessor_config.json"),
-  );
-  const hasTokenizer = await lockedFs.pathExists(
-    path.join(modelDir, "tokenizer.json"),
-  );
-  return hasConfig && hasWeights && hasProcessor && hasTokenizer;
-}
-
-function getUvCandidates(): string[] {
-  const candidates: string[] = [];
-
-  // 1. Try bundled UV (High priority)
-  if (app.isPackaged) {
-    if (process.platform === "win32") {
-      candidates.push(path.join(process.resourcesPath, "bin", "uv.exe"));
-    } else if (process.platform === "darwin") {
-      candidates.push(
-        path.join(process.resourcesPath, "bin", "mac", "arm64", "uv"),
-      );
-    }
-  } else {
-    if (process.platform === "win32") {
-      candidates.push(path.join(app.getAppPath(), "bin", "win32", "uv.exe"));
-    } else if (process.platform === "darwin") {
-      candidates.push(path.join(app.getAppPath(), "bin", "mac", "arm64", "uv"));
-    }
-  }
-
-  const env = process.env.PROREF_UV_PATH?.trim();
-  if (env) candidates.push(env);
-
-  // 只使用应用管理的 uv 路径
-  candidates.push(getManagedUvPath());
-
-  const uniq: string[] = [];
-  const seen = new Set<string>();
-  for (const c of candidates) {
-    if (!c) continue;
-    if (seen.has(c)) continue;
-    seen.add(c);
-    uniq.push(c);
-  }
-  return uniq;
-}
-
-function spawnUvPython(
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): Promise<ChildProcess> {
-  const candidates = getUvCandidates();
-  return new Promise((resolve, reject) => {
-    const trySpawn = async (index: number) => {
-      if (index >= candidates.length) {
-        reject(new Error("uv not found"));
-        return;
-      }
-      const command = candidates[index];
-      if (path.isAbsolute(command)) {
-        const exists = await lockedFs.pathExists(command);
-        if (!exists) {
-          trySpawn(index + 1);
-          return;
-        }
-      }
-
-      const proc = spawn(command, args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        cwd,
-        env,
-      });
-      proc.once("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT") {
-          trySpawn(index + 1);
-          return;
-        }
-        reject(err);
-      });
-      resolve(proc);
-    };
-    trySpawn(0);
-  });
-}
-
-function getManagedUvPath(): string {
-  return path.join(
-    app.getPath("userData"),
-    "uv",
-    process.platform === "win32" ? "uv.exe" : "uv",
-  );
-}
-
-const UV_VERSION = "latest"; // Set to a specific tag like 'v0.5.5' to lock version
-
-function resolveUvReleaseAsset(): { url: string; kind: "tar.gz" | "zip" } {
-  const baseUrl = "https://xget.xi-xu.me/gh/astral-sh/uv/releases";
-  const downloadPath =
-    UV_VERSION === "latest" ? "latest/download" : `download/${UV_VERSION}`;
-  const base = `${baseUrl}/${downloadPath}`;
-
-  if (process.platform === "darwin") {
-    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-    return { url: `${base}/uv-${arch}-apple-darwin.tar.gz`, kind: "tar.gz" };
-  }
-  if (process.platform === "linux") {
-    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-    return {
-      url: `${base}/uv-${arch}-unknown-linux-gnu.tar.gz`,
-      kind: "tar.gz",
-    };
-  }
-  if (process.platform === "win32") {
-    const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-    return { url: `${base}/uv-${arch}-pc-windows-msvc.zip`, kind: "zip" };
-  }
-  throw new Error(`Unsupported platform: ${process.platform}`);
-}
-
-function extractTarFile(
-  buffer: Buffer,
-  predicate: (name: string) => boolean,
-): Buffer | null {
-  const block = 512;
-  let offset = 0;
-  while (offset + block <= buffer.length) {
-    const header = buffer.subarray(offset, offset + block);
-    let allZero = true;
-    for (let i = 0; i < block; i++) {
-      if (header[i] !== 0) {
-        allZero = false;
-        break;
-      }
-    }
-    if (allZero) return null;
-
-    const nameRaw = header.subarray(0, 100);
-    const name = nameRaw.toString("utf8").replace(/\0.*$/, "");
-    const sizeRaw = header
-      .subarray(124, 136)
-      .toString("utf8")
-      .replace(/\0.*$/, "")
-      .trim();
-    const size = sizeRaw ? Number.parseInt(sizeRaw, 8) : 0;
-
-    const contentOffset = offset + block;
-    const contentEnd = contentOffset + size;
-    if (contentEnd > buffer.length) return null;
-
-    if (name && predicate(name)) {
-      return buffer.subarray(contentOffset, contentEnd);
-    }
-
-    const padded = Math.ceil(size / block) * block;
-    offset = contentOffset + padded;
-  }
-  return null;
-}
-
-function extractZipFile(
-  buffer: Buffer,
-  predicate: (name: string) => boolean,
-): Buffer | null {
-  const sigEOCD = 0x06054b50;
-  const sigCD = 0x02014b50;
-  const sigLFH = 0x04034b50;
-
-  const readU16 = (o: number) => buffer.readUInt16LE(o);
-  const readU32 = (o: number) => buffer.readUInt32LE(o);
-
-  let eocd = -1;
-  for (let i = buffer.length - 22; i >= 0 && i >= buffer.length - 65557; i--) {
-    if (readU32(i) === sigEOCD) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) return null;
-
-  const cdSize = readU32(eocd + 12);
-  const cdOffset = readU32(eocd + 16);
-  let ptr = cdOffset;
-  const cdEnd = cdOffset + cdSize;
-  while (ptr + 46 <= buffer.length && ptr < cdEnd) {
-    if (readU32(ptr) !== sigCD) return null;
-    const compression = readU16(ptr + 10);
-    const compSize = readU32(ptr + 20);
-    const uncompSize = readU32(ptr + 24);
-    const nameLen = readU16(ptr + 28);
-    const extraLen = readU16(ptr + 30);
-    const commentLen = readU16(ptr + 32);
-    const lfhOffset = readU32(ptr + 42);
-    const name = buffer.subarray(ptr + 46, ptr + 46 + nameLen).toString("utf8");
-    ptr += 46 + nameLen + extraLen + commentLen;
-
-    if (!predicate(name)) continue;
-    if (readU32(lfhOffset) !== sigLFH) return null;
-    const lfhNameLen = readU16(lfhOffset + 26);
-    const lfhExtraLen = readU16(lfhOffset + 28);
-    const dataOffset = lfhOffset + 30 + lfhNameLen + lfhExtraLen;
-    const dataEnd = dataOffset + compSize;
-    if (dataEnd > buffer.length) return null;
-    const data = buffer.subarray(dataOffset, dataEnd);
-    if (compression === 0) {
-      if (uncompSize !== data.length) return data;
-      return data;
-    }
-    if (compression === 8) {
-      return zlib.inflateRawSync(data);
-    }
-    return null;
-  }
-  return null;
-}
-
-function downloadBuffer(
-  url: string,
-  onProgress?: (current: number, total: number) => void,
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const visited = new Set<string>();
-    const fetch = (u: string, depth: number) => {
-      if (depth > 8) {
-        reject(new Error("Too many redirects"));
-        return;
-      }
-      if (visited.has(u)) {
-        reject(new Error("Redirect loop"));
-        return;
-      }
-      visited.add(u);
-
-      const req = https.get(u, (res) => {
-        const status = res.statusCode || 0;
-        const loc = res.headers.location;
-        if ([301, 302, 303, 307, 308].includes(status) && loc) {
-          const next = loc.startsWith("http")
-            ? loc
-            : new URL(loc, u).toString();
-          res.resume();
-          fetch(next, depth + 1);
-          return;
-        }
-        if (status < 200 || status >= 300) {
-          res.resume();
-          reject(new Error(`HTTP ${status}`));
-          return;
-        }
-
-        const total = parseInt(res.headers["content-length"] || "0", 10);
-        let current = 0;
-        const chunks: Buffer[] = [];
-        res.on("data", (d: Buffer) => {
-          chunks.push(d);
-          current += d.length;
-          if (total > 0 && onProgress) {
-            onProgress(current, total);
-          }
-        });
-        res.on("end", () => resolve(Buffer.concat(chunks)));
-      });
-      req.on("error", reject);
-    };
-    fetch(url, 0);
-  });
-}
-
-async function ensureUvInstalled(
-  onProgress?: (percent: number) => void,
-): Promise<string> {
-  const candidates = getUvCandidates();
-  let existing = "";
-  for (const c of candidates) {
-    if (path.isAbsolute(c) && (await lockedFs.pathExists(c))) {
-      existing = c;
-      break;
-    }
-  }
-  if (existing) return existing;
-
-  const uvPath = getManagedUvPath();
-  if (await lockedFs.pathExists(uvPath)) {
-    process.env.PROREF_UV_PATH = uvPath;
-    return uvPath;
-  }
-
-  await lockedFs.ensureDir(path.dirname(uvPath));
-  const { url, kind } = resolveUvReleaseAsset();
-  log.info(`Downloading uv from: ${url}`);
-  const buf = await downloadBuffer(url, (current, total) => {
-    if (onProgress && total > 0) {
-      onProgress(current / total);
-    }
-  });
-
-  let binary: Buffer | null = null;
-  if (kind === "tar.gz") {
-    const tar = zlib.gunzipSync(buf);
-    binary = extractTarFile(
-      tar,
-      (name) => name === "uv" || name.endsWith("/uv"),
-    );
-  } else {
-    binary = extractZipFile(
-      buf,
-      (name) => name === "uv.exe" || name.endsWith("/uv.exe"),
-    );
-  }
-  if (!binary) {
-    throw new Error("Failed to extract uv binary");
-  }
-
-  await lockedFs.writeFile(uvPath, binary);
-  if (process.platform !== "win32") {
-    await withFileLock(uvPath, () => fs.chmod(uvPath, 0o755));
-  }
-  process.env.PROREF_UV_PATH = uvPath;
-  return uvPath;
-}
-
-function getUnpackedPath(originalPath: string): string {
-  if (app.isPackaged) {
-    return originalPath.replace("app.asar", "app.asar.unpacked");
-  }
-  return originalPath;
-}
-
-async function ensurePythonRuntime(parent: BrowserWindow): Promise<void> {
-  const modelDir = getModelDir();
-  process.env.PROREF_MODEL_DIR = modelDir; // Ensure env is set for sync if needed
-  const scriptPath = getUnpackedPath(
-    path.join(__dirname, "../backend/python/tagger.py"),
-  );
-  const pythonDir = path.dirname(scriptPath);
-
-  // Helper to report progress
-  const sendProgress = (
-    statusKey: I18nKey,
-    percentText: string,
-    progress: number,
-    statusParams?: I18nParams,
-  ) => {
-    if (parent.isDestroyed()) return;
-    parent.webContents.send("env-init-progress", {
-      isOpen: true,
-      statusKey,
-      statusParams,
-      percentText,
-      progress,
-    });
-  };
-
-  // 1. Ensure uv
-  sendProgress("envInit.checkingUv", "0%", 0);
-  await ensureUvInstalled((percent) => {
-    sendProgress(
-      "envInit.downloadingUv",
-      `${Math.round(percent * 100)}%`,
-      percent * 0.1,
-    );
-  });
-
-  // 2. uv sync
-  sendProgress("envInit.initializingPythonEnv", "10%", 0.1);
-
-  const syncProc = await spawnUvPython(["sync", "--frozen"], pythonDir, {
-    ...process.env,
-    PROREF_MODEL_DIR: modelDir,
-    UV_NO_COLOR: "1",
-  });
-
-  if (syncProc.stderr) {
-    syncProc.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString().toLowerCase();
-      if (text.includes("resolved")) {
-        sendProgress("envInit.resolvingDependencies", "20%", 0.2);
-      } else if (text.includes("downloading")) {
-        sendProgress("envInit.downloadingPackages", "40%", 0.4);
-      } else if (text.includes("installing")) {
-        sendProgress("envInit.installingPackages", "60%", 0.6);
-      } else if (text.includes("audited")) {
-        sendProgress("envInit.verifyingEnvironment", "80%", 0.8);
-      }
-    });
-  }
-
-  const syncExit: number = await new Promise((resolve) =>
-    syncProc.once("exit", resolve),
-  );
-  if (syncExit !== 0) {
-    parent.setProgressBar(-1);
-    parent.webContents.send("env-init-progress", { isOpen: false });
-    const locale = await getLocale();
-    await dialog.showMessageBox(parent, {
-      type: "error",
-      title: translate(locale, "dialog.pythonSetupFailedTitle"),
-      message: translate(locale, "dialog.pythonSetupFailedMessage"),
-      detail: translate(locale, "dialog.pythonSetupFailedDetail", {
-        code: syncExit,
-        dir: pythonDir,
-      }),
-    });
-    throw new Error("Python setup failed");
-  }
-
-  sendProgress("envInit.pythonEnvReady", "100%", 1);
-  parent.webContents.send("env-init-progress", { isOpen: false });
-}
-
-async function ensureModelReady(
-  parent: BrowserWindow,
-  force: boolean = false,
-): Promise<void> {
-  const modelDir = getModelDir();
-  process.env.PROREF_MODEL_DIR = modelDir;
-  const debug = process.env.PROREF_DEBUG_MODEL === "1";
-  if (debug) console.log("[model] dir:", modelDir);
-
-  const modelMissing = !(await hasRequiredModelFiles(modelDir));
-
-  // Check if vector search is enabled
-  if (!force) {
-    try {
-      const settingsPath = path.join(getStorageDir(), "settings.json");
-      if (await lockedFs.pathExists(settingsPath)) {
-        const settings: any = await lockedFs.readJson(settingsPath);
-        if (!settings.enableVectorSearch) {
-          if (debug)
-            console.log("[model] Vector search disabled, skipping model check");
-          return;
-        }
-      } else {
-        // Default is disabled if no settings file
-        if (debug)
-          console.log("[model] No settings file, skipping model check");
-        return;
-      }
-    } catch (e) {
-      console.error("[model] Failed to read settings:", e);
-      if (!modelMissing) return;
-    }
-  }
-
-  if (!modelMissing) {
-    if (debug) console.log("[model] ok");
-    return;
-  }
-  if (debug) console.log("[model] missing, start download");
-
-  // Notify renderer to show modal
-  const sendProgress = (
-    statusKey: I18nKey,
-    percentText: string,
-    progress: number,
-    filename?: string,
-    statusParams?: I18nParams,
-  ) => {
-    if (parent.isDestroyed()) return;
-    parent.webContents.send("model-download-progress", {
-      isOpen: true,
-      statusKey,
-      statusParams,
-      percentText,
-      progress,
-      filename,
-    });
-  };
-
-  const formatBytes = (bytes: number) => {
-    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = bytes;
-    let index = 0;
-    while (value >= 1024 && index < units.length - 1) {
-      value /= 1024;
-      index += 1;
-    }
-    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-    return `${value.toFixed(precision)} ${units[index]}`;
-  };
-
-  sendProgress("model.preparingDownload", "0%", 0);
-  parent.setProgressBar(0);
-
-  const scriptPath = getUnpackedPath(
-    path.join(__dirname, "../backend/python/tagger.py"),
-  );
-  const pythonDir = path.dirname(scriptPath);
-
-  // Ensure Runtime (in case it wasn't run or we need to be sure)
-  // But strictly, we should assume runtime is ready if we enforce order.
-  // Let's re-run ensurePythonRuntime here? No, that would close/open modal.
-  // We assume ensurePythonRuntime was called before.
-
-  // However, for robustness, if we are in ensureModelReady, we need python.
-  // So we should probably just proceed to run python.
-
-  let percentText = "0%";
-  let progress = 0;
-
-  sendProgress("model.downloading", percentText, progress);
-
-  const proc = await spawnUvPython(
-    ["run", "python", scriptPath, "--download-model"],
-    pythonDir,
-    {
-      ...process.env,
-      PROREF_MODEL_DIR: modelDir,
-    },
-  );
-
-  if (proc.stderr) {
-    proc.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString().trim();
-      if (debug && msg) console.log("[model] py:", msg);
-    });
-  }
-
-  let lastProgress = 0;
-  let lastError = "";
-
-  if (proc.stdout) {
-    const rl = readline.createInterface({ input: proc.stdout });
-    rl.on("line", (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      if (debug) console.log("[model] evt:", trimmed);
-      const evt = (() => {
-        try {
-          return JSON.parse(trimmed) as {
-            type?: string;
-            current?: number;
-            total?: number;
-            totalFiles?: number;
-            filename?: string;
-            ok?: boolean;
-            message?: string;
-            currentBytes?: number;
-            totalBytes?: number;
-            stepIndex?: number;
-            totalSteps?: number;
-          };
-        } catch {
-          return null;
-        }
-      })();
-      if (!evt?.type) return;
-
-      if (evt.type === "verify") {
-        // verify event is just for checking if existing model is ok
-        return;
-      }
-
-      if (
-        evt.type === "file-progress" &&
-        typeof evt.currentBytes === "number" &&
-        typeof evt.totalBytes === "number" &&
-        typeof evt.stepIndex === "number" &&
-        typeof evt.totalSteps === "number"
-      ) {
-        const perFile =
-          evt.totalBytes > 0 ? evt.currentBytes / evt.totalBytes : 0;
-        const mapped = Math.max(
-          0,
-          Math.min(1, (evt.stepIndex - 1 + perFile) / evt.totalSteps),
-        );
-        progress = mapped;
-        percentText = `${Math.round(mapped * 100)}%`;
-        lastProgress = mapped;
-        sendProgress(
-          "model.downloadingFraction",
-          percentText,
-          progress,
-          evt.filename,
-          {
-            current: formatBytes(evt.currentBytes),
-            total: formatBytes(evt.totalBytes),
-          },
-        );
-        return;
-      }
-
-      if (
-        evt.type === "file" &&
-        typeof evt.current === "number" &&
-        typeof evt.total === "number"
-      ) {
-        const p = Math.max(0, Math.min(1, evt.current / evt.total));
-        const mapped = p; // 0-1
-        progress = mapped;
-        percentText = `${Math.round(mapped * 100)}%`;
-        lastProgress = p;
-      }
-
-      if (evt.type === "done" && evt.ok) {
-        progress = 1;
-        percentText = "100%";
-      }
-
-      if (evt.type === "error" && typeof evt.message === "string") {
-        progress = Math.max(progress, 0);
-        lastError = evt.message;
-      }
-
-      if (
-        evt.type === "file" &&
-        typeof evt.current === "number" &&
-        typeof evt.total === "number"
-      ) {
-        sendProgress(
-          "model.downloadingFraction",
-          percentText,
-          progress,
-          evt.filename,
-          { current: evt.current, total: evt.total },
-        );
-        return;
-      }
-
-      if (evt.type === "done" && evt.ok) {
-        sendProgress("model.ready", percentText, progress, evt.filename);
-        return;
-      }
-
-      if (evt.type === "error") {
-        const reason = typeof evt.message === "string" ? evt.message : "";
-        sendProgress(
-          reason ? "model.downloadFailedWithReason" : "model.downloadFailed",
-          percentText,
-          progress,
-          evt.filename,
-          reason ? { reason } : undefined,
-        );
-        return;
-      }
-
-      if (evt.type === "start") {
-        sendProgress(
-          "model.preparingDownload",
-          percentText,
-          progress,
-          evt.filename,
-        );
-        return;
-      }
-
-      sendProgress("model.downloading", percentText, progress, evt.filename);
-    });
-  }
-
-  const exitCode: number = await new Promise((resolve) =>
-    proc.once("exit", resolve),
-  );
-  parent.setProgressBar(-1);
-  parent.webContents.send("model-download-progress", { isOpen: false });
-
-  const ok = await hasRequiredModelFiles(modelDir);
-  if (debug) console.log("[model] download exit:", exitCode, "ok:", ok);
-
-  if (exitCode !== 0 || !ok) {
-    const locale = await getLocale();
-    await dialog.showMessageBox(parent, {
-      type: "error",
-      title: translate(locale, "dialog.modelDownloadFailedTitle"),
-      message: translate(locale, "dialog.modelDownloadFailedMessage"),
-      detail:
-        (lastError ? `Error: ${lastError}\n\n` : "") +
-        translate(locale, "dialog.modelDownloadFailedDetail", {
-          code: exitCode,
-          progress: Math.round(lastProgress * 100),
-          dir: modelDir,
-        }),
-    });
-    throw new Error("Model download failed");
-  }
-}
-
 async function startServer() {
-  return startApiServer((channel: RendererChannel, data: unknown) => {
-    mainWindow?.webContents.send(channel, data);
-  });
+  return startApiServer();
 }
 
 ipcMain.handle("get-storage-dir", async () => {
@@ -1347,11 +628,15 @@ app.whenReady().then(async () => {
   log.info("App path:", app.getAppPath());
   log.info("User data:", app.getPath("userData"));
 
-  await loadWindowPinState();
-  createWindow();
-  applyPinStateToWindow();
+  const taskLoadPin = loadWindowPinState();
+  const taskLoadShortcuts = loadShortcuts();
+  const taskCreateWindow = createWindow();
+  // Start server early, but handle errors later
+  const taskStartServer = startServer();
 
-  await loadShortcuts();
+  await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
+
+  applyPinStateToWindow();
 
   registerToggleWindowShortcut(toggleWindowShortcut);
   registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
@@ -1359,17 +644,7 @@ app.whenReady().then(async () => {
 
   if (mainWindow) {
     try {
-      await startServer();
-
-      // Always ensure Python environment is ready (uv + sync)
-      // This is fast if already done, but necessary for basic features like color/tone.
-      // We do this BEFORE ensuring model.
-      log.info("Ensuring Python runtime...");
-      await ensurePythonRuntime(mainWindow);
-
-      log.info("Ensuring model ready...");
-      await ensureModelReady(mainWindow);
-      log.info("Model ready.");
+      await taskStartServer;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error("[model] ensure failed:", message);

@@ -5,14 +5,25 @@ import {
   readSetting,
   loadCanvasImages,
   getCanvasViewport,
-saveCanvasViewport,
+  saveCanvasViewport,
   localApi,
   type CanvasViewport,
 } from '../service';
 import { debounce } from 'radash';
-import type {
-  ImageMeta,
-} from './galleryStore';
+
+export interface ImageMeta {
+  id: string;
+  filename: string;
+  imagePath: string;
+  tags: string[];
+  createdAt: number;
+  dominantColor?: string | null;
+  tone?: string | null;
+  hasVector: boolean;
+  pageUrl?: string | null;
+  width: number;
+  height: number;
+}
 
 export interface CanvasText {
   type: 'text';
@@ -39,8 +50,8 @@ export interface CanvasImage extends ImageMeta {
   scaleX?: number;
   scaleY?: number;
   rotation: number;
-  width?: number;
-  height?: number;
+  width: number;
+  height: number;
   grayscale?: boolean; // Deprecated
   filters?: string[];
 }
@@ -107,13 +118,29 @@ export const getRenderBbox = (
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
 
-  const p1 = { x: 0, y: 0 };
-  const p2 = { x: width * cos, y: width * sin };
-  const p3 = { x: width * cos - height * sin, y: width * sin + height * cos };
-  const p4 = { x: -height * sin, y: height * cos };
+  const hw = width / 2;
+  const hh = height / 2;
 
-  const xs = [p1.x, p2.x, p3.x, p4.x];
-  const ys = [p1.y, p2.y, p3.y, p4.y];
+  // Corners relative to center
+  // p1: -hw, -hh
+  // p2: hw, -hh
+  // p3: hw, hh
+  // p4: -hw, hh
+
+  const x1 = -hw * cos - -hh * sin;
+  const y1 = -hw * sin + -hh * cos;
+
+  const x2 = hw * cos - -hh * sin;
+  const y2 = hw * sin + -hh * cos;
+
+  const x3 = hw * cos - hh * sin;
+  const y3 = hw * sin + hh * cos;
+
+  const x4 = -hw * cos - hh * sin;
+  const y4 = -hw * sin + hh * cos;
+
+  const xs = [x1, x2, x3, x4];
+  const ys = [y1, y2, y3, y4];
 
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
@@ -133,7 +160,6 @@ interface CanvasStoreState {
   canvasHistory: CanvasItem[][];
   canvasHistoryIndex: number;
   canvasViewport: CanvasViewport;
-  canvasGrayscale: boolean; // Deprecated, kept for backward compatibility if needed, but UI should use canvasFilters
   canvasFilters: string[];
   showMinimap: boolean;
   isCanvasToolbarExpanded: boolean;
@@ -162,7 +188,6 @@ export const canvasState = proxy<CanvasStoreState>({
   canvasHistory: [],
   canvasHistoryIndex: -1,
   canvasViewport: DEFAULT_CANVAS_VIEWPORT,
-  canvasGrayscale: false,
   canvasFilters: [],
   showMinimap: true,
   isCanvasToolbarExpanded: true,
@@ -216,7 +241,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
       }
 
       const img = item as CanvasImage;
-      const kind: CanvasPersistedItem['kind'] = img.imagePath.startsWith('temp-images/')
+      const kind: CanvasPersistedItem['kind'] = img.imagePath.startsWith('assets/')
         ? 'temp'
         : 'ref';
 
@@ -288,11 +313,6 @@ export const canvasActions = {
   hydrateSettings: async () => {
     try {
       const settings = await getSettingsSnapshot();
-      const rawCanvasGrayscale = readSetting<unknown>(
-        settings,
-        'canvasGrayscale',
-        canvasState.canvasGrayscale,
-      );
       const rawCanvasFilters = readSetting<unknown>(
         settings,
         'canvasFilters',
@@ -309,15 +329,8 @@ export const canvasActions = {
         canvasState.isCanvasToolbarExpanded,
       );
 
-      if (typeof rawCanvasGrayscale === 'boolean') {
-        canvasState.canvasGrayscale = rawCanvasGrayscale;
-      }
-
       if (Array.isArray(rawCanvasFilters)) {
         canvasState.canvasFilters = rawCanvasFilters as string[];
-      } else if (canvasState.canvasGrayscale && canvasState.canvasFilters.length === 0) {
-        // Migration from legacy boolean
-        canvasState.canvasFilters = ['grayscale'];
       }
 
       if (typeof rawShowMinimap === 'boolean') {
@@ -402,8 +415,8 @@ export const canvasActions = {
             scaleX: temp.scaleX,
             scaleY: temp.scaleY,
             rotation: temp.rotation,
-            width: temp.width || 0,
-            height: temp.height || 0,
+            width: temp.width!,
+            height: temp.height!,
             grayscale: temp.grayscale,
           };
           reconstructed.push(img);
@@ -440,8 +453,8 @@ export const canvasActions = {
             scaleX: ref.scaleX,
             scaleY: ref.scaleY,
             rotation: ref.rotation,
-            width: ref.width || 0,
-            height: ref.height || 0,
+            width: ref.width!,
+            height: ref.height!,
             grayscale: ref.grayscale,
           };
           reconstructed.push(img);
@@ -584,6 +597,7 @@ export const canvasActions = {
       rotation: 0,
     });
     canvasActions.commitCanvasChange();
+    return canvasId;
   },
 
   updateCanvasImageTransient: (canvasId: string, props: Partial<CanvasItem>) => {
@@ -650,7 +664,7 @@ export const canvasActions = {
   ) => {
     if (canvasState.canvasItems.length === 0) return;
 
-    const gap = 20;
+    const gap = 60;
     const startX = options?.startX ?? 100;
     const startY = options?.startY ?? 100;
 
@@ -666,8 +680,8 @@ export const canvasActions = {
 
     const rects = imageEntries.map(({ item, index }) => {
       const scale = item.scale || 1;
-      const rawW = (item.width || 250) * scale * Math.abs(item.scaleX || 1);
-      const rawH = (item.height || 200) * scale * Math.abs(item.scaleY || 1);
+      const rawW = item.width * scale * Math.abs(item.scaleX || 1);
+      const rawH = item.height * scale * Math.abs(item.scaleY || 1);
       const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
       return {
         item,
@@ -863,26 +877,9 @@ export const canvasActions = {
     }
   },
 
-  toggleCanvasGrayscale: () => {
-    // Legacy support: toggle 'grayscale' in canvasFilters
-    const hasGrayscale = canvasState.canvasFilters.includes('grayscale');
-    if (hasGrayscale) {
-      canvasState.canvasFilters = canvasState.canvasFilters.filter(f => f !== 'grayscale');
-      canvasState.canvasGrayscale = false;
-    } else {
-      canvasState.canvasFilters = [...canvasState.canvasFilters, 'grayscale'];
-      canvasState.canvasGrayscale = true;
-    }
-    void settingStorage.set('canvasFilters', canvasState.canvasFilters);
-    void settingStorage.set('canvasGrayscale', canvasState.canvasGrayscale);
-  },
-
   setCanvasFilters: (filters: string[]) => {
     canvasState.canvasFilters = filters;
-    // Sync legacy flag
-    canvasState.canvasGrayscale = filters.includes('grayscale');
     void settingStorage.set('canvasFilters', filters);
-    void settingStorage.set('canvasGrayscale', canvasState.canvasGrayscale);
   },
 
   toggleCanvasToolbarExpanded: () => {

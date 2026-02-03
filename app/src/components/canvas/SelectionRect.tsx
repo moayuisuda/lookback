@@ -1,5 +1,4 @@
 import React from "react";
-import { Rect } from "react-konva";
 import { THEME } from "../../theme";
 
 export interface SelectionBoxState {
@@ -22,7 +21,7 @@ export const SelectionRect: React.FC<SelectionRectProps> = ({
   const height = Math.abs(selectionBox.current.y - selectionBox.start.y);
 
   return (
-    <Rect
+    <rect
       x={x}
       y={y}
       width={width}
@@ -30,8 +29,7 @@ export const SelectionRect: React.FC<SelectionRectProps> = ({
       fill={THEME.canvas.selectionFill}
       stroke={THEME.primary}
       strokeWidth={1}
-      listening={false}
+      pointerEvents="none"
     />
   );
 };
-

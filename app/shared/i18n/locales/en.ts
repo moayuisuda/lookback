@@ -62,28 +62,6 @@ export const en = {
   'toast.shortcutInvalid': 'Invalid shortcut',
   'toast.shortcutUpdateFailed': 'Failed to update shortcut: {{error}}',
 
-  'envInit.brandTitle': 'Oh, Captain!',
-  'envInit.heading': 'Setting up the Python environment...',
-  'envInit.subheading':
-    'First run may download tools and install dependencies. This is a one-time step.',
-  'envInit.preparing': 'Preparing...',
-  'envInit.checkingUv': 'Checking uv...',
-  'envInit.downloadingUv': 'Downloading uv...',
-  'envInit.initializingPythonEnv': 'Initializing Python environment...',
-  'envInit.resolvingDependencies': 'Resolving dependencies...',
-  'envInit.downloadingPackages': 'Downloading packages...',
-  'envInit.installingPackages': 'Installing packages...',
-  'envInit.verifyingEnvironment': 'Verifying environment...',
-  'envInit.pythonEnvReady': 'Python environment ready',
-
-  'model.downloading': 'Downloading model...',
-  'model.preparingDownload': 'Preparing model download...',
-  'model.downloadingFraction': 'Downloading ({{current}}/{{total}})',
-  'model.retrying': 'Retrying download...',
-  'model.ready': 'Model is ready',
-  'model.downloadFailed': 'Model download failed',
-  'model.downloadFailedWithReason': 'Model download failed: {{reason}}',
-
   'indexing.starting': 'Starting...',
   'indexing.progress': 'Indexing {{current}}/{{total}}...',
   'indexing.completed': 'Completed',
@@ -167,13 +145,6 @@ export const en = {
   'tone.label.lowLong': 'Low Key / Long Range',
   'tone.unknown': 'Tone',
 
-  'dialog.pythonSetupFailedTitle': 'Python setup failed',
-  'dialog.pythonSetupFailedMessage': 'Failed to set up Python environment.',
-  'dialog.pythonSetupFailedDetail': 'Exit code: {{code}}\nDir: {{dir}}',
-  'dialog.modelDownloadFailedTitle': 'Model download failed',
-  'dialog.modelDownloadFailedMessage': 'Failed to download model files.',
-  'dialog.modelDownloadFailedDetail':
-    'Exit code: {{code}}\nProgress: {{progress}}%\nModel dir: {{dir}}',
   'dialog.chooseStorageFolderTitle': 'Choose LookBack storage folder',
 
   'toast.globalError': 'Error: {{message}}',
@@ -191,6 +162,10 @@ export const en = {
   'toast.llmTranslationFailed': 'LLM translation failed: {{error}}',
 
   'settings.llm.title': 'LLM Settings',
+  'settings.llm.provider': 'Model Provider',
+  'settings.llm.services': 'Services',
+  'settings.llm.service.translation': 'Translation Helper',
+  'settings.llm.service.translation.desc': 'Translate search queries to English for better vector search results',
   'settings.llm.enable': 'Enable LLM Translation',
   'settings.llm.baseUrl': 'Base URL',
   'settings.llm.key': 'API Key',

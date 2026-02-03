@@ -5,7 +5,6 @@ import { lockedFs, withFileLock, withFileLocks } from "../fileLock";
 
 type CanvasRouteDeps = {
   getCanvasesDir: () => string;
-  getCanvasTempDir: () => string;
 };
 
 const getCanvasPaths = (dir: string, name: string) => {
@@ -190,33 +189,6 @@ export const createCanvasRouter = (deps: CanvasRouteDeps) => {
           images = await fs.readJson(paths.dataFile);
         }
       });
-
-      try {
-        const canvasTempDir = deps.getCanvasTempDir();
-        await withFileLock(canvasTempDir, async () => {
-          if (await fs.pathExists(canvasTempDir)) {
-            const usedTempFiles = new Set<string>();
-            if (Array.isArray(images)) {
-              images.forEach((img: { localPath?: string; imagePath?: string }) => {
-                const pathValue = img.localPath || img.imagePath;
-                if (pathValue) {
-                  const basename = path.basename(pathValue);
-                  usedTempFiles.add(basename);
-                }
-              });
-            }
-
-            const files = await fs.readdir(canvasTempDir);
-            for (const file of files) {
-              if (!usedTempFiles.has(file)) {
-                await fs.unlink(path.join(canvasTempDir, file));
-              }
-            }
-          }
-        });
-      } catch {
-        void 0;
-      }
 
       res.json(images);
     } catch (error) {

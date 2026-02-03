@@ -8,16 +8,6 @@ type SettingsRouteDeps = {
 export const createSettingsRouter = (deps: SettingsRouteDeps) => {
   const router = express.Router();
 
-  router.get("/settings", async (_req, res) => {
-    try {
-      const settings = await deps.readSettings();
-      res.json(settings);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  });
-
   router.get("/api/settings", async (_req, res) => {
     try {
       const settings = await deps.readSettings();

@@ -1,26 +1,21 @@
 import React, { useRef, useEffect, useCallback, useMemo } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { debounce } from "radash";
-import { Stage, Layer } from "react-konva";
-import {
-  actions as galleryActions,
-  type ImageMeta,
-} from "../store/galleryStore";
 import {
   canvasState,
   canvasActions,
   getRenderBbox,
   type CanvasImage as CanvasImageState,
+  type ImageMeta,
 } from "../store/canvasStore";
 import { anchorActions } from "../store/anchorStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot } from "valtio";
-import Konva from "konva";
-import { getTempDominantColor } from "../service";
+import { getTempDominantColor, type CanvasViewport } from "../service";
 import { API_BASE_URL } from "../config";
 import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
-import { CanvasText } from "./canvas/Text";
+import { CanvasText } from "./canvas/CanvasText";
 import { CanvasImage } from "./canvas/CanvasImage";
 import { CanvasToolbar } from "./canvas/CanvasToolbar";
 import { MultiSelectOverlay } from "./canvas/MultiSelectOverlay";
@@ -29,6 +24,33 @@ import { useT } from "../i18n/useT";
 import { createTempMetasFromFiles } from "../utils/import";
 import { THEME } from "../theme";
 import { CANVAS_AUTO_LAYOUT } from "../events/uiEvents";
+
+const createDroppedImageMeta = (file: {
+  path?: string;
+  storedFilename: string;
+  originalName: string;
+  dominantColor?: string | null;
+  tone?: string | null;
+  width: number;
+  height: number;
+}): ImageMeta => {
+  const name = file.originalName.trim() || "image";
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  return {
+    id: `temp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    filename: base,
+    imagePath: file.storedFilename,
+    pageUrl: undefined,
+    tags: [],
+    createdAt: Date.now(),
+    dominantColor: file.dominantColor ?? null,
+    tone: file.tone ?? null,
+    hasVector: false,
+    width: file.width,
+    height: file.height,
+  };
+};
 
 export const Canvas: React.FC = () => {
   const appSnap = useSnapshot(globalState);
@@ -47,14 +69,15 @@ export const Canvas: React.FC = () => {
     canvasFilters,
     showMinimap,
     isCanvasToolbarExpanded,
-    canvasGrayscale,
   } = canvasSnap;
 
   const { t } = useT();
   const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
 
   const selectedIdsRef = useRef<Set<string>>(new Set());
-  const stageRef = useRef<Konva.Stage>(null);
+  const zoomStackRef = useRef<CanvasViewport[]>([]);
+  const preZoomViewportRef = useRef<CanvasViewport | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const stageScale = canvasViewport.scale || 1;
@@ -69,6 +92,7 @@ export const Canvas: React.FC = () => {
     [],
   );
   const selectionAppendRef = useRef(false);
+  const selectionModeRef = useRef<"select" | "zoom">("select");
   const multiDragRef = useRef<{
     active: boolean;
     draggedId: string | null;
@@ -79,6 +103,7 @@ export const Canvas: React.FC = () => {
     active: boolean;
     anchor: { x: number; y: number } | null;
     startUnion: { x: number; y: number; width: number; height: number } | null;
+    startDistance: number;
     scale: number;
     snapshots: Map<
       string,
@@ -96,21 +121,25 @@ export const Canvas: React.FC = () => {
     active: false,
     anchor: null,
     startUnion: null,
+    startDistance: 1,
     scale: 1,
     snapshots: new Map(),
   });
 
-  const setSelectedIds = (ids: Set<string>) => {
+  const setSelectedIds = useCallback((ids: Set<string>) => {
     canvasState.selectedIds = ids;
-  };
+  }, []);
 
-  const setPrimaryId = (id: string | null) => {
+  const setPrimaryId = useCallback((id: string | null) => {
     canvasState.primaryId = id;
-  };
+  }, []);
 
-  const setMultiSelectUnion = (rect: typeof canvasState.multiSelectUnion) => {
-    canvasState.multiSelectUnion = rect;
-  };
+  const setMultiSelectUnion = useCallback(
+    (rect: typeof canvasState.multiSelectUnion) => {
+      canvasState.multiSelectUnion = rect;
+    },
+    [],
+  );
 
   const setSelectionBox = (box: SelectionBoxState) => {
     canvasState.selectionBox = box;
@@ -138,26 +167,37 @@ export const Canvas: React.FC = () => {
 
   const computeMultiSelectUnion = (ids: Set<string>) => {
     if (ids.size <= 1) return null;
-    const stage = stageRef.current;
-    if (!stage) return null;
+
+    const items = canvasState.canvasItems || [];
 
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
 
-    ids.forEach((id) => {
-      let node = stage.findOne(`.image-${id}`);
-      if (!node) {
-        node = stage.findOne(`.text-${id}`);
-      }
-      if (!node) return;
-      const rect = node.getClientRect({ relativeTo: stage });
+    items.forEach((item) => {
+      if (!ids.has(item.canvasId)) return;
 
-      minX = Math.min(minX, rect.x);
-      minY = Math.min(minY, rect.y);
-      maxX = Math.max(maxX, rect.x + rect.width);
-      maxY = Math.max(maxY, rect.y + rect.height);
+      const scale = item.scale || 1;
+      const rawW =
+        (item.width || 0) *
+        scale *
+        Math.abs(item.type === "text" ? 1 : item.scaleX || 1);
+      const rawH =
+        (item.height || 0) *
+        scale *
+        Math.abs(item.type === "text" ? 1 : item.scaleY || 1);
+      const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+      const itemMinX = item.x + bbox.offsetX;
+      const itemMinY = item.y + bbox.offsetY;
+      const itemMaxX = itemMinX + bbox.width;
+      const itemMaxY = itemMinY + bbox.height;
+
+      minX = Math.min(minX, itemMinX);
+      minY = Math.min(minY, itemMinY);
+      maxX = Math.max(maxX, itemMaxX);
+      maxY = Math.max(maxY, itemMaxY);
     });
 
     if (
@@ -165,10 +205,45 @@ export const Canvas: React.FC = () => {
       !Number.isFinite(minY) ||
       !Number.isFinite(maxX) ||
       !Number.isFinite(maxY)
-    )
+    ) {
       return null;
+    }
+
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
+
+  const getLocalPointFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      const container = containerRef.current;
+      if (!container) return null;
+      const rect = container.getBoundingClientRect();
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top,
+      };
+    },
+    [],
+  );
+
+  const localToWorldPoint = useCallback(
+    (point: { x: number; y: number }) => {
+      const scale = stageScale || 1;
+      return {
+        x: (point.x - canvasViewport.x) / scale,
+        y: (point.y - canvasViewport.y) / scale,
+      };
+    },
+    [canvasViewport.x, canvasViewport.y, stageScale],
+  );
+
+  const getWorldPointFromClient = useCallback(
+    (client: { x: number; y: number }) => {
+      const local = getLocalPointFromClient(client.x, client.y);
+      if (!local) return null;
+      return localToWorldPoint(local);
+    },
+    [getLocalPointFromClient, localToWorldPoint],
+  );
 
   const handleCanvasMouseEnter = () => {
     if (shouldEnableMouseThrough) {
@@ -196,38 +271,7 @@ export const Canvas: React.FC = () => {
       width: containerRef.current.offsetWidth,
       height: containerRef.current.offsetHeight,
     };
-  }, [appSnap.pinMode, appSnap.sidebarWidth]);
-
-  useEffect(() => {
-    const handleDropRequest = (e: Event) => {
-      const customEvent = e as CustomEvent<{
-        image: ImageMeta;
-        x: number;
-        y: number;
-      }>;
-      const { image, x, y } = customEvent.detail;
-
-      const stage = stageRef.current;
-      if (!stage) return;
-
-      const stageRect = stage.container().getBoundingClientRect();
-
-      const pointerPosition = {
-        x: x - stageRect.left,
-        y: y - stageRect.top,
-      };
-
-      const transform = stage.getAbsoluteTransform().copy();
-      transform.invert();
-      const basePoint = transform.point(pointerPosition);
-
-      canvasActions.addToCanvas(image, basePoint.x, basePoint.y);
-    };
-
-    window.addEventListener("canvas-drop-request", handleDropRequest);
-    return () =>
-      window.removeEventListener("canvas-drop-request", handleDropRequest);
-  }, []);
+  }, [appSnap.pinMode]);
 
   const clearSelection = useCallback(() => {
     canvasState.selectedIds = new Set();
@@ -242,19 +286,14 @@ export const Canvas: React.FC = () => {
       types: e.dataTransfer.types,
       items: e.dataTransfer.items.length,
     });
-    const stage = stageRef.current;
-    if (!stage) {
-      console.log("[Canvas] handleDrop: no stage ref");
+    const localPoint = getLocalPointFromClient(e.clientX, e.clientY);
+    if (!localPoint) {
+      console.log("[Canvas] handleDrop: no container");
       return;
     }
 
-    stage.setPointersPositions(e);
-    const pointerPosition = stage.getPointerPosition();
-
     try {
-      const transform = stage.getAbsoluteTransform().copy();
-      transform.invert();
-      const basePoint = transform.point(pointerPosition || { x: 0, y: 0 });
+      const basePoint = localToWorldPoint(localPoint);
 
       const data = e.dataTransfer.getData("application/json");
       if (data) {
@@ -297,21 +336,31 @@ export const Canvas: React.FC = () => {
             const resp = await fetch(`${API_BASE_URL}/api/download-url`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url }),
+              body: JSON.stringify({
+                url,
+                canvasName: canvasSnap.currentCanvasName,
+              }),
             });
             if (resp.ok) {
               const result = (await resp.json()) as {
                 success?: boolean;
                 filename?: string;
                 path?: string;
+                width?: number;
+                height?: number;
               };
               if (result.success && result.filename && result.path) {
-                const dominantColor = await getTempDominantColor(result.path);
-                const meta = galleryActions.createDroppedImageMeta({
+                const dominantColor = await getTempDominantColor(
+                  result.path,
+                  canvasSnap.currentCanvasName
+                );
+                const meta = createDroppedImageMeta({
                   path: result.path,
-                  storedFilename: `temp-images/${result.filename}`,
+                  storedFilename: `assets/${result.filename}`,
                   originalName: result.filename,
                   dominantColor,
+                  width: result.width || 0,
+                  height: result.height || 0,
                 });
                 canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
               }
@@ -326,24 +375,48 @@ export const Canvas: React.FC = () => {
       const imageFiles = files.filter((f) => f.type.startsWith("image/"));
       if (!imageFiles.length) return;
 
-      const metas = await createTempMetasFromFiles(imageFiles);
+      const metas = await createTempMetasFromFiles(
+        imageFiles,
+        canvasSnap.currentCanvasName
+      );
+      
+      const newIds: string[] = [];
       metas.forEach((meta, index) => {
         const offset = index * 24;
-        canvasActions.addToCanvas(
+        const newId = canvasActions.addToCanvas(
           meta,
           basePoint.x + offset,
           basePoint.y + offset,
         );
+        if (newId) newIds.push(newId);
       });
+
+      if (newIds.length > 0) {
+        setSelectedIds(new Set(newIds));
+        setPrimaryId(newIds[0]);
+      }
+
+      if (newIds.length > 1) {
+        // Use a small delay to ensure the state is updated and available for layout calculation
+        setTimeout(() => {
+          canvasActions.autoLayoutCanvas(newIds, {
+            startX: basePoint.x,
+            startY: basePoint.y,
+          });
+          setMultiSelectUnion(computeMultiSelectUnion(new Set(newIds)));
+        }, 50);
+      } else {
+        setMultiSelectUnion(null);
+      }
     } catch (err: unknown) {
       console.error("Drop error", err);
     }
   };
 
-  const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
-    e.evt.preventDefault();
-    const stage = stageRef.current;
-    if (!stage) return;
+  const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const svg = svgRef.current;
+    if (!svg) return;
 
     if (selectedIds.size > 0) {
       let minX = Infinity;
@@ -386,7 +459,7 @@ export const Canvas: React.FC = () => {
         const centerY = (minY + maxY) / 2;
 
         const scaleBy = 1.05;
-        const factor = e.evt.deltaY > 0 ? 1 / scaleBy : scaleBy;
+        const factor = e.deltaY > 0 ? 1 / scaleBy : scaleBy;
 
         validItems.forEach(({ item }) => {
           const dx = item.x - centerX;
@@ -424,15 +497,18 @@ export const Canvas: React.FC = () => {
 
     const scaleBy = 1.05;
     const oldScale = canvasViewport.scale;
-    const pointer = stage.getPointerPosition();
-    if (!pointer) return;
+    const rect = svg.getBoundingClientRect();
+    const pointer = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
 
     const mousePointTo = {
       x: (pointer.x - canvasViewport.x) / oldScale,
       y: (pointer.y - canvasViewport.y) / oldScale,
     };
 
-    const newScale = e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
+    const newScale = e.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
 
     const newPos = {
       x: pointer.x - mousePointTo.x * newScale,
@@ -442,8 +518,8 @@ export const Canvas: React.FC = () => {
     canvasActions.setCanvasViewport({
       x: newPos.x,
       y: newPos.y,
-      width: stage.width(),
-      height: stage.height(),
+      width: rect.width,
+      height: rect.height,
       scale: newScale,
     });
   };
@@ -461,8 +537,8 @@ export const Canvas: React.FC = () => {
       if (e.code === "Space") {
         e.preventDefault();
         setIsSpaceDown(true);
-        const stage = stageRef.current;
-        if (stage) stage.container().style.cursor = "grab";
+        const svg = svgRef.current;
+        if (svg) svg.style.cursor = "grab";
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -470,16 +546,16 @@ export const Canvas: React.FC = () => {
         setIsSpaceDown(false);
         isPanningRef.current = false;
         lastPanPointRef.current = null;
-        const stage = stageRef.current;
-        if (stage) stage.container().style.cursor = "default";
+        const svg = svgRef.current;
+        if (svg) svg.style.cursor = "default";
       }
     };
     const handleBlur = () => {
       setIsSpaceDown(false);
       isPanningRef.current = false;
       lastPanPointRef.current = null;
-      const stage = stageRef.current;
-      if (stage) stage.container().style.cursor = "default";
+      const svg = svgRef.current;
+      if (svg) svg.style.cursor = "default";
     };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -511,66 +587,86 @@ export const Canvas: React.FC = () => {
     return cleanup;
   }, []);
 
-  const handleMouseDown = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
-  ) => {
-    const stage = e.target.getStage();
-    if (!stage) return;
+  const zoomToBounds = useCallback(
+    (
+      bounds: { x: number; y: number; width: number; height: number },
+      padding = 50,
+    ) => {
+      const { width, height, x: minX, y: minY } = bounds;
 
-    // 空格 + 左键拖拽 或 右键拖拽：平移画布
-    const evt = e.evt as MouseEvent & { button?: number };
-    const isRightButton = evt.button === 2;
-    if (isSpaceDown || isRightButton) {
-      e.evt.preventDefault();
-      stage.container().style.cursor = "grabbing";
+      if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+
+      const containerWidth = canvasState.dimensions.width;
+      const containerHeight = canvasState.dimensions.height;
+
+      const scaleX = (containerWidth - padding * 2) / width;
+      const scaleY = (containerHeight - padding * 2) / height;
+      const scale = Math.min(scaleX, scaleY);
+
+      const x = (containerWidth - width * scale) / 2 - minX * scale;
+      const y = (containerHeight - height * scale) / 2 - minY * scale;
+
+      canvasActions.setCanvasViewport({
+        x,
+        y,
+        width: containerWidth,
+        height: containerHeight,
+        scale,
+      });
+    },
+    [],
+  );
+
+  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    const isMiddleButton = e.button === 1;
+    if (isSpaceDown || isMiddleButton) {
+      e.preventDefault();
       isPanningRef.current = true;
-
-      if ("touches" in e.evt) {
-        const t = e.evt.touches[0];
-        if (t) lastPanPointRef.current = { x: t.clientX, y: t.clientY };
-      } else {
-        lastPanPointRef.current = { x: e.evt.clientX, y: e.evt.clientY };
-      }
+      lastPanPointRef.current = { x: e.clientX, y: e.clientY };
+      const svg = svgRef.current;
+      if (svg) svg.style.cursor = "grabbing";
       return;
     }
 
-    // Left Click -> Box Selection (if empty space)
-    const isLeftButton = "button" in e.evt ? e.evt.button === 0 : true;
-    if (isLeftButton) {
-      const clickedOnEmpty =
-        e.target === stage || e.target.getParent() === stage;
-      if (clickedOnEmpty) {
-        const pos = stage.getRelativePointerPosition();
-        if (pos) {
-          selectionAppendRef.current = !!(
-            e.evt.shiftKey ||
-            e.evt.metaKey ||
-            e.evt.ctrlKey
-          );
-          setSelectionBox({ start: pos, current: pos });
-          if (!selectionAppendRef.current) {
-            setSelectedIds(new Set());
-            setPrimaryId(null);
-            setMultiSelectUnion(null);
-          }
-        }
+    const isRightButton = e.button === 2;
+    if (isRightButton) {
+      e.preventDefault();
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      if (!local) return;
+
+      // Save current viewport before zoom operation
+      preZoomViewportRef.current = { ...canvasViewport };
+
+      const pos = localToWorldPoint(local);
+      selectionModeRef.current = "zoom";
+      setSelectionBox({ start: pos, current: pos });
+      return;
+    }
+
+    const isLeftButton = e.button === 0;
+    if (isLeftButton && e.target === e.currentTarget) {
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      if (!local) return;
+      const pos = localToWorldPoint(local);
+      selectionAppendRef.current = !!(e.shiftKey || e.metaKey || e.ctrlKey);
+      selectionModeRef.current = "select";
+      setSelectionBox({ start: pos, current: pos });
+      if (!selectionAppendRef.current) {
+        setSelectedIds(new Set());
+        setPrimaryId(null);
+        setMultiSelectUnion(null);
       }
     }
   };
 
-  const handleMouseMove = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
-  ) => {
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (multiScaleRef.current.active) {
-      const stage = stageRef.current;
       const current = multiScaleRef.current;
-      if (!stage || !current.anchor || !current.startUnion) return;
-      const pos = stage.getRelativePointerPosition();
-      if (!pos) return;
-      const base = Math.max(
-        1,
-        Math.hypot(current.startUnion.width, current.startUnion.height),
-      );
+      if (!current.anchor || !current.startUnion) return;
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      if (!local) return;
+      const pos = localToWorldPoint(local);
+      const base = Math.max(1, current.startDistance || 1);
       const next = Math.hypot(
         pos.x - current.anchor.x,
         pos.y - current.anchor.y,
@@ -601,18 +697,10 @@ export const Canvas: React.FC = () => {
     }
     // Panning (Space held)
     if (isPanningRef.current) {
-      const stage = stageRef.current;
       const last = lastPanPointRef.current;
-      if (!stage || !last) return;
+      if (!last) return;
 
-      let currentPoint: { x: number; y: number } | null = null;
-      if ("touches" in e.evt) {
-        const t = e.evt.touches[0];
-        if (t) currentPoint = { x: t.clientX, y: t.clientY };
-      } else {
-        currentPoint = { x: e.evt.clientX, y: e.evt.clientY };
-      }
-      if (!currentPoint) return;
+      const currentPoint = { x: e.clientX, y: e.clientY };
 
       const dx = currentPoint.x - last.x;
       const dy = currentPoint.y - last.y;
@@ -626,8 +714,8 @@ export const Canvas: React.FC = () => {
       canvasActions.setCanvasViewport({
         x: nextPos.x,
         y: nextPos.y,
-        width: stage.width(),
-        height: stage.height(),
+        width: canvasState.dimensions.width,
+        height: canvasState.dimensions.height,
         scale: canvasViewport.scale,
       });
       lastPanPointRef.current = currentPoint;
@@ -636,14 +724,13 @@ export const Canvas: React.FC = () => {
 
     // Box Selection
     if (selectionBox.start) {
-      const stage = stageRef.current;
-      const pos = stage?.getRelativePointerPosition();
-      if (pos) {
-        canvasState.selectionBox = {
-          ...canvasState.selectionBox,
-          current: pos,
-        };
-      }
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      if (!local) return;
+      const pos = localToWorldPoint(local);
+      canvasState.selectionBox = {
+        ...canvasState.selectionBox,
+        current: pos,
+      };
     }
   };
 
@@ -678,51 +765,77 @@ export const Canvas: React.FC = () => {
         active: false,
         anchor: null,
         startUnion: null,
+        startDistance: 1,
         scale: 1,
         snapshots: new Map(),
       };
       setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
-      const stage = stageRef.current;
-      if (stage) stage.container().style.cursor = "default";
+      const svg = svgRef.current;
+      if (svg) svg.style.cursor = "default";
       return;
     }
-    const stage = stageRef.current;
-    if (stage) stage.container().style.cursor = "default";
+    const svg = svgRef.current;
+    if (svg) svg.style.cursor = "default";
 
     isPanningRef.current = false;
     lastPanPointRef.current = null;
-    if (!stage) {
-      canvasState.selectionBox = { start: null, current: null };
-      return;
-    }
 
     if (selectionBox.start && selectionBox.current) {
       const x1 = Math.min(selectionBox.start.x, selectionBox.current.x);
       const x2 = Math.max(selectionBox.start.x, selectionBox.current.x);
       const y1 = Math.min(selectionBox.start.y, selectionBox.current.y);
       const y2 = Math.max(selectionBox.start.y, selectionBox.current.y);
+      const width = x2 - x1;
+      const height = y2 - y1;
 
-      if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
+      const isClick = width <= 2 && height <= 2;
+
+      if (selectionModeRef.current === "zoom") {
+        if (isClick) {
+          const prev = zoomStackRef.current.pop();
+          if (prev) {
+            canvasActions.setCanvasViewport(prev);
+          }
+        } else {
+          if (preZoomViewportRef.current) {
+            zoomStackRef.current.push(preZoomViewportRef.current);
+          }
+          zoomToBounds({ x: x1, y: y1, width, height }, 0);
+        }
+        canvasState.selectionBox = { start: null, current: null };
+        return;
+      }
+
+      if (!isClick) {
         const newSelected = selectionAppendRef.current
           ? new Set(selectedIds)
           : new Set<string>();
         let lastHitId: string | null = null;
         (canvasItems || []).forEach((item) => {
-          let node = stage.findOne(`.image-${item.canvasId}`);
-          if (!node) {
-            node = stage.findOne(`.text-${item.canvasId}`);
-          }
-          if (node) {
-            const rect = node.getClientRect({ relativeTo: stage });
-            if (
-              rect.x < x2 &&
-              rect.x + rect.width > x1 &&
-              rect.y < y2 &&
-              rect.y + rect.height > y1
-            ) {
-              newSelected.add(item.canvasId);
-              lastHitId = item.canvasId;
-            }
+          const scale = item.scale || 1;
+          const rawW =
+            (item.width || 0) *
+            scale *
+            Math.abs(item.type === "text" ? 1 : item.scaleX || 1);
+          const rawH =
+            (item.height || 0) *
+            scale *
+            Math.abs(item.type === "text" ? 1 : item.scaleY || 1);
+          const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+          const itemMinX = item.x + bbox.offsetX;
+          const itemMinY = item.y + bbox.offsetY;
+          const itemMaxX = itemMinX + bbox.width;
+          const itemMaxY = itemMinY + bbox.height;
+
+          if (
+            itemMinX < x2 &&
+            itemMaxX > x1 &&
+            itemMinY < y2 &&
+            itemMaxY > y1
+          ) {
+            newSelected.add(item.canvasId);
+            lastHitId = item.canvasId;
           }
         });
         setSelectedIds(newSelected);
@@ -765,6 +878,7 @@ export const Canvas: React.FC = () => {
           active: false,
           anchor: null,
           startUnion: null,
+          startDistance: 1,
           scale: 1,
           snapshots: new Map(),
         };
@@ -775,9 +889,9 @@ export const Canvas: React.FC = () => {
       }
       isPanningRef.current = false;
       lastPanPointRef.current = null;
-      const stage = stageRef.current;
-      if (stage) {
-        stage.container().style.cursor = "default";
+      const svg = svgRef.current;
+      if (svg) {
+        svg.style.cursor = "default";
       }
     };
     window.addEventListener("mouseup", handleWindowMouseUp);
@@ -786,56 +900,10 @@ export const Canvas: React.FC = () => {
       window.removeEventListener("mouseup", handleWindowMouseUp);
       window.removeEventListener("touchend", handleWindowMouseUp);
     };
-  }, []);
+  }, [setMultiSelectUnion]);
 
-  const handleAutoLayout = useCallback(() => {
-    if (selectedIds.size > 0) {
-      const items = canvasItems || [];
-      const selectedItems = items.filter((item) =>
-        selectedIds.has(item.canvasId),
-      );
-      const selectedImages = selectedItems.filter(
-        (item) => item.type === "image",
-      );
-
-      if (selectedImages.length >= 2) {
-        let minX = Infinity;
-        let minY = Infinity;
-
-        selectedImages.forEach((item) => {
-          const scale = item.scale || 1;
-          const rawW = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
-          const rawH = (item.height || 0) * scale * Math.abs(item.scaleY || 1);
-          const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
-
-          minX = Math.min(minX, item.x + bbox.offsetX);
-          minY = Math.min(minY, item.y + bbox.offsetY);
-        });
-
-        if (minX === Infinity) minX = 0;
-        if (minY === Infinity) minY = 0;
-
-        canvasActions.autoLayoutCanvas(
-          selectedImages.map((item) => item.canvasId),
-          {
-            startX: minX,
-            startY: minY,
-          },
-        );
-
-        setTimeout(() => {
-          setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
-        }, 0);
-        return;
-      }
-    }
-
-    canvasActions.autoLayoutCanvas();
-    const stage = stageRef.current;
-    if (!stage) return;
-    // Use the proxy state here to ensure we read the latest positions after autoLayoutCanvas mutates items.
-    const items = canvasState.canvasItems || [];
-    if (items.length === 0) return;
+  const getItemsBoundingBox = useCallback((items: typeof canvasItems) => {
+    if (!items || items.length === 0) return null;
 
     let minX = Infinity;
     let minY = Infinity;
@@ -857,30 +925,89 @@ export const Canvas: React.FC = () => {
       maxY = Math.max(maxY, item.y + bbox.offsetY + bbox.height);
     });
 
-    const padding = 50;
-    const width = maxX - minX;
-    const height = maxY - minY;
+    if (
+      !Number.isFinite(minX) ||
+      !Number.isFinite(minY) ||
+      !Number.isFinite(maxX) ||
+      !Number.isFinite(maxY)
+    ) {
+      return null;
+    }
 
-    if (!isFinite(width) || !isFinite(height)) return;
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+  }, []);
 
-    const containerWidth = stage.width();
-    const containerHeight = stage.height();
+  const handleContainImage = useCallback(
+    (id: string) => {
+      const items = canvasState.canvasItems || [];
+      const target = items.find((item) => item.canvasId === id);
+      if (!target) return;
+      const bbox = getItemsBoundingBox([target]);
+      if (!bbox) return;
+      zoomStackRef.current.push({ ...canvasViewport });
+      zoomToBounds(bbox, 0);
+      setSelectedIds(new Set());
+      setPrimaryId(null);
+      setMultiSelectUnion(null);
+    },
+    [
+      canvasViewport,
+      getItemsBoundingBox,
+      setMultiSelectUnion,
+      setPrimaryId,
+      setSelectedIds,
+      zoomToBounds,
+    ],
+  );
 
-    const scaleX = (containerWidth - padding * 2) / width;
-    const scaleY = (containerHeight - padding * 2) / height;
-    const scale = Math.min(scaleX, scaleY);
+  const handleAutoLayout = useCallback(() => {
+    if (selectedIds.size > 0) {
+      const items = canvasItems || [];
+      const selectedItems = items.filter((item) =>
+        selectedIds.has(item.canvasId),
+      );
+      const selectedImages = selectedItems.filter(
+        (item) => item.type === "image",
+      );
 
-    const x = (containerWidth - width * scale) / 2 - minX * scale;
-    const y = (containerHeight - height * scale) / 2 - minY * scale;
+      if (selectedImages.length >= 2) {
+        const bbox = getItemsBoundingBox(selectedImages);
+        const minX = bbox?.x ?? 0;
+        const minY = bbox?.y ?? 0;
 
-    canvasActions.setCanvasViewport({
-      x,
-      y,
-      width: stage.width(),
-      height: stage.height(),
-      scale,
-    });
-  }, [canvasItems, selectedIds]);
+        canvasActions.autoLayoutCanvas(
+          selectedImages.map((item) => item.canvasId),
+          {
+            startX: minX,
+            startY: minY,
+          },
+        );
+
+        setTimeout(() => {
+          setMultiSelectUnion(computeMultiSelectUnion(selectedIdsRef.current));
+        }, 0);
+        return;
+      }
+    }
+
+    canvasActions.autoLayoutCanvas();
+    const items = canvasState.canvasItems || [];
+    const bbox = getItemsBoundingBox(items);
+    if (!bbox) return;
+
+    zoomToBounds(bbox, 50);
+  }, [
+    canvasItems,
+    selectedIds,
+    zoomToBounds,
+    getItemsBoundingBox,
+    setMultiSelectUnion,
+  ]);
 
   useEffect(() => {
     const handleLayoutEvent = () => handleAutoLayout();
@@ -905,7 +1032,7 @@ export const Canvas: React.FC = () => {
     setTimeout(() => {
       setMultiSelectUnion(computeMultiSelectUnion(selectedIds));
     }, 0);
-  }, [selectedIds, canvasItems]);
+  }, [selectedIds, canvasItems, setMultiSelectUnion]);
 
   useHotkeys(
     "mod+f",
@@ -973,7 +1100,13 @@ export const Canvas: React.FC = () => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedIds, clearSelection]);
+  }, [
+    selectedIds,
+    clearSelection,
+    setMultiSelectUnion,
+    setPrimaryId,
+    setSelectedIds,
+  ]);
 
   const handleDragStart = (id: string, pos: { x: number; y: number }) => {
     const currentSelected = selectedIdsRef.current;
@@ -1008,12 +1141,12 @@ export const Canvas: React.FC = () => {
     };
   };
 
-  const handleGroupScaleStart = () => {
-    const union = multiSelectUnion;
-    const stage = stageRef.current;
-    const currentSelected = selectedIdsRef.current;
-    if (!union || !stage) return;
-    if (currentSelected.size <= 1) return;
+  const startScaleSession = (
+    targetIds: Set<string>,
+    union: { x: number; y: number; width: number; height: number },
+    startPoint?: { x: number; y: number } | null,
+  ) => {
+    if (targetIds.size === 0) return;
     if (union.width <= 0 || union.height <= 0) return;
     const snapshots = new Map<
       string,
@@ -1027,7 +1160,7 @@ export const Canvas: React.FC = () => {
         fontSize?: number;
       }
     >();
-    currentSelected.forEach((selectedId) => {
+    targetIds.forEach((selectedId) => {
       const target = canvasItems.find((it) => it.canvasId === selectedId);
       if (!target) return;
       if (target.type === "text") {
@@ -1050,14 +1183,71 @@ export const Canvas: React.FC = () => {
         scaleY: img.scaleY,
       });
     });
+    if (snapshots.size === 0) return;
+    const anchor = { x: union.x, y: union.y };
+    const startDistance = Math.max(
+      1,
+      startPoint
+        ? Math.hypot(startPoint.x - anchor.x, startPoint.y - anchor.y)
+        : Math.hypot(union.width, union.height),
+    );
     multiScaleRef.current = {
       active: true,
-      anchor: { x: union.x, y: union.y },
+      anchor,
       startUnion: { ...union },
+      startDistance,
       scale: 1,
       snapshots,
     };
-    stage.container().style.cursor = "nwse-resize";
+    const svg = svgRef.current;
+    if (svg) svg.style.cursor = "nwse-resize";
+  };
+
+  const handleGroupScaleStart = (client: { x: number; y: number }) => {
+    const union = multiSelectUnion;
+    const currentSelected = selectedIdsRef.current;
+    if (!union) return;
+    if (currentSelected.size <= 1) return;
+    const startPoint = getWorldPointFromClient(client);
+    startScaleSession(currentSelected, union, startPoint);
+  };
+
+  const handleItemScaleStart = (
+    id: string,
+    client: { x: number; y: number },
+  ) => {
+    const target = canvasItems.find((it) => it.canvasId === id);
+    if (!target) return;
+    const scale = target.scale || 1;
+    const width = target.width || 0;
+    const height = target.height || 0;
+    const rotation = target.rotation || 0;
+
+    const rawW =
+      width *
+      scale *
+      Math.abs(
+        target.type === "text" ? 1 : (target as CanvasImageState).scaleX || 1,
+      );
+    const rawH =
+      height *
+      scale *
+      Math.abs(
+        target.type === "text" ? 1 : (target as CanvasImageState).scaleY || 1,
+      );
+
+    if (rawW <= 0 || rawH <= 0) return;
+
+    const bbox = getRenderBbox(rawW, rawH, rotation);
+
+    const union = {
+      x: target.x + bbox.offsetX,
+      y: target.y + bbox.offsetY,
+      width: bbox.width,
+      height: bbox.height,
+    };
+    const startPoint = getWorldPointFromClient(client);
+    startScaleSession(new Set([id]), union, startPoint);
   };
 
   const handleDragMove = (id: string, pos: { x: number; y: number }) => {
@@ -1109,11 +1299,11 @@ export const Canvas: React.FC = () => {
 
   const handleItemSelect = (
     id: string,
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
+    e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
   ) => {
     if (selectionBox.start) return;
 
-    if (!e.evt.shiftKey && !e.evt.metaKey && !e.evt.ctrlKey) {
+    if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
       canvasActions.bringToFront(id);
       if (selectedIds.has(id)) {
         setPrimaryId(id);
@@ -1141,23 +1331,16 @@ export const Canvas: React.FC = () => {
     }
   };
 
-  const handleDblClick = (
-    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
-  ) => {
-    const stage = e.target.getStage();
-    if (!stage) return;
-
-    const clickedOnEmpty = e.target === stage || e.target.getParent() === stage;
-    if (clickedOnEmpty) {
-      const pointer = stage.getRelativePointerPosition();
-      if (pointer) {
-        const id = canvasActions.addTextToCanvas(pointer.x, pointer.y);
-        setSelectedIds(new Set([id]));
-        setPrimaryId(id);
-        setMultiSelectUnion(null);
-        setAutoEditId(id);
-      }
-    }
+  const handleDblClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (e.target !== e.currentTarget) return;
+    const local = getLocalPointFromClient(e.clientX, e.clientY);
+    if (!local) return;
+    const pos = localToWorldPoint(local);
+    const id = canvasActions.addTextToCanvas(pos.x, pos.y);
+    setSelectedIds(new Set([id]));
+    setPrimaryId(id);
+    setMultiSelectUnion(null);
+    setAutoEditId(id);
   };
 
   return (
@@ -1167,8 +1350,6 @@ export const Canvas: React.FC = () => {
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()}
-      onClick={() => globalActions.setActiveArea("canvas")}
-      onMouseDown={() => globalActions.setActiveArea("canvas")}
       onMouseEnter={handleCanvasMouseEnter}
     >
       <CanvasToolbar
@@ -1208,27 +1389,20 @@ export const Canvas: React.FC = () => {
           ))}
         </div>
       )}
-      <Stage
+      <svg
+        ref={svgRef}
         width={dimensions.width}
         height={dimensions.height}
-        x={canvasViewport.x}
-        y={canvasViewport.y}
-        scaleX={canvasViewport.scale}
-        scaleY={canvasViewport.scale}
-        style={{ opacity: appSnap.canvasOpacity }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onDblClick={handleDblClick}
-        onTouchStart={handleMouseDown} // Basic touch support mapping
-        onTouchMove={handleMouseMove}
-        onTouchEnd={handleMouseUp}
+        onDoubleClick={handleDblClick}
         onWheel={handleWheel}
-        draggable={false} // Custom panning logic
-        ref={stageRef}
       >
-        <Layer>
-          {(canvasItems || []).map((item) => {
+        <g
+          transform={`translate(${canvasViewport.x} ${canvasViewport.y}) scale(${canvasViewport.scale})`}
+        >
+          {(canvasState.canvasItems || []).map((item) => {
             if (item.type === "text") {
               return (
                 <CanvasText
@@ -1242,6 +1416,7 @@ export const Canvas: React.FC = () => {
                   }
                   isPanModifierActive={isSpaceDown}
                   stageScale={stageScale}
+                  canvasOpacity={appSnap.canvasOpacity}
                   onDragStart={(pos) => handleDragStart(item.canvasId, pos)}
                   onDragMove={(pos) => handleDragMove(item.canvasId, pos)}
                   onDragEnd={(pos) => handleDragEnd(item.canvasId, pos)}
@@ -1279,6 +1454,9 @@ export const Canvas: React.FC = () => {
                     }
                     setMultiSelectUnion(computeMultiSelectUnion(newSet));
                   }}
+                  onScaleStart={(client) =>
+                    handleItemScaleStart(item.canvasId, client)
+                  }
                 />
               );
             }
@@ -1294,16 +1472,11 @@ export const Canvas: React.FC = () => {
                 }
                 isPanModifierActive={isSpaceDown}
                 stageScale={stageScale}
+                canvasOpacity={appSnap.canvasOpacity}
                 onDragStart={(pos) => handleDragStart(item.canvasId, pos)}
                 onDragMove={(pos) => handleDragMove(item.canvasId, pos)}
                 onDragEnd={(pos) => handleDragEnd(item.canvasId, pos)}
                 onSelect={(e) => handleItemSelect(item.canvasId, e)}
-                onChange={(newAttrs) => {
-                  canvasActions.updateCanvasImageSilent(
-                    item.canvasId,
-                    newAttrs,
-                  );
-                }}
                 onCommit={(newAttrs) => {
                   canvasActions.updateCanvasImage(item.canvasId, newAttrs);
                   setMultiSelectUnion(
@@ -1320,7 +1493,10 @@ export const Canvas: React.FC = () => {
                   }
                   setMultiSelectUnion(computeMultiSelectUnion(newSet));
                 }}
-                globalGrayscale={canvasGrayscale}
+                onScaleStart={(client) =>
+                  handleItemScaleStart(item.canvasId, client)
+                }
+                onContain={() => handleContainImage(item.canvasId)}
                 globalFilters={canvasFilters}
               />
             );
@@ -1333,11 +1509,9 @@ export const Canvas: React.FC = () => {
             onScaleStart={handleGroupScaleStart}
           />
           <SelectionRect selectionBox={selectionBox} />
-        </Layer>
-      </Stage>
-      {showMinimap && !shouldEnableMouseThrough && (
-        <Minimap stageRef={stageRef} />
-      )}
+        </g>
+      </svg>
+      {showMinimap && !shouldEnableMouseThrough && <Minimap />}
       <ConfirmModal
         isOpen={isClearModalOpen}
         title={t("canvas.clearCanvasTitle")}

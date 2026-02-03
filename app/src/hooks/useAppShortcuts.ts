@@ -9,7 +9,6 @@ export const useAppShortcuts = () => {
 
   const opacityUpHotkey = acceleratorToHotkey(snap.canvasOpacityUpShortcut);
   const opacityDownHotkey = acceleratorToHotkey(snap.canvasOpacityDownShortcut);
-  const toggleGalleryHotkey = acceleratorToHotkey(snap.toggleGalleryShortcut);
   const canvasGroupHotkey = acceleratorToHotkey(snap.canvasGroupShortcut);
 
   useHotkeys(
@@ -44,16 +43,6 @@ export const useAppShortcuts = () => {
       enabled: Boolean(opacityDownHotkey),
     },
     [opacityDownHotkey],
-  );
-
-  useHotkeys(
-    toggleGalleryHotkey ?? "",
-    (e) => {
-      e.preventDefault();
-      globalActions.setGalleryOpen(!globalState.isGalleryOpen);
-    },
-    { preventDefault: true, enabled: Boolean(toggleGalleryHotkey) },
-    [toggleGalleryHotkey],
   );
 
   useHotkeys(

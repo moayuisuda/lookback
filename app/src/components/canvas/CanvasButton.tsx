@@ -1,32 +1,4 @@
 import React from "react";
-import type Konva from "konva";
-import { Group, Rect, Path } from "react-konva";
-
-interface CanvasButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  isActive?: boolean;
-  variant?: "default" | "danger";
-}
-
-export const CanvasButton: React.FC<CanvasButtonProps> = ({
-  isActive = false,
-  variant = "default",
-  className = "",
-  style,
-  children,
-  ...props
-}) => {
-  return (
-    <button
-      className={`glass-btn ${isActive ? "glass-btn--active" : ""} ${
-        variant === "danger" ? "glass-btn--danger" : ""
-      } ${className}`}
-      style={style}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-};
 
 interface CanvasControlButtonProps {
   x: number;
@@ -46,9 +18,13 @@ interface CanvasControlButtonProps {
   iconOffsetX?: number;
   iconOffsetY?: number;
   cursor?: string;
-  onClick?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
-  onMouseDown?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
-  onTouchStart?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
+  onClick?: (
+    e: React.MouseEvent<SVGGElement> | React.TouchEvent<SVGGElement>,
+  ) => void;
+  onMouseDown?: (e: React.MouseEvent<SVGGElement>) => void;
+  onPointerDown?: (e: React.PointerEvent<SVGGElement>) => void;
+  onDoubleClick?: (e: React.MouseEvent<SVGGElement>) => void;
+  className?: string;
 }
 
 export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
@@ -61,7 +37,7 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
   strokeWidth = 0,
   shadowColor = "black",
   shadowBlur = 5,
-  shadowOpacity = 0.3,
+  shadowOpacity = 0.9,
   iconPath,
   iconStroke = "white",
   iconStrokeWidth = 2,
@@ -71,27 +47,35 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
   cursor = "pointer",
   onClick,
   onMouseDown,
-  onTouchStart,
+  onPointerDown,
+  onDoubleClick,
+  className,
+  ...others
 }) => {
   return (
-    <Group
-      x={x}
-      y={y}
-      scaleX={scale}
-      scaleY={scale}
-      onClick={onClick}
-      onMouseDown={onMouseDown}
-      onTouchStart={onTouchStart}
-      onMouseEnter={(e) => {
-        const container = e.target.getStage()?.container();
-        if (container) container.style.cursor = cursor;
+    <g
+      className={className}
+      transform={`translate(${x} ${y}) scale(${scale})`}
+      data-control="true"
+      style={{ cursor }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.(e);
       }}
-      onMouseLeave={(e) => {
-        const container = e.target.getStage()?.container();
-        if (container) container.style.cursor = "default";
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onDoubleClick?.(e);
+      }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onMouseDown?.(e);
+      }}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        onPointerDown?.(e);
       }}
     >
-      <Rect
+      <rect
         x={-size / 2}
         y={-size / 2}
         width={size}
@@ -99,23 +83,29 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
         fill={fill}
         stroke={stroke}
         strokeWidth={strokeWidth}
-        cornerRadius={3}
-        shadowColor={shadowColor}
-        shadowBlur={shadowBlur}
-        shadowOpacity={shadowOpacity}
+        rx={3}
+        ry={3}
+        style={
+          shadowBlur && shadowOpacity
+            ? {
+                filter: `drop-shadow(0 0 ${shadowBlur}px ${shadowColor})`,
+                opacity: shadowOpacity,
+              }
+            : undefined
+        }
+        {...others}
       />
       {iconPath ? (
-        <Path
-          data={iconPath}
+        <path
+          d={iconPath}
           stroke={iconStroke}
           strokeWidth={iconStrokeWidth}
-          lineCap="round"
-          lineJoin="round"
-          scale={{ x: iconScale, y: iconScale }}
-          x={iconOffsetX}
-          y={iconOffsetY}
+          strokeLinecap="round"
+          fill="transparent"
+          strokeLinejoin="round"
+          transform={`translate(${iconOffsetX} ${iconOffsetY}) scale(${iconScale})`}
         />
       ) : null}
-    </Group>
+    </g>
   );
 };

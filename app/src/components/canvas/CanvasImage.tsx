@@ -1,18 +1,30 @@
-import React, { useEffect, useRef, useMemo } from "react";
-import {
-  Group,
-  Image as KonvaImage,
-  Transformer,
-} from "react-konva";
-import useImage from "use-image";
-import Konva from "konva";
+import React, { useMemo, useCallback } from "react";
+import { useSnapshot } from "valtio";
 import { type CanvasImage as CanvasImageState } from "../../store/canvasStore";
-import { getImageUrl } from "../../store/galleryStore";
-import { canvasActions } from "../../store/canvasStore";
+import { canvasActions, canvasState } from "../../store/canvasStore";
+import { globalState } from "../../store/globalStore";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";
 import { CANVAS_ICONS } from "./CanvasIcons";
-import { getKonvaFilters, applyFilterConfigs } from "../../utils/imageFilters";
+import { CanvasNode } from "./CanvasNode";
+import { API_BASE_URL } from "../../config";
+
+const getImageUrl = (imagePath: string, canvasName?: string) => {
+  let normalized = imagePath.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) {
+    normalized = normalized.slice(1);
+  }
+  if (normalized.startsWith("assets/")) {
+    const filename = normalized.split("/").pop() || normalized;
+    const safeCanvasName = encodeURIComponent(canvasName || "Default");
+    const safeFilename = encodeURIComponent(filename);
+    return `${API_BASE_URL}/api/assets/${safeCanvasName}/${safeFilename}`;
+  }
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
+  }
+  return `${API_BASE_URL}/${normalized}`;
+};
 
 interface CanvasImageProps {
   image: CanvasImageState;
@@ -23,12 +35,15 @@ interface CanvasImageProps {
   onDragStart: (pos: { x: number; y: number }) => void;
   onDragMove: (pos: { x: number; y: number }) => void;
   onDragEnd: (pos: { x: number; y: number }) => void;
-  onSelect: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
-  onChange: (next: Partial<CanvasImageState>) => void;
+  onSelect: (
+    e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
+  ) => void;
   onCommit: (next: Partial<CanvasImageState>) => void;
   onDelete: () => void;
-  globalGrayscale: boolean;
+  onScaleStart: (client: { x: number; y: number }) => void;
+  onContain: () => void;
   globalFilters: readonly string[];
+  canvasOpacity: number;
 }
 
 export const CanvasImage: React.FC<CanvasImageProps> = ({
@@ -41,202 +56,161 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   onDragMove,
   onDragEnd,
   onSelect,
-  onChange,
   onCommit,
   onDelete,
-  globalGrayscale,
+  onScaleStart,
+  onContain,
   globalFilters = [],
+  canvasOpacity,
 }) => {
-  const [img] = useImage(getImageUrl(image.imagePath), "anonymous");
-  const groupRef = useRef<Konva.Group>(null);
-  const trRef = useRef<Konva.Transformer>(null);
-  const imgRef = useRef<Konva.Image>(null);
+  const imageSnap = useSnapshot(image);
+  const globalSnap = useSnapshot(globalState);
+  const canvasSnap = useSnapshot(canvasState);
+  const imageUrl = getImageUrl(
+    imageSnap.imagePath,
+    canvasSnap.currentCanvasName,
+  );
 
-  // Compute final filter list
   const activeFilters = useMemo(() => {
     const filters = new Set<string>();
-    
-    // Legacy support
-    if (globalGrayscale) filters.add('grayscale');
-    if (image.grayscale) filters.add('grayscale');
 
-    // New filter system
-    globalFilters.forEach(f => filters.add(f));
-    (image.filters || []).forEach(f => filters.add(f));
+    if (imageSnap.grayscale) filters.add("grayscale");
+
+    globalFilters.forEach((f) => filters.add(f));
+    (imageSnap.filters || []).forEach((f) => filters.add(f));
 
     return Array.from(filters);
-  }, [globalGrayscale, image.grayscale, globalFilters, image.filters]);
+  }, [imageSnap.grayscale, globalFilters, imageSnap.filters]);
 
-  const konvaFilters = useMemo(() => getKonvaFilters(activeFilters), [activeFilters]);
-
-  useEffect(() => {
-    const node = imgRef.current;
-    if (!node || !img) return;
-
-    // Always clear cache first to ensure we don't have stale cache
-    node.clearCache();
-
-    if (activeFilters.length > 0) {
-      // Apply configs (like posterize levels)
-      applyFilterConfigs(node, activeFilters);
-
-      // Cache is required for filters to work
-      // Limit pixelRatio to 1 to avoid huge textures on retina screens which cause lag during drag
-      node.cache({ pixelRatio: 1 });
+  const cssFilter = useMemo(() => {
+    if (activeFilters.length === 0) return undefined;
+    const parts: string[] = [];
+    if (activeFilters.includes("grayscale")) {
+      parts.push("grayscale(1)");
     }
-  }, [activeFilters, img, image.width, image.height]);
-
-  useEffect(() => {
-    if (img && (image.width !== img.width || image.height !== img.height)) {
-      canvasActions.updateCanvasImageSilent(image.canvasId, {
-        width: img.width,
-        height: img.height,
-      });
+    if (activeFilters.includes("trianglePixelate")) {
+      parts.push("contrast(1.1) saturate(0.9)");
     }
-  }, [img, image.width, image.height, image.canvasId]);
-
-  useEffect(() => {
-    if (typeof image.scaleX !== "number" && typeof image.scaleY !== "number")
-      return;
-
-    const legacyScaleX =
-      typeof image.scaleX === "number" ? image.scaleX : undefined;
-    const legacyScaleY =
-      typeof image.scaleY === "number" ? image.scaleY : undefined;
-
-    const hasLegacyMagnitude =
-      (typeof legacyScaleX === "number" && Math.abs(legacyScaleX) !== 1) ||
-      (typeof legacyScaleY === "number" && Math.abs(legacyScaleY) !== 1);
-
-    if (!hasLegacyMagnitude) return;
-
-    const magnitude =
-      typeof legacyScaleX === "number"
-        ? Math.abs(legacyScaleX)
-        : typeof legacyScaleY === "number"
-        ? Math.abs(legacyScaleY)
-        : 1;
-
-    const flipSign =
-      typeof legacyScaleX === "number" ? (legacyScaleX < 0 ? -1 : 1) : 1;
-
-    canvasActions.updateCanvasImageSilent(image.canvasId, {
-      scale: magnitude,
-      scaleX: flipSign,
-      scaleY: 1,
-    });
-  }, [image.scaleX, image.scaleY, image.canvasId]);
-
-  useEffect(() => {
-    if (isSelected && trRef.current && groupRef.current) {
-      trRef.current.nodes([groupRef.current]);
-      trRef.current.getLayer()?.batchDraw();
-    }
-  }, [isSelected]);
+    return parts.join(" ");
+  }, [activeFilters]);
 
   const handleFlip = () => {
-    const sign = (image.scaleX ?? 1) < 0 ? -1 : 1;
+    const sign = (imageSnap.scaleX ?? 1) < 0 ? -1 : 1;
     onCommit({ scaleX: sign * -1 });
   };
 
-  const scale = image.scale || 1;
-  const flipX = (image.scaleX ?? 1) < 0;
+  const scale = imageSnap.scale || 1;
+  const flipX = (imageSnap.scaleX ?? 1) < 0;
 
   const btnScale = 1 / (scale * stageScale);
 
+  const handleSelect = (
+    e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
+  ) => {
+    e.stopPropagation();
+    if ("button" in e && e.button === 2) return;
+    if (isPanModifierActive) return;
+    onSelect(e);
+    canvasActions.bringToFront(imageSnap.canvasId);
+  };
+
+  const baseWidth = imageSnap.width!;
+  const baseHeight = imageSnap.height!;
+
+  const sx = scale;
+  const sy = scale * (imageSnap.scaleY ?? 1);
+
+  const renderOpacity = canvasOpacity;
+  const selectionRect =
+    isSelected && !globalSnap.mouseThrough
+      ? {
+          x: -baseWidth / 2,
+          y: -baseHeight / 2,
+          width: baseWidth,
+          height: baseHeight,
+          strokeWidth: 3,
+        }
+      : null;
+
+  const handleRotateStart = (e: React.MouseEvent<SVGGElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const viewport = canvasState.canvasViewport;
+    const centerX = imageSnap.x * viewport.scale + viewport.x;
+    const centerY = imageSnap.y * viewport.scale + viewport.y;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - centerX;
+      const dy = ev.clientY - centerY;
+      const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const rotation = angle + 90;
+      canvasActions.updateCanvasImageSilent(imageSnap.canvasId, { rotation });
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      canvasActions.commitCanvasChange();
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent<SVGGElement>) => {
+      if (isPanModifierActive) return;
+      const target = e.target as Element | null;
+      if (target && target.closest("[data-control]")) return;
+      e.stopPropagation();
+      onContain();
+    },
+    [isPanModifierActive, onContain],
+  );
+
   return (
-    <>
-      <Group
-        ref={groupRef}
-        name={`image-${image.canvasId}`}
-        x={image.x}
-        y={image.y}
-        rotation={image.rotation}
-        scaleX={scale}
-        scaleY={scale}
-        draggable={!isPanModifierActive}
-        onMouseDown={(e) => {
-          if ((e.evt as MouseEvent).button === 2) return;
-          if (isPanModifierActive) return;
-          onSelect(e);
-          canvasActions.bringToFront(image.canvasId);
-        }}
-        onDragStart={(e) => {
-          if (isPanModifierActive) return;
-          canvasActions.bringToFront(image.canvasId);
-          onDragStart({ x: e.target.x(), y: e.target.y() });
-        }}
-        onDragMove={(e) => {
-          onDragMove({ x: e.target.x(), y: e.target.y() });
-        }}
-        onDragEnd={(e) => {
-          onDragEnd({ x: e.target.x(), y: e.target.y() });
-        }}
-        onTransform={() => {
-          const node = groupRef.current;
-          if (!node) return;
-          onChange({
-            x: node.x(),
-            y: node.y(),
-            scale: node.scaleX(),
-            rotation: node.rotation(),
-          });
-        }}
-        onTransformEnd={() => {
-          const node = groupRef.current;
-          if (!node) return;
-          onCommit({
-            x: node.x(),
-            y: node.y(),
-            scale: node.scaleX(),
-            rotation: node.rotation(),
-          });
-        }}
-      >
-        <KonvaImage
-          ref={imgRef}
-          filters={konvaFilters.length > 0 ? konvaFilters : undefined}
-          image={img}
-          width={image.width}
-          height={image.height}
-          scaleX={flipX ? -1 : 1}
-          offsetX={flipX ? image.width || 0 : 0}
-        />
-      </Group>
-      {showControls && (
-        <Transformer
-          ref={trRef}
-          enabledAnchors={["bottom-right"]}
-          rotateEnabled
-          padding={0}
-          keepRatio
-          anchorSize={10}
-          borderStroke={THEME.primary}
-          anchorStroke={THEME.primary}
-          anchorFill="white"
-          boundBoxFunc={(oldBox, newBox) => {
-            if (newBox.width < 5 || newBox.height < 5) {
-              return oldBox;
-            }
-            return newBox;
-          }}
-        />
-      )}
-      {showControls && (
-        <Group
-          x={image.x}
-          y={image.y}
-          rotation={image.rotation}
-          scaleX={scale}
-          scaleY={scale}
-          zIndex={999}
-          onMouseDown={(e) => {
-            e.cancelBubble = true;
-          }}
-        >
+    <CanvasNode
+      id={imageSnap.canvasId}
+      x={imageSnap.x}
+      y={imageSnap.y}
+      rotation={imageSnap.rotation}
+      scaleX={sx}
+      scaleY={sy}
+      draggable={true}
+      isSelected={isSelected}
+      isPanModifierActive={isPanModifierActive}
+      stageScale={stageScale}
+      showControls={showControls}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      onDragEnd={onDragEnd}
+      onSelect={handleSelect}
+      onDoubleClick={handleDoubleClick}
+      selectionRect={selectionRect}
+      controls={
+        <>
           <CanvasControlButton
             x={0}
-            y={0}
+            y={-baseHeight / 2 - 40 * btnScale}
+            scale={btnScale}
+            size={24}
+            fill={THEME.primary}
+            stroke="white"
+            strokeWidth={2}
+            iconPath={CANVAS_ICONS.ROTATE.PATH}
+            iconScale={CANVAS_ICONS.ROTATE.SCALE}
+            iconOffsetX={CANVAS_ICONS.ROTATE.OFFSET_X}
+            iconOffsetY={CANVAS_ICONS.ROTATE.OFFSET_Y}
+            onMouseDown={handleRotateStart}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onCommit({ rotation: 0 });
+            }}
+          />
+          <CanvasControlButton
+            x={-baseWidth / 2}
+            y={-baseHeight / 2}
             scale={btnScale}
             size={24}
             fill={THEME.primary}
@@ -246,14 +220,13 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
             iconScale={CANVAS_ICONS.FLIP.SCALE}
             iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
             iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
-            onClick={(e) => {
-              e.cancelBubble = true;
+            onClick={() => {
               handleFlip();
             }}
           />
           <CanvasControlButton
-            x={image.width || 100}
-            y={0}
+            x={baseWidth / 2}
+            y={-baseHeight / 2}
             scale={btnScale}
             size={24}
             fill={THEME.danger}
@@ -263,13 +236,40 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
             iconScale={CANVAS_ICONS.TRASH.SCALE}
             iconOffsetX={CANVAS_ICONS.TRASH.OFFSET_X}
             iconOffsetY={CANVAS_ICONS.TRASH.OFFSET_Y}
-            onClick={(e) => {
-              e.cancelBubble = true;
+            onClick={() => {
               onDelete();
             }}
           />
-        </Group>
-      )}
-    </>
+          <CanvasControlButton
+            x={baseWidth / 2}
+            y={baseHeight / 2}
+            scale={btnScale}
+            size={10}
+            className="cursor-nwse-resize"
+            fill="white"
+            stroke={THEME.primary}
+            strokeWidth={2}
+            cursor="nwse-resize"
+            shadowBlur={4}
+            onMouseDown={(e) => {
+              onScaleStart({ x: e.clientX, y: e.clientY });
+            }}
+          />
+        </>
+      }
+    >
+      <image
+        href={imageUrl}
+        x={-baseWidth / 2}
+        y={-baseHeight / 2}
+        width={baseWidth}
+        height={baseHeight}
+        style={{
+          filter: cssFilter,
+          opacity: renderOpacity,
+        }}
+        transform={flipX ? "scale(-1 1)" : undefined}
+      />
+    </CanvasNode>
   );
 };

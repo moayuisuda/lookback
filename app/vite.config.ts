@@ -12,9 +12,4 @@ export default defineConfig({
   build: {
     outDir: 'dist-renderer',
   },
-  server: {
-    watch: {
-      ignored: ['**/backend/python/.venv/**'],
-    },
-  },
 })

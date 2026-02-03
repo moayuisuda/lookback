@@ -1,95 +1,9 @@
 import { proxy } from 'valtio';
 import { THEME } from '../theme';
 import { settingStorage, getSettingsSnapshot, readSetting } from '../service';
-import type { I18nKey, I18nMessage, I18nParams } from '../../shared/i18n/types';
+import type { I18nMessage } from '../../shared/i18n/types';
 
-export interface EnvInitState {
-  isOpen: boolean;
-  progress: number; // 0 to 1
-  statusKey: I18nKey;
-  statusParams?: I18nParams;
-  percentText: string;
-}
 
-export const envInitState = proxy<EnvInitState>({
-  isOpen: false,
-  progress: 0,
-  statusKey: 'envInit.preparing',
-  percentText: '0%',
-});
-
-export interface IndexingState {
-  isIndexing: boolean;
-  current: number;
-  total: number;
-  statusKey: I18nKey | null;
-  statusParams?: I18nParams;
-  filename?: string;
-}
-
-export const indexingState = proxy<IndexingState>({
-  isIndexing: false,
-  current: 0,
-  total: 0,
-  statusKey: null,
-});
-
-export interface ModelProgressState {
-  isDownloading: boolean;
-  current: number;
-  total: number;
-  statusKey: I18nKey | null;
-  statusParams?: I18nParams;
-  filename?: string;
-}
-
-export const modelProgressState = proxy<ModelProgressState>({
-  isDownloading: false,
-  current: 0,
-  total: 0,
-  statusKey: null,
-});
-
-export const indexingActions = {
-  update: (data: Partial<IndexingState>) => {
-    Object.assign(indexingState, data);
-  },
-  reset: () => {
-    indexingState.isIndexing = false;
-    indexingState.current = 0;
-    indexingState.total = 0;
-    indexingState.statusKey = null;
-    indexingState.statusParams = undefined;
-    indexingState.filename = undefined;
-  },
-};
-
-export const modelProgressActions = {
-  update: (data: Partial<ModelProgressState>) => {
-    Object.assign(modelProgressState, data);
-  },
-  reset: () => {
-    modelProgressState.isDownloading = false;
-    modelProgressState.current = 0;
-    modelProgressState.total = 0;
-    modelProgressState.statusKey = null;
-    modelProgressState.statusParams = undefined;
-    modelProgressState.filename = undefined;
-  },
-};
-
-export const envInitActions = {
-  update: (data: Partial<EnvInitState>) => {
-    Object.assign(envInitState, data);
-  },
-  reset: () => {
-    envInitState.isOpen = false;
-    envInitState.progress = 0;
-    envInitState.statusKey = 'envInit.preparing';
-    envInitState.statusParams = undefined;
-    envInitState.percentText = '0%';
-  },
-};
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
@@ -100,7 +14,12 @@ export type Toast = {
   createdAt: number;
 };
 
-export type ActiveArea = 'gallery' | 'canvas' | null;
+export type LLMSettings = {
+  enabled: boolean;
+  baseUrl: string;
+  key: string;
+  model: string;
+};
 
 export interface GlobalState {
   tagColors: Record<string, string>;
@@ -114,21 +33,8 @@ export interface GlobalState {
   canvasOpacityUpShortcut: string;
   canvasOpacityDownShortcut: string;
   toggleMouseThroughShortcut: string;
-  toggleGalleryShortcut: string;
   canvasGroupShortcut: string;
-  sidebarWidth: number;
-  activeArea: ActiveArea;
-  isGalleryOpen: boolean;
-  enableVectorSearch: boolean;
-  llmSettings: LLMSettings;
   isAppHidden: boolean;
-}
-
-export interface LLMSettings {
-  enabled: boolean;
-  baseUrl: string;
-  key: string;
-  model: string;
 }
 
 const DEFAULT_COLOR_SWATCHES = [
@@ -144,9 +50,6 @@ const DEFAULT_COLOR_SWATCHES = [
   '#ffffff',
   '#0f172a',
 ] as const;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
 
 const isHexColor = (value: unknown): value is string => {
   if (typeof value !== 'string') return false;
@@ -168,24 +71,12 @@ const normalizeHexColor = (value: string): string => {
   return THEME.primary;
 };
 
-const ensureSidebarWidth = (value: unknown): number => {
-  if (
-    typeof value !== 'number' ||
-    Number.isNaN(value) ||
-    !Number.isFinite(value)
-  ) {
-    return 320;
-  }
-  return value;
-};
-
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
 
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT = isMac ? 'Command+L' : 'Ctrl+L';
 const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
-const DEFAULT_TOGGLE_GALLERY_SHORTCUT = isMac ? 'Command+B' : 'Ctrl+B';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 
 export const globalState = proxy<GlobalState>({
@@ -200,18 +91,7 @@ export const globalState = proxy<GlobalState>({
   canvasOpacityUpShortcut: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
   canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
-  toggleGalleryShortcut: DEFAULT_TOGGLE_GALLERY_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
-  sidebarWidth: 320,
-  activeArea: null,
-  isGalleryOpen: true,
-  enableVectorSearch: false,
-  llmSettings: {
-    enabled: false,
-    baseUrl: '',
-    key: '',
-    model: '',
-  },
   isAppHidden: false,
 });
 
@@ -225,7 +105,6 @@ export const globalActions = {
         'colorSwatches',
         [...DEFAULT_COLOR_SWATCHES],
       );
-      const rawSidebarWidth = readSetting<unknown>(settings, 'sidebarWidth', 320);
       const rawToggleWindowShortcut = readSetting<unknown>(
         settings,
         'toggleWindowShortcut',
@@ -248,18 +127,11 @@ export const globalActions = {
         'toggleMouseThroughShortcut',
         DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
       );
-      const rawToggleGalleryShortcut = readSetting<unknown>(
-        settings,
-        'toggleGalleryShortcut',
-        DEFAULT_TOGGLE_GALLERY_SHORTCUT,
-      );
       const rawCanvasGroupShortcut = readSetting<unknown>(
         settings,
         'canvasGroupShortcut',
         DEFAULT_CANVAS_GROUP_SHORTCUT,
       );
-      const rawIsGalleryOpen = readSetting<unknown>(settings, 'isGalleryOpen', true);
-      const rawLlmSettings = readSetting<unknown>(settings, 'llmSettings', {});
 
       const nextTagColors: Record<string, string> = {};
       for (const [k, v] of Object.entries(rawTagColors)) {
@@ -279,8 +151,6 @@ export const globalActions = {
         swatches = [...DEFAULT_COLOR_SWATCHES];
       }
       globalState.colorSwatches = swatches.slice(0, DEFAULT_COLOR_SWATCHES.length);
-
-      globalState.sidebarWidth = ensureSidebarWidth(rawSidebarWidth);
 
       globalState.pinTransparent = true;
       globalState.pinMode = true;
@@ -311,26 +181,10 @@ export const globalActions = {
         globalState.toggleMouseThroughShortcut = rawToggleMouseThroughShortcut.trim();
       }
 
-      if (typeof rawToggleGalleryShortcut === 'string' && rawToggleGalleryShortcut.trim()) {
-        globalState.toggleGalleryShortcut = rawToggleGalleryShortcut.trim();
-      }
-
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
         globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
       }
 
-      if (typeof rawIsGalleryOpen === 'boolean') {
-        globalState.isGalleryOpen = rawIsGalleryOpen;
-      }
-
-      if (isRecord(rawLlmSettings)) {
-        globalState.llmSettings = {
-          enabled: typeof rawLlmSettings.enabled === 'boolean' ? (rawLlmSettings.enabled as boolean) : false,
-          baseUrl: typeof rawLlmSettings.baseUrl === 'string' ? (rawLlmSettings.baseUrl as string) : '',
-          key: typeof rawLlmSettings.key === 'string' ? (rawLlmSettings.key as string) : '',
-          model: typeof rawLlmSettings.model === 'string' ? (rawLlmSettings.model as string) : '',
-        };
-      }
     } catch (error) {
       console.error('Failed to hydrate settings:', error);
     }
@@ -351,14 +205,6 @@ export const globalActions = {
 
   removeToast: (id: string) => {
     globalState.toasts = globalState.toasts.filter((t) => t.id !== id);
-  },
-
-  setActiveArea: (area: ActiveArea) => {
-    globalState.activeArea = area;
-  },
-
-  setEnableVectorSearch: (enabled: boolean) => {
-    globalState.enableVectorSearch = enabled;
   },
 
   setTagColor: (tag: string, color: string) => {
@@ -471,39 +317,12 @@ export const globalActions = {
     return true;
   },
 
-  setToggleGalleryShortcut: async (accelerator: string) => {
-    const next = accelerator.trim();
-    if (!next) return false;
-    globalState.toggleGalleryShortcut = next;
-    await settingStorage.set('toggleGalleryShortcut', next);
-    return true;
-  },
-
   setCanvasGroupShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
     globalState.canvasGroupShortcut = next;
     await settingStorage.set('canvasGroupShortcut', next);
     return true;
-  },
-
-  setSidebarWidth: (width: number) => {
-    globalState.sidebarWidth = width;
-  },
-
-  setGalleryOpen: (isOpen: boolean) => {
-    globalState.isGalleryOpen = isOpen;
-    void settingStorage.set('isGalleryOpen', isOpen);
-  },
-
-  persistSidebarWidth: () => {
-    void settingStorage.set('sidebarWidth', globalState.sidebarWidth);
-  },
-
-  setLlmSettings: (settings: Partial<LLMSettings>) => {
-    const next = { ...globalState.llmSettings, ...settings };
-    globalState.llmSettings = next;
-    void settingStorage.set('llmSettings', next);
   },
 
   setAppHidden: (hidden: boolean) => {

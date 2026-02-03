@@ -1,6 +1,4 @@
-import type { I18nDict } from '../types.ts';
-
-export const zh: I18nDict = {
+export const zh = {
   'common.ok': '确定',
   'common.confirm': '确认',
   'common.cancel': '取消',
@@ -167,12 +165,6 @@ export const zh: I18nDict = {
   'tone.label.lowLong': '低调 / 长调',
   'tone.unknown': '色调',
 
-  'dialog.pythonSetupFailedTitle': 'Python 环境配置失败',
-  'dialog.pythonSetupFailedMessage': '无法完成 Python 环境配置。',
-  'dialog.pythonSetupFailedDetail': '退出码：{{code}}\n目录：{{dir}}',
-  'dialog.modelDownloadFailedTitle': '模型下载失败',
-  'dialog.modelDownloadFailedMessage': '无法下载模型文件。',
-  'dialog.modelDownloadFailedDetail': '退出码：{{code}}\n进度：{{progress}}%\n模型目录：{{dir}}',
   'dialog.chooseStorageFolderTitle': '选择 LookBack 存储文件夹',
 
   'toast.globalError': '错误：{{message}}',
@@ -190,6 +182,10 @@ export const zh: I18nDict = {
   'toast.llmTranslationFailed': 'LLM 翻译失败：{{error}}',
 
   'settings.llm.title': 'LLM 设置',
+  'settings.llm.provider': '模型服务',
+  'settings.llm.services': '应用功能',
+  'settings.llm.service.translation': '翻译辅助',
+  'settings.llm.service.translation.desc': '将搜索词翻译为英文以优化向量检索结果',
   'settings.llm.enable': '启用 LLM 翻译',
   'settings.llm.baseUrl': '基础地址 (Base URL)',
   'settings.llm.key': 'API 密钥',

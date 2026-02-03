@@ -8,29 +8,18 @@ export interface settingStorageGetOptions<T> {
 
 export type SettingsSnapshot = Record<string, unknown>;
 
-let settingsSnapshot: SettingsSnapshot | null = null;
-let settingsSnapshotPromise: Promise<SettingsSnapshot> | null = null;
-
 export const getSettingsSnapshot = async (): Promise<SettingsSnapshot> => {
-  if (settingsSnapshot) return settingsSnapshot;
-  if (!settingsSnapshotPromise) {
-    settingsSnapshotPromise = (async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/settings`);
-        if (!res.ok) return {};
-        const data = (await res.json()) as unknown;
-        if (data && typeof data === "object") {
-          return data as SettingsSnapshot;
-        }
-      } catch {
-        return {};
-      }
-      return {};
-    })();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings`);
+    if (!res.ok) return {};
+    const data = (await res.json()) as unknown;
+    if (data && typeof data === "object") {
+      return data as SettingsSnapshot;
+    }
+  } catch {
+    return {};
   }
-  const result = await settingsSnapshotPromise;
-  settingsSnapshot = result;
-  return result;
+  return {};
 };
 
 export const readSetting = <T>(
@@ -46,12 +35,6 @@ export const readSetting = <T>(
 
 export const settingStorage = {
   async get<T>({ key, fallback }: settingStorageGetOptions<T>): Promise<T> {
-    if (settingsSnapshot) {
-      if (Object.prototype.hasOwnProperty.call(settingsSnapshot, key)) {
-        return (settingsSnapshot as Record<string, unknown>)[key] as T;
-      }
-      return fallback;
-    }
     try {
       const res = await fetch(
         `${API_BASE_URL}/api/settings/${encodeURIComponent(key)}`
@@ -74,9 +57,6 @@ export const settingStorage = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value }),
       });
-      if (settingsSnapshot) {
-        settingsSnapshot = { ...settingsSnapshot, [key]: value };
-      }
     } catch (error) {
       void error;
     }
@@ -163,7 +143,8 @@ export async function deleteCanvas(name: string): Promise<void> {
 }
 
 export async function getTempDominantColor(
-  filePath: string
+  filePath: string,
+  canvasName?: string
 ): Promise<string | null> {
   try {
     const data = await localApi<{
@@ -171,6 +152,7 @@ export async function getTempDominantColor(
       dominantColor?: string | null;
     }>("/api/temp-dominant-color", {
       filePath,
+      canvasName,
     });
     if (!data || data.success !== true) return null;
     if (typeof data.dominantColor !== "string") return null;
@@ -183,169 +165,23 @@ export async function getTempDominantColor(
   }
 }
 
-export async function deleteTempFile(filePath: string): Promise<void> {
+export async function deleteTempFile(
+  filePath: string,
+  canvasName?: string
+): Promise<void> {
   try {
     await localApi<{ success?: boolean }>("/api/delete-temp-file", {
       filePath,
+      canvasName,
     });
   } catch (error) {
     void error;
   }
 }
 
-export async function saveGalleryOrder(order: string[]): Promise<void> {
-  try {
-    await localApi<{ success?: boolean }>("/api/save-gallery-order", { order });
-  } catch (error) {
-    void error;
-  }
-}
-
-export async function moveGalleryOrder(activeId: string, overId: string): Promise<void> {
-  try {
-    await localApi<{ success?: boolean }>("/api/order-move", { activeId, overId });
-  } catch (error) {
-    void error;
-  }
-}
-
-export type ImageSearchParams = {
-  mode?: "text" | "vector";
-  query?: string;
-  tags?: string[];
-  color?: string | null;
-  tone?: string | null;
-  limit?: number;
-  cursorDistance?: number;
-  cursorRowid?: number;
-  cursorCreatedAt?: number;
-  cursorGalleryOrder?: number | null;
-};
-
 export type RequestOptions = {
   signal?: AbortSignal;
 };
-
-export async function fetchImages<T = unknown>(
-  params: ImageSearchParams = {},
-  options: RequestOptions = {}
-): Promise<T> {
-  const searchParams = new URLSearchParams();
-  if (params.mode) searchParams.set("mode", params.mode);
-  if (params.query) searchParams.set("query", params.query);
-  if (params.tags && params.tags.length > 0) {
-    searchParams.set("tags", params.tags.join(","));
-  }
-  if (params.color) searchParams.set("color", params.color);
-  if (params.tone) searchParams.set("tone", params.tone);
-  if (typeof params.limit === "number") {
-    searchParams.set("limit", String(params.limit));
-  }
-  if (typeof params.cursorCreatedAt === "number") {
-    searchParams.set("cursorCreatedAt", String(params.cursorCreatedAt));
-  }
-  if (typeof params.cursorRowid === "number") {
-    searchParams.set("cursorRowid", String(params.cursorRowid));
-  }
-  if (typeof params.cursorGalleryOrder === "number") {
-    searchParams.set("cursorGalleryOrder", String(params.cursorGalleryOrder));
-  }
-  if (typeof params.cursorDistance === "number") {
-    searchParams.set("cursorDistance", String(params.cursorDistance));
-  }
-  const url = `${API_BASE_URL}/api/images${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-  const res = await fetch(url, { signal: options.signal });
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch images: ${res.status}`);
-    (error as Error & { status?: number }).status = res.status;
-    throw error;
-  }
-  const data = (await res.json()) as T;
-  return data;
-}
-
-export type ImageUpdatePayload = {
-  filename?: string;
-  tags?: string[];
-  dominantColor?: string | null;
-  tone?: string | null;
-  pageUrl?: string | null;
-};
-
-export async function updateImage<T = unknown>(
-  id: string,
-  payload: ImageUpdatePayload
-): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}/api/image/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to update image: ${res.status}`);
-  }
-  return (await res.json()) as T;
-}
-
-export async function deleteImage(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/image/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to delete image: ${res.status}`);
-  }
-}
-
-export type ImportImagePayload = {
-  imageBase64?: string;
-  imageUrl?: string;
-  type?: "url" | "path" | "buffer";
-  data?: string;
-  filename?: string;
-  name?: string;
-  pageUrl?: string;
-  tags?: string[];
-};
-
-export async function importImage<T = unknown>(
-  payload: ImportImagePayload
-): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}/api/import`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to import image: ${res.status}`);
-  }
-  return (await res.json()) as T;
-}
-
-export async function renameTag(oldTag: string, newTag: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/tag/${encodeURIComponent(oldTag)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ newName: newTag }),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to rename tag: ${res.status}`);
-  }
-}
-
-export async function indexImages<T = unknown>(payload: {
-  imageId?: string;
-  mode?: string;
-}): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}/api/index`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to index images: ${res.status}`);
-  }
-  return (await res.json()) as T;
-}
 
 export async function localApi<TResponse>(
   endpoint: string,

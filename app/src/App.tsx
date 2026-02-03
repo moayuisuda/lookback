@@ -1,26 +1,17 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { TitleBar } from "./components/TitleBar";
-import { Gallery } from "./components/Gallery";
 import { Canvas } from "./components/Canvas";
-import { EnvInitModal } from "./components/EnvInitModal";
-import {
-  actions as galleryActions,
-} from "./store/galleryStore";
-import { THEME } from "./theme";
 import {
   globalActions,
   globalState,
-  envInitActions,
-  type EnvInitState,
   type ToastType,
 } from "./store/globalStore";
-import type { ImageMeta } from "./store/galleryStore";
 import { canvasActions, canvasState } from "./store/canvasStore";
 import { anchorActions } from "./store/anchorStore";
 import { useSnapshot } from "valtio";
 import { clsx } from "clsx";
 
-import { createTempMetasFromFiles, importFiles } from "./utils/import";
+import { createTempMetasFromFiles } from "./utils/import";
 import { useT } from "./i18n/useT";
 import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
@@ -33,30 +24,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function App() {
   useAppShortcuts();
   const globalSnap = useSnapshot(globalState);
-  const isResizingRef = useRef(false);
   const { t } = useT();
-  const galleryTransform = globalSnap.isGalleryOpen
-    ? "translate3d(0,0,0)"
-    : "translate3d(-100%,0,0)";
-
-  // Removed useEffect for pinMode resizeWindowBy as it is now handled atomically in TitleBar
 
   useEffect(() => {
-    // 监听更新 (例如向量生成完毕)
-    const cleanupUpdate = window.electron?.onImageUpdated((data) => {
-      console.log("Image update received:", data);
-      if (isRecord(data) && typeof data.id === "string") {
-        galleryActions.updateImage(data.id, data as Partial<ImageMeta>);
-      }
-    });
-
-    // 监听环境初始化进度 (UV/Python) -> 模态框
-    const cleanupEnv = window.electron?.onEnvInitProgress((data) => {
-      if (isRecord(data)) {
-        envInitActions.update(data as unknown as Partial<EnvInitState>);
-      }
-    });
-
     // 监听 Toast 消息
     const cleanupToast = window.electron?.onToast?.((data) => {
       if (!isRecord(data)) return;
@@ -87,38 +57,8 @@ function App() {
     );
 
     return () => {
-      cleanupUpdate?.();
-      cleanupEnv?.();
       cleanupToast?.();
       cleanupVisibility?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizingRef.current) return;
-      const newWidth = Math.max(
-        200,
-        Math.min(e.clientX, document.body.clientWidth - 200),
-      );
-      globalActions.setSidebarWidth(newWidth);
-    };
-
-    const handleMouseUp = () => {
-      if (isResizingRef.current) {
-        globalActions.persistSidebarWidth();
-      }
-      isResizingRef.current = false;
-      document.body.style.cursor = "default";
-      document.body.style.userSelect = "";
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
     };
   }, []);
 
@@ -140,11 +80,6 @@ function App() {
       if (files.length > 0) {
         e.preventDefault();
 
-        if (globalState.isGalleryOpen) {
-          await importFiles(files);
-          return;
-        }
-
         const { canvasViewport, dimensions } = canvasState;
         const width = dimensions.width || canvasViewport.width;
         const height = dimensions.height || canvasViewport.height;
@@ -165,15 +100,31 @@ function App() {
             }
           : null;
 
-        const metas = await createTempMetasFromFiles(files);
+        const metas = await createTempMetasFromFiles(
+          files,
+          canvasState.currentCanvasName
+        );
+        
+        const newIds: string[] = [];
         metas.forEach((meta, index) => {
+          let newId: string | undefined;
           if (!center) {
-            canvasActions.addToCanvas(meta);
-            return;
+            newId = canvasActions.addToCanvas(meta);
+          } else {
+            const offset = index * 24;
+            newId = canvasActions.addToCanvas(meta, center.x + offset, center.y + offset);
           }
-          const offset = index * 24;
-          canvasActions.addToCanvas(meta, center.x + offset, center.y + offset);
+          if (newId) newIds.push(newId);
         });
+
+        if (newIds.length > 1) {
+          setTimeout(() => {
+            canvasActions.autoLayoutCanvas(newIds, {
+              startX: center?.x ?? 100,
+              startY: center?.y ?? 100,
+            });
+          }, 50);
+        }
       }
     };
 
@@ -191,7 +142,6 @@ function App() {
     >
       <WindowResizer />
       <TitleBar />
-      <EnvInitModal />
       {globalSnap.toasts.length > 0 && (
         <div className="fixed right-4 top-10 z-[9999] flex flex-col gap-2 no-drag">
           {globalSnap.toasts.map((toast) => {
@@ -221,24 +171,6 @@ function App() {
           "relative flex flex-1 overflow-hidden transition-colors duration-300",
         )}
       >
-        <div
-          className={clsx(
-            "absolute top-0 left-0 bottom-0 z-20 flex h-full transition-transform duration-300 ease-in-out",
-          )}
-          style={{ transform: galleryTransform, willChange: "transform" }}
-        >
-          <Gallery />
-          <div
-            className="w-1 bg-neutral-800/50 hover:bg-[var(--resize-hover)] cursor-col-resize transition-colors"
-            style={{ "--resize-hover": THEME.primary } as React.CSSProperties}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              isResizingRef.current = true;
-              document.body.style.cursor = "col-resize";
-              document.body.style.userSelect = "none";
-            }}
-          />
-        </div>
         <div className="flex-1 w-full h-full">
           <Canvas />
         </div>

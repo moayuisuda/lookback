@@ -1,16 +1,13 @@
-import React, { useRef } from 'react';
-import Konva from 'konva';
-import { useSnapshot } from 'valtio';
-import { state } from '../../store/galleryStore';
-import { canvasState, canvasActions, type CanvasImage } from '../../store/canvasStore';
-import { THEME } from '../../theme';
+import React, { useRef } from "react";
+import { useSnapshot } from "valtio";
+import {
+  canvasState,
+  canvasActions,
+  type CanvasImage,
+} from "../../store/canvasStore";
+import { THEME } from "../../theme";
 
-interface MinimapProps {
-  stageRef: React.RefObject<Konva.Stage | null>;
-}
-
-export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
-  const appSnap = useSnapshot(state);
+export const Minimap: React.FC = () => {
   const canvasSnap = useSnapshot(canvasState);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewport = canvasSnap.canvasViewport;
@@ -23,14 +20,17 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
   let maxX = -Infinity;
   let maxY = -Infinity;
 
-  (canvasSnap.canvasItems || []).forEach(item => {
-      const scale = item.scale || 1;
-      const w = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
-      const h = (item.height || 0) * scale * Math.abs(item.type === 'text' ? 1 : (item.scaleY || 1));
-      minX = Math.min(minX, item.x);
-      minY = Math.min(minY, item.y);
-      maxX = Math.max(maxX, item.x + w);
-      maxY = Math.max(maxY, item.y + h);
+  (canvasSnap.canvasItems || []).forEach((item) => {
+    const scale = item.scale || 1;
+    const w = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
+    const h =
+      (item.height || 0) *
+      scale *
+      Math.abs(item.type === "text" ? 1 : item.scaleY || 1);
+    minX = Math.min(minX, item.x - w / 2);
+    minY = Math.min(minY, item.y - h / 2);
+    maxX = Math.max(maxX, item.x + w / 2);
+    maxY = Math.max(maxY, item.y + h / 2);
   });
 
   const viewX = -viewport.x / viewport.scale;
@@ -38,21 +38,18 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
   const viewW = viewport.width / viewport.scale;
   const viewH = viewport.height / viewport.scale;
 
-  const findImageMeta = (imageId: string) =>
-    appSnap.images.find((img) => img.id === imageId) || null;
-
   // If no images, center on view
   if (!isFinite(minX)) {
-      minX = viewX;
-      minY = viewY;
-      maxX = viewX + viewW;
-      maxY = viewY + viewH;
+    minX = viewX;
+    minY = viewY;
+    maxX = viewX + viewW;
+    maxY = viewY + viewH;
   } else {
-      // Expand bounds to include current viewport
-      minX = Math.min(minX, viewX);
-      minY = Math.min(minY, viewY);
-      maxX = Math.max(maxX, viewX + viewW);
-      maxY = Math.max(maxY, viewY + viewH);
+    // Expand bounds to include current viewport
+    minX = Math.min(minX, viewX);
+    minY = Math.min(minY, viewY);
+    maxX = Math.max(maxX, viewX + viewW);
+    maxY = Math.max(maxY, viewY + viewH);
   }
 
   // Add some padding
@@ -64,15 +61,12 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
 
   const worldW = maxX - minX;
   const worldH = maxY - minY;
-  
+
   // Minimap constraints
   const MAX_SIZE = 100;
-  
+
   // Determine scale to fit world into MAX_SIZE box
-  const mapScale = Math.min(
-      MAX_SIZE / worldW,
-      MAX_SIZE / worldH
-  );
+  const mapScale = Math.min(MAX_SIZE / worldW, MAX_SIZE / worldH);
 
   const mapW = worldW * mapScale;
   const mapH = worldH * mapScale;
@@ -82,70 +76,61 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
   const toMapY = (val: number) => (val - minY) * mapScale;
 
   const handleMapInteraction = (e: React.MouseEvent) => {
-      if (!containerRef.current || !stageRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const clickY = e.clientY - rect.top;
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
 
-      const targetWorldX = clickX / mapScale + minX;
-      const targetWorldY = clickY / mapScale + minY;
+    const targetWorldX = clickX / mapScale + minX;
+    const targetWorldY = clickY / mapScale + minY;
 
-      const newStageX = -(targetWorldX - viewW / 2) * viewport.scale;
-      const newStageY = -(targetWorldY - viewH / 2) * viewport.scale;
+    const newX = -(targetWorldX - viewW / 2) * viewport.scale;
+    const newY = -(targetWorldY - viewH / 2) * viewport.scale;
 
-      const stage = stageRef.current;
-      stage.position({ x: newStageX, y: newStageY });
-      stage.batchDraw();
-
-      canvasActions.setCanvasViewport({
-        x: newStageX,
-        y: newStageY,
-        width: stage.width(),
-        height: stage.height(),
-        scale: viewport.scale,
-      });
+    canvasActions.setCanvasViewport({
+      x: newX,
+      y: newY,
+      width: viewport.width,
+      height: viewport.height,
+      scale: viewport.scale,
+    });
   };
 
   return (
-    <div 
-        ref={containerRef}
-        className="absolute top-4 right-4 bg-neutral-900/90 border border-neutral-700 rounded-md shadow-xl overflow-hidden z-50 backdrop-blur-sm"
-        style={{ width: mapW, height: mapH }}
-        onMouseDown={(e) => {
-             e.stopPropagation(); 
-             if (e.buttons === 1) handleMapInteraction(e);
-        }}
-        onMouseMove={(e) => {
-            e.stopPropagation();
-            if (e.buttons === 1) handleMapInteraction(e);
-        }}
-        onClick={(e) => e.stopPropagation()}
+    <div
+      ref={containerRef}
+      className="absolute top-4 right-4 bg-neutral-900/90 border border-neutral-700 rounded-md shadow-xl overflow-hidden z-50 backdrop-blur-sm"
+      style={{ width: mapW, height: mapH }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        if (e.buttons === 1) handleMapInteraction(e);
+      }}
+      onMouseMove={(e) => {
+        e.stopPropagation();
+        if (e.buttons === 1) handleMapInteraction(e);
+      }}
+      onClick={(e) => e.stopPropagation()}
     >
-        {(canvasSnap.canvasItems || [])
-          .filter((item): item is CanvasImage => item.type === "image")
-          .map((item) => {
+      {(canvasSnap.canvasItems || [])
+        .filter((item): item is CanvasImage => item.type === "image")
+        .map((item) => {
           const scale = item.scale || 1;
           const w = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
           const h = (item.height || 0) * scale * Math.abs(item.scaleY || 1);
 
-          let dominantColor = '#6b7280';
-          if (item.type === 'image') {
-            const img = item as CanvasImage;
-            const meta = findImageMeta(img.id);
-            if (meta?.dominantColor) {
-              dominantColor = meta.dominantColor;
-            } else if (img.dominantColor) {
-              dominantColor = img.dominantColor;
-            }
-          }
+          const dominantColor =
+            typeof item.dominantColor === "string" &&
+            item.dominantColor.trim().length > 0
+              ? item.dominantColor
+              : "#6b7280";
 
           return (
             <div
               key={item.canvasId}
               className="absolute"
               style={{
-                left: toMapX(item.x),
-                top: toMapY(item.y),
+                left: toMapX(item.x - w / 2),
+                top: toMapY(item.y - h / 2),
                 width: Math.max(2, w * mapScale),
                 height: Math.max(2, h * mapScale),
                 backgroundColor: dominantColor,
@@ -155,18 +140,18 @@ export const Minimap: React.FC<MinimapProps> = ({ stageRef }) => {
           );
         })}
 
-        {/* Viewport Rect */}
-        <div
-            className="absolute border-2 box-border rounded-sm minimap-viewport"
-            style={{
-                left: toMapX(viewX),
-                top: toMapY(viewY),
-                width: Math.max(4, viewW * mapScale),
-                height: Math.max(4, viewH * mapScale),
-                borderColor: THEME.primary,
-                boxShadow: `0 0 10px ${THEME.canvas.selectionFill}`
-            }}
-        />
+      {/* Viewport Rect */}
+      <div
+        className="absolute border-2 box-border rounded-sm minimap-viewport"
+        style={{
+          left: toMapX(viewX),
+          top: toMapY(viewY),
+          width: Math.max(4, viewW * mapScale),
+          height: Math.max(4, viewH * mapScale),
+          borderColor: THEME.primary,
+          boxShadow: `0 0 10px ${THEME.canvas.selectionFill}`,
+        }}
+      />
     </div>
   );
 };

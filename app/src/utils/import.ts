@@ -1,5 +1,5 @@
-import { actions, type ImageMeta } from '../store/galleryStore';
-import { getTempDominantColor, importImage, localApi } from '../service';
+import { type ImageMeta } from '../store/canvasStore';
+import { getTempDominantColor, localApi } from '../service';
 
 const fileToDataUrl = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -10,8 +10,9 @@ const fileToDataUrl = (file: File): Promise<string> =>
   });
 
 const uploadTempImage = async (
-  file: File
-): Promise<{ filename: string; path: string } | null> => {
+  file: File,
+  canvasName?: string
+): Promise<{ filename: string; path: string; width: number; height: number } | null> => {
   const imageBase64 = await fileToDataUrl(file);
   if (!imageBase64) return null;
 
@@ -19,9 +20,12 @@ const uploadTempImage = async (
     success?: boolean;
     filename?: string;
     path?: string;
+    width?: number;
+    height?: number;
   }>('/api/upload-temp', {
     imageBase64,
     filename: file.name,
+    canvasName,
   });
   if (
     !data ||
@@ -31,7 +35,12 @@ const uploadTempImage = async (
   ) {
     return null;
   }
-  return { filename: data.filename, path: data.path };
+  return {
+    filename: data.filename,
+    path: data.path,
+    width: data.width || 0,
+    height: data.height || 0,
+  };
 };
 
 export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File[]> => {
@@ -82,70 +91,32 @@ export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File
   return files;
 };
 
-export const importFiles = async (files: File[]): Promise<ImageMeta[]> => {
-  const importedImages: ImageMeta[] = [];
-
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) continue;
-
-    try {
-      const fileWithPath = file as File & { path?: string };
-      let imageUrl: string | null = null;
-
-      if (fileWithPath.path) {
-        imageUrl = `file://${encodeURI(fileWithPath.path)}`;
-
-        const data = await importImage<{ success?: boolean; meta?: ImageMeta }>({
-          imageUrl,
-          name: file.name,
-          filename: file.name,
-        });
-        if (data.success && data.meta) {
-          actions.addImage(data.meta);
-          importedImages.push(data.meta);
-        }
-      } else {
-        const imageBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ''));
-          reader.onerror = () => reject(new Error('Failed to read file'));
-          reader.readAsDataURL(file);
-        });
-
-        const data = await importImage<{ success?: boolean; meta?: ImageMeta }>({
-          imageBase64,
-          filename: file.name,
-        });
-        if (data.success && data.meta) {
-          actions.addImage(data.meta);
-          importedImages.push(data.meta);
-        }
-      }
-    } catch (e) {
-      console.error('Error importing file', file.name, e);
-    }
-  }
-
-  return importedImages;
-};
-
 export const createTempMetasFromFiles = async (
-  files: File[]
+  files: File[],
+  canvasName?: string
 ): Promise<ImageMeta[]> => {
   const metas: ImageMeta[] = [];
 
   for (const file of files) {
     if (!file.type.startsWith('image/')) continue;
     try {
-      const uploaded = await uploadTempImage(file);
+      const uploaded = await uploadTempImage(file, canvasName);
       if (!uploaded) continue;
-      const dominantColor = await getTempDominantColor(uploaded.path);
-      const meta = actions.createDroppedImageMeta({
-        path: uploaded.path,
-        storedFilename: `temp-images/${uploaded.filename}`,
-        originalName: file.name,
+      const dominantColor = await getTempDominantColor(uploaded.path, canvasName);
+      
+      const meta: ImageMeta = {
+        id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        filename: uploaded.filename,
+        imagePath: uploaded.path,
+        tags: [],
+        createdAt: Date.now(),
         dominantColor,
-      });
+        tone: null,
+        hasVector: false,
+        width: uploaded.width,
+        height: uploaded.height,
+      };
+      
       metas.push(meta);
     } catch (e) {
       console.error('Error creating temp meta', file.name, e);

@@ -1,20 +1,41 @@
 import path from "path";
 import express from "express";
 import fs from "fs-extra";
-import { withFileLock } from "../fileLock";
+import sharp from "sharp";
+import { withFileLock, withFileLocks } from "../fileLock";
 
 type TempRouteDeps = {
-  getCanvasTempDir: () => string;
+  getCanvasAssetsDir: (canvasName: string) => string;
   downloadImage: (url: string, targetPath: string) => Promise<void>;
-  runPythonDominantColor: (arg: string) => Promise<string | null>;
+  getDominantColor: (arg: string) => Promise<string | null>;
 };
 
 export const createTempRouter = (deps: TempRouteDeps) => {
   const router = express.Router();
+  const getAssetsDir = (canvasName?: string) =>
+    deps.getCanvasAssetsDir(canvasName || "Default");
+  const resolveUniqueFilename = async (
+    assetsDir: string,
+    desired: string
+  ): Promise<string> => {
+    return withFileLock(assetsDir, async () => {
+      const parsed = path.parse(desired);
+      let candidate = desired;
+      let index = 1;
+      while (await fs.pathExists(path.join(assetsDir, candidate))) {
+        candidate = `${parsed.name}_${index}${parsed.ext}`;
+        index += 1;
+      }
+      return candidate;
+    });
+  };
 
   router.post("/api/download-url", async (req, res) => {
     try {
-      const { url } = req.body as { url?: string };
+      const { url, canvasName } = req.body as {
+        url?: string;
+        canvasName?: string;
+      };
       if (!url || typeof url !== "string") {
         res.status(400).json({ error: "URL is required" });
         return;
@@ -47,14 +68,31 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         nameWithoutExt.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "image";
       const timestamp = Date.now();
       const filename = `${safeName}_${timestamp}${ext}`;
-      const filepath = path.join(deps.getCanvasTempDir(), filename);
+      const assetsDir = getAssetsDir(canvasName);
+      await fs.ensureDir(assetsDir);
+      const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
+      const filepath = path.join(assetsDir, uniqueFilename);
 
-      await deps.downloadImage(trimmedUrl, filepath);
+      let width = 0;
+      let height = 0;
+
+      await withFileLocks([assetsDir, filepath], async () => {
+        await deps.downloadImage(trimmedUrl, filepath);
+        try {
+          const metadata = await sharp(filepath).metadata();
+          width = metadata.width || 0;
+          height = metadata.height || 0;
+        } catch (e) {
+          console.error("Failed to read image metadata", e);
+        }
+      });
 
       res.json({
         success: true,
-        filename,
-        path: filepath,
+        filename: uniqueFilename,
+        path: `assets/${uniqueFilename}`,
+        width,
+        height,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -64,10 +102,12 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
   router.post("/api/upload-temp", async (req, res) => {
     try {
-      const { imageBase64, filename: providedFilename } = req.body as {
-        imageBase64?: string;
-        filename?: string;
-      };
+      const { imageBase64, filename: providedFilename, canvasName } =
+        req.body as {
+          imageBase64?: string;
+          filename?: string;
+          canvasName?: string;
+        };
       if (!imageBase64) {
         res.status(400).json({ error: "No image data" });
         return;
@@ -81,17 +121,32 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         filename = `${safeName}${ext}`;
       }
 
-      const filepath = path.join(deps.getCanvasTempDir(), filename);
+      const assetsDir = getAssetsDir(canvasName);
+      await fs.ensureDir(assetsDir);
+      const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
+      const filepath = path.join(assetsDir, uniqueFilename);
       const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
 
-      await withFileLock(filepath, async () => {
+      let width = 0;
+      let height = 0;
+
+      await withFileLocks([assetsDir, filepath], async () => {
         await fs.writeFile(filepath, base64Data, "base64");
+        try {
+          const metadata = await sharp(filepath).metadata();
+          width = metadata.width || 0;
+          height = metadata.height || 0;
+        } catch (e) {
+          console.error("Failed to read image metadata", e);
+        }
       });
 
       res.json({
         success: true,
-        filename,
-        path: filepath,
+        filename: uniqueFilename,
+        path: `assets/${uniqueFilename}`,
+        width,
+        height,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -101,32 +156,26 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
   router.post("/api/delete-temp-file", async (req, res) => {
     try {
-      const { filePath } = req.body as { filePath?: string };
+      const { filePath, canvasName } = req.body as {
+        filePath?: string;
+        canvasName?: string;
+      };
       if (!filePath) {
         res.status(400).json({ error: "File path is required" });
         return;
       }
 
-      const canvasTempDir = deps.getCanvasTempDir();
-      const normalizedPath = path.normalize(filePath);
-      if (!normalizedPath.startsWith(canvasTempDir)) {
-        const inTemp = path.join(canvasTempDir, path.basename(filePath));
-        await withFileLock(inTemp, async () => {
-          if (await fs.pathExists(inTemp)) {
-            await fs.unlink(inTemp);
-            res.json({ success: true });
-            return;
-          }
-          res
-            .status(403)
-            .json({ error: "Invalid file path: Must be in temp directory" });
-        });
+      if (!filePath.startsWith("assets/")) {
+        res.status(400).json({ error: "Invalid file path format" });
         return;
       }
 
-      await withFileLock(normalizedPath, async () => {
-        if (await fs.pathExists(normalizedPath)) {
-          await fs.unlink(normalizedPath);
+      const filename = path.basename(filePath);
+      const targetPath = path.join(getAssetsDir(canvasName), filename);
+
+      await withFileLock(targetPath, async () => {
+        if (await fs.pathExists(targetPath)) {
+          await fs.unlink(targetPath);
           res.json({ success: true });
           return;
         }
@@ -140,37 +189,31 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
   router.post("/api/temp-dominant-color", async (req, res) => {
     try {
-      const { filePath } = req.body as { filePath?: string };
+      const { filePath, canvasName } = req.body as {
+        filePath?: string;
+        canvasName?: string;
+      };
       if (!filePath) {
         res.status(400).json({ error: "File path is required" });
         return;
       }
 
-      const normalizedPath = path.normalize(filePath);
-      let targetPath = normalizedPath;
-
-      const canvasTempDir = deps.getCanvasTempDir();
-      if (!normalizedPath.startsWith(canvasTempDir)) {
-        const inTemp = path.join(canvasTempDir, path.basename(filePath));
-        const exists = await withFileLock(inTemp, () => fs.pathExists(inTemp));
-        if (!exists) {
-          res
-            .status(403)
-            .json({ error: "Invalid file path: Must be in temp directory" });
-          return;
-        }
-        targetPath = inTemp;
-      } else {
-        const exists = await withFileLock(normalizedPath, () =>
-          fs.pathExists(normalizedPath)
-        );
-        if (!exists) {
-          res.status(404).json({ error: "File not found" });
-          return;
-        }
+      if (!filePath.startsWith("assets/")) {
+        res.status(400).json({ error: "Invalid file path format" });
+        return;
       }
 
-      const dominantColor = await deps.runPythonDominantColor(targetPath);
+      const filename = path.basename(filePath);
+      const targetPath = path.join(getAssetsDir(canvasName), filename);
+      const exists = await withFileLock(targetPath, () =>
+        fs.pathExists(targetPath)
+      );
+      if (!exists) {
+        res.status(404).json({ error: "File not found" });
+        return;
+      }
+
+      const dominantColor = await deps.getDominantColor(targetPath);
       res.json({ success: true, dominantColor });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

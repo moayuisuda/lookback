@@ -10,23 +10,12 @@ import {
   Edit2,
   Check,
   ChevronDown,
-  Sidebar,
 } from "lucide-react";
 import { clsx } from "clsx";
-import {
-  globalActions,
-  globalState,
-  indexingActions,
-  indexingState,
-  modelProgressActions,
-  modelProgressState,
-} from "../store/globalStore";
-import { actions as galleryActions } from "../store/galleryStore";
+import { globalActions, globalState } from "../store/globalStore";
 import { canvasActions, canvasState } from "../store/canvasStore";
 import { THEME } from "../theme";
 import { useSnapshot } from "valtio";
-import { API_BASE_URL } from "../config";
-import { indexImages } from "../service";
 import { useT } from "../i18n/useT";
 import { useClickOutside } from "../hooks/useClickOutside";
 import {
@@ -36,62 +25,18 @@ import {
   deleteCanvas,
   type CanvasMeta,
 } from "../service";
-import type { I18nKey, I18nParams } from "../../shared/i18n/types";
-import { isI18nKey } from "../../shared/i18n/guards";
-import { ToggleSwitch } from "./ToggleSwitch";
 import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmModal } from "./ConfirmModal";
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const SettingInput: React.FC<{
-  value: string;
-  onChange: (val: string) => void;
-  type?: string;
-  placeholder?: string;
-  className?: string;
-}> = ({ value, onChange, type = "text", placeholder, className }) => {
-  const [localValue, setLocalValue] = useState(value);
-
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
-
-  return (
-    <input
-      type={type}
-      className={className}
-      value={localValue}
-      onChange={(e) => setLocalValue(e.target.value)}
-      onBlur={() => {
-        if (localValue !== value) {
-          onChange(localValue);
-        }
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.currentTarget.blur();
-        }
-      }}
-      placeholder={placeholder}
-    />
-  );
-};
-
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
-  const indexingSnap = useSnapshot(indexingState);
-  const modelSnap = useSnapshot(modelProgressState);
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
   const [storageDir, setStorageDir] = useState("");
   const [loadingStorageDir, setLoadingStorageDir] = useState(false);
   const [updatingStorageDir, setUpdatingStorageDir] = useState(false);
-  const [indexing, setIndexing] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
-  const [loadingSettings, setLoadingSettings] = useState(false);
 
   const canvasMenuRef = useRef<HTMLDivElement>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
@@ -121,7 +66,6 @@ export const TitleBar: React.FC = () => {
   useEffect(() => {
     if (settingsOpen) {
       void loadStorageDir();
-      void loadSettings();
     }
   }, [settingsOpen]);
 
@@ -203,150 +147,6 @@ export const TitleBar: React.FC = () => {
     }
   };
 
-  // const [downloadingModel, setDownloadingModel] = useState(false);
-  // const [downloadProgress, setDownloadProgress] = useState<{
-  //   type?: string;
-  //   filename?: string;
-  //   current?: number;
-  //   total?: number;
-  //   message?: string;
-  //   // New fields
-  //   status?: string;
-  //   percentText?: string;
-  //   progress?: number;
-  //   isOpen?: boolean;
-  // } | null>(null);
-
-  useEffect(() => {
-    const removeListener = window.electron?.onModelDownloadProgress?.(
-      (data: unknown) => {
-        if (!isRecord(data)) return;
-
-        if (data.isOpen === false) {
-          modelProgressActions.reset();
-          return;
-        }
-
-        if (typeof data.progress === "number") {
-          if (!isI18nKey(data.statusKey)) return;
-          const statusParams = isRecord(data.statusParams)
-            ? (data.statusParams as I18nParams)
-            : undefined;
-          modelProgressActions.update({
-            isDownloading: true,
-            current: Math.round(Math.max(0, Math.min(1, data.progress)) * 100),
-            total: 100,
-            statusKey: data.statusKey as I18nKey,
-            statusParams,
-            filename:
-              typeof data.filename === "string" ? data.filename : undefined,
-          });
-          return;
-        }
-
-        if (data.type === "start") {
-          modelProgressActions.update({
-            isDownloading: true,
-            current: 0,
-            total: 100,
-            statusKey: "model.preparingDownload",
-            statusParams: undefined,
-            filename: undefined,
-          });
-          return;
-        }
-
-        if (
-          data.type === "file" &&
-          typeof data.current === "number" &&
-          typeof data.total === "number"
-        ) {
-          const p = data.total > 0 ? data.current / data.total : 0;
-          modelProgressActions.update({
-            isDownloading: true,
-            current: Math.round(Math.max(0, Math.min(1, p)) * 100),
-            total: 100,
-            statusKey: "model.downloadingFraction",
-            statusParams: { current: data.current, total: data.total },
-            filename:
-              typeof data.filename === "string" ? data.filename : undefined,
-          });
-          return;
-        }
-
-        if (data.type === "retry") {
-          modelProgressActions.update({
-            isDownloading: true,
-            statusKey: "model.retrying",
-            statusParams: undefined,
-            filename:
-              typeof data.filename === "string" ? data.filename : undefined,
-          });
-          return;
-        }
-
-        if (
-          data.type === "done" ||
-          (data.type === "verify" && data.ok === true)
-        ) {
-          modelProgressActions.update({
-            isDownloading: true,
-            current: 100,
-            total: 100,
-            statusKey: "model.ready",
-            statusParams: undefined,
-          });
-          window.setTimeout(() => modelProgressActions.reset(), 800);
-          return;
-        }
-
-        if (data.type === "error" || data.type === "weight-failed") {
-          const reason =
-            typeof data.reason === "string" ? data.reason : undefined;
-          modelProgressActions.update({
-            isDownloading: true,
-            statusKey: reason
-              ? "model.downloadFailedWithReason"
-              : "model.downloadFailed",
-            statusParams: reason ? { reason } : undefined,
-          });
-          window.setTimeout(() => modelProgressActions.reset(), 1600);
-        }
-      },
-    );
-
-    return () => {
-      removeListener?.();
-    };
-  }, []);
-
-  // Use the global event listener in App.tsx to update store
-  // Here we rely on useSnapshot(indexingState) to render UI
-  useEffect(() => {
-    const removeListener = window.electron?.onIndexingProgress?.(
-      (data: unknown) => {
-        if (!isRecord(data)) return;
-        if (typeof data.current !== "number" || typeof data.total !== "number")
-          return;
-        if (!isI18nKey(data.statusKey)) return;
-        const statusParams = isRecord(data.statusParams)
-          ? (data.statusParams as I18nParams)
-          : undefined;
-        indexingActions.update({
-          isIndexing: true,
-          current: data.current,
-          total: data.total,
-          statusKey: data.statusKey as I18nKey,
-          statusParams,
-          filename: undefined,
-        });
-      },
-    );
-    return () => {
-      removeListener?.();
-    };
-  }, []);
-
   const loadStorageDir = async () => {
     if (!window.electron?.getStorageDir) return;
     setLoadingStorageDir(true);
@@ -355,21 +155,6 @@ export const TitleBar: React.FC = () => {
       setStorageDir(dir);
     } finally {
       setLoadingStorageDir(false);
-    }
-  };
-
-  const loadSettings = async () => {
-    setLoadingSettings(true);
-    try {
-      const resp = await fetch(`${API_BASE_URL}/api/settings`);
-      if (resp.ok) {
-        const data = await resp.json();
-        globalActions.setEnableVectorSearch(Boolean(data.enableVectorSearch));
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoadingSettings(false);
     }
   };
 
@@ -392,11 +177,6 @@ export const TitleBar: React.FC = () => {
     };
   }, []);
 
-  // Load settings once on mount to ensure correct state
-  useEffect(() => {
-    void loadSettings();
-  }, []);
-
   const handleToggleSettings = () => {
     setSettingsOpen((prev) => {
       const next = !prev;
@@ -415,80 +195,6 @@ export const TitleBar: React.FC = () => {
       }
     } finally {
       setUpdatingStorageDir(false);
-    }
-  };
-
-  const handleIndexMissing = async () => {
-    setIndexing(true);
-    indexingActions.update({
-      isIndexing: true,
-      current: 0,
-      total: 0,
-      statusKey: "indexing.starting",
-      statusParams: undefined,
-    });
-    try {
-      const data = await indexImages<{
-        created?: number;
-        updated?: number;
-        total?: number;
-      }>({ mode: "missing" });
-      const created = typeof data.created === "number" ? data.created : 0;
-      const updated = typeof data.updated === "number" ? data.updated : 0;
-      const total = typeof data.total === "number" ? data.total : 0;
-      if (total === 0) {
-        globalActions.pushToast({ key: "toast.noUnindexedImages" }, "info");
-        return;
-      }
-      globalActions.pushToast(
-        { key: "toast.indexCompleted", params: { created, updated } },
-        "success",
-      );
-      galleryActions.reload();
-    } catch (e) {
-      console.error(e);
-      globalActions.pushToast({ key: "toast.indexFailed" }, "error");
-    } finally {
-      setIndexing(false);
-      indexingActions.reset();
-    }
-  };
-
-  const handleToggleVectorSearch = async () => {
-    const prevValue = snap.enableVectorSearch;
-    const newValue = !prevValue;
-    globalActions.setEnableVectorSearch(newValue);
-    try {
-      await fetch(`${API_BASE_URL}/api/settings/enableVectorSearch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value: newValue }),
-      });
-
-      if (newValue) {
-        // Trigger download/check model via IPC (more robust environment handling)
-        if (window.electron?.ensureModelReady) {
-          const res = await window.electron.ensureModelReady();
-          if (res.success) {
-            globalActions.pushToast({ key: "toast.modelReady" }, "success");
-          } else {
-            globalActions.pushToast(
-              {
-                key: "toast.modelCheckFailed",
-                params: { error: res.error ?? "" },
-              },
-              "error",
-            );
-          }
-        } else {
-          // Fallback to API
-          await fetch(`${API_BASE_URL}/api/download-model`, { method: "POST" });
-        }
-      }
-    } catch (e) {
-      console.error(e);
-      globalActions.pushToast({ key: "toast.settingsUpdateFailed" }, "error");
-      globalActions.setEnableVectorSearch(prevValue);
     }
   };
 
@@ -517,10 +223,6 @@ export const TitleBar: React.FC = () => {
     await globalActions.setToggleMouseThroughShortcut(accelerator);
   };
 
-  const handleSetToggleGalleryShortcut = async (accelerator: string) => {
-    await globalActions.setToggleGalleryShortcut(accelerator);
-  };
-
   const handleSetCanvasGroupShortcut = async (accelerator: string) => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
@@ -538,22 +240,25 @@ export const TitleBar: React.FC = () => {
 
   const titleBarRef = useRef<HTMLDivElement>(null);
   const isIgnoringMouseRef = useRef(false);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!snap.mouseThrough) return;
-    
+
     // Initial state assumption: when entering mouseThrough, it's ignored (true)
+    // Force set once to ensure state sync
+    window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
     isIgnoringMouseRef.current = true;
 
-    const handleGlobalMouseMove = (e: MouseEvent) => {
+    const checkAndSetIgnore = (clientX: number, clientY: number) => {
       if (!titleBarRef.current) return;
-      
+
       const rect = titleBarRef.current.getBoundingClientRect();
-      const inTitleBar = 
-        e.clientX >= rect.left && 
-        e.clientX <= rect.right && 
-        e.clientY >= rect.top && 
-        e.clientY <= rect.bottom;
+      const inTitleBar =
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom;
 
       if (inTitleBar) {
         if (isIgnoringMouseRef.current) {
@@ -566,6 +271,11 @@ export const TitleBar: React.FC = () => {
           isIgnoringMouseRef.current = true;
         }
       }
+    };
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+      checkAndSetIgnore(e.clientX, e.clientY);
     };
 
     window.addEventListener("mousemove", handleGlobalMouseMove);
@@ -605,19 +315,6 @@ export const TitleBar: React.FC = () => {
           >
             LookBack
           </span>
-          {!snap.mouseThrough && (
-            <button
-              onClick={() => globalActions.setGalleryOpen(!snap.isGalleryOpen)}
-              className={clsx(
-                "p-1 hover:bg-neutral-800 rounded transition-colors no-drag",
-                snap.isGalleryOpen && "bg-neutral-800",
-              )}
-              style={{ color: snap.isGalleryOpen ? THEME.primary : "white" }}
-              title={t("common.close")}
-            >
-              <Sidebar size={14} />
-            </button>
-          )}
         </div>
 
         <div className="relative z-10 flex items-center gap-1 no-drag">
@@ -913,169 +610,6 @@ export const TitleBar: React.FC = () => {
 
             <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
               <div className="text-[11px] text-neutral-400">
-                {t("titleBar.index")}
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-neutral-300">
-                  {t("titleBar.enableAiSearchVector")}
-                </span>
-                <ToggleSwitch
-                  checked={snap.enableVectorSearch}
-                  onToggle={() => void handleToggleVectorSearch()}
-                  disabled={loadingSettings}
-                />
-              </div>
-
-              {(modelSnap.isDownloading || indexingSnap.isIndexing) && (
-                <div className="pt-2 border-t border-neutral-800/50 space-y-2">
-                  {modelSnap.isDownloading && (
-                    <div>
-                      <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                        <span>
-                          {modelSnap.statusKey
-                            ? t(modelSnap.statusKey, modelSnap.statusParams)
-                            : t("model.downloading")}
-                        </span>
-                        <span>
-                          {modelSnap.total > 0
-                            ? `${Math.round((modelSnap.current / modelSnap.total) * 100)}%`
-                            : ""}
-                        </span>
-                      </div>
-                      {modelSnap.filename && (
-                        <div className="text-[9px] text-neutral-500 truncate mb-1">
-                          {modelSnap.filename}
-                        </div>
-                      )}
-                      <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                        <div
-                          className="h-full bg-blue-600 transition-all duration-300"
-                          style={{
-                            width:
-                              modelSnap.total > 0
-                                ? `${(modelSnap.current / modelSnap.total) * 100}%`
-                                : "0%",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {indexingSnap.isIndexing && (
-                    <div>
-                      <div className="flex justify-between items-center text-[10px] text-neutral-400 mb-1">
-                        <span>
-                          {indexingSnap.statusKey
-                            ? t(
-                                indexingSnap.statusKey,
-                                indexingSnap.statusParams,
-                              )
-                            : t("titleBar.processing")}
-                        </span>
-                        <span>
-                          {indexingSnap.total > 0
-                            ? `${Math.round((indexingSnap.current / indexingSnap.total) * 100)}%`
-                            : ""}
-                        </span>
-                      </div>
-                      {indexingSnap.filename && (
-                        <div className="text-[9px] text-neutral-500 truncate mb-1">
-                          {indexingSnap.filename}
-                        </div>
-                      )}
-                      <div className="h-1 bg-neutral-800 rounded overflow-hidden">
-                        <div
-                          className="h-full bg-blue-600 transition-all duration-300"
-                          style={{
-                            width:
-                              indexingSnap.total > 0
-                                ? `${(indexingSnap.current / indexingSnap.total) * 100}%`
-                                : "0%",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <button
-                onClick={handleIndexMissing}
-                disabled={indexing}
-                className="w-full px-2 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 text-center border border-neutral-700 transition-colors"
-              >
-                {indexing
-                  ? t("titleBar.indexing")
-                  : t("titleBar.indexUnindexedImages")}
-              </button>
-            </div>
-
-            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-              <div className="text-[11px] text-neutral-400">
-                {t("settings.llm.title")}
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-neutral-300">
-                  {t("settings.llm.enable")}
-                </span>
-                <ToggleSwitch
-                  checked={snap.llmSettings.enabled}
-                  onToggle={() =>
-                    globalActions.setLlmSettings({
-                      enabled: !snap.llmSettings.enabled,
-                    })
-                  }
-                />
-              </div>
-
-              {snap.llmSettings.enabled && (
-                <div className="space-y-2 pt-2 border-t border-neutral-800/50">
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-neutral-400">
-                      {t("settings.llm.baseUrl")}
-                    </div>
-                    <SettingInput
-                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
-                      value={snap.llmSettings.baseUrl}
-                      onChange={(val) =>
-                        globalActions.setLlmSettings({ baseUrl: val })
-                      }
-                      placeholder="https://api.openai.com/v1"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-neutral-400">
-                      {t("settings.llm.key")}
-                    </div>
-                    <SettingInput
-                      type="password"
-                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
-                      value={snap.llmSettings.key}
-                      onChange={(val) =>
-                        globalActions.setLlmSettings({ key: val })
-                      }
-                      placeholder="sk-..."
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-neutral-400">
-                      {t("settings.llm.model")}
-                    </div>
-                    <SettingInput
-                      className="w-full bg-neutral-900 text-[10px] px-2 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 text-neutral-200"
-                      value={snap.llmSettings.model}
-                      onChange={(val) =>
-                        globalActions.setLlmSettings({ model: val })
-                      }
-                      placeholder="gpt-3.5-turbo"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-              <div className="text-[11px] text-neutral-400">
                 {t("titleBar.shortcuts")}
               </div>
               <div className="space-y-1.5">
@@ -1113,18 +647,6 @@ export const TitleBar: React.FC = () => {
                     value={snap.canvasOpacityDownShortcut}
                     onChange={(accel) =>
                       void handleSetCanvasOpacityDownShortcut(accel)
-                    }
-                    onInvalid={handleShortcutInvalid}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-neutral-300">
-                    {t("titleBar.toggleGallery")}
-                  </span>
-                  <ShortcutInput
-                    value={snap.toggleGalleryShortcut}
-                    onChange={(accel) =>
-                      void handleSetToggleGalleryShortcut(accel)
                     }
                     onInvalid={handleShortcutInvalid}
                   />

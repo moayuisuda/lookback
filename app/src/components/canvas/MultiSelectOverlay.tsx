@@ -1,5 +1,4 @@
 import React from "react";
-import { Rect } from "react-konva";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";
 import { CANVAS_ICONS } from "./CanvasIcons";
@@ -9,7 +8,7 @@ interface MultiSelectOverlayProps {
   stageScale: number;
   onDeleteSelection: () => void;
   onFlipSelection: () => void;
-  onScaleStart: () => void;
+  onScaleStart: (client: { x: number; y: number }) => void;
 }
 
 export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
@@ -23,15 +22,16 @@ export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
 
   return (
     <>
-      <Rect
+      <rect
         x={union.x}
         y={union.y}
         width={union.width}
         height={union.height}
         stroke={THEME.primary}
         strokeWidth={1 / stageScale}
-        dash={[6 / stageScale, 4 / stageScale]}
-        listening={false}
+        strokeDasharray={`${6 / stageScale} ${4 / stageScale}`}
+        fill="none"
+        pointerEvents="none"
       />
       <CanvasControlButton
         x={union.x}
@@ -46,7 +46,7 @@ export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
         iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
         iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
         onClick={(e) => {
-          e.cancelBubble = true;
+          e.stopPropagation();
           onFlipSelection();
         }}
       />
@@ -63,7 +63,7 @@ export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
         iconOffsetX={CANVAS_ICONS.TRASH.OFFSET_X}
         iconOffsetY={CANVAS_ICONS.TRASH.OFFSET_Y}
         onClick={(e) => {
-          e.cancelBubble = true;
+          e.stopPropagation();
           onDeleteSelection();
         }}
       />
@@ -77,14 +77,9 @@ export const MultiSelectOverlay: React.FC<MultiSelectOverlayProps> = ({
         strokeWidth={2}
         cursor="nwse-resize"
         shadowBlur={4}
-        shadowOpacity={0.2}
         onMouseDown={(e) => {
-          e.cancelBubble = true;
-          onScaleStart();
-        }}
-        onTouchStart={(e) => {
-          e.cancelBubble = true;
-          onScaleStart();
+          e.stopPropagation();
+          onScaleStart({ x: e.clientX, y: e.clientY });
         }}
       />
     </>
