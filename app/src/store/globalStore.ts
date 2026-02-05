@@ -34,6 +34,7 @@ export interface GlobalState {
   canvasOpacityDownShortcut: string;
   toggleMouseThroughShortcut: string;
   canvasGroupShortcut: string;
+  commandPaletteShortcut: string;
   isAppHidden: boolean;
 }
 
@@ -78,6 +79,7 @@ const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
+const DEFAULT_COMMAND_PALETTE_SHORTCUT = isMac ? 'Command+/' : 'Ctrl+/';
 
 export const globalState = proxy<GlobalState>({
   tagColors: {},
@@ -92,6 +94,7 @@ export const globalState = proxy<GlobalState>({
   canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
+  commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
   isAppHidden: false,
 });
 
@@ -131,6 +134,11 @@ export const globalActions = {
         settings,
         'canvasGroupShortcut',
         DEFAULT_CANVAS_GROUP_SHORTCUT,
+      );
+      const rawCommandPaletteShortcut = readSetting<unknown>(
+        settings,
+        'commandPaletteShortcut',
+        DEFAULT_COMMAND_PALETTE_SHORTCUT,
       );
 
       const nextTagColors: Record<string, string> = {};
@@ -183,6 +191,12 @@ export const globalActions = {
 
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
         globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
+      }
+      if (
+        typeof rawCommandPaletteShortcut === 'string' &&
+        rawCommandPaletteShortcut.trim()
+      ) {
+        globalState.commandPaletteShortcut = rawCommandPaletteShortcut.trim();
       }
 
     } catch (error) {
@@ -322,6 +336,13 @@ export const globalActions = {
     if (!next) return false;
     globalState.canvasGroupShortcut = next;
     await settingStorage.set('canvasGroupShortcut', next);
+    return true;
+  },
+  setCommandPaletteShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.commandPaletteShortcut = next;
+    await settingStorage.set('commandPaletteShortcut', next);
     return true;
   },
 

@@ -227,6 +227,10 @@ export const TitleBar: React.FC = () => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
 
+  const handleSetCommandPaletteShortcut = async (accelerator: string) => {
+    await globalActions.setCommandPaletteShortcut(accelerator);
+  };
+
   useEffect(() => {
     const cleanup = window.electron?.onRendererEvent?.((event: string) => {
       if (event === "toggle-mouse-through") {
@@ -626,6 +630,18 @@ export const TitleBar: React.FC = () => {
                       onInvalid={handleShortcutInvalid}
                     />
                   </div>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.commandPalette")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.commandPaletteShortcut}
+                    onChange={(accel) =>
+                      void handleSetCommandPaletteShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
+                  />
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] text-neutral-300">

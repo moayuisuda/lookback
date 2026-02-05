@@ -8,6 +8,7 @@
   - 提供 settings 聚合接口 `/settings`。
   - 管理 Canvas 数据存储。
   - Canvas 临时图片存放在 `canvases/<name>/assets`，通过 `/api/assets/:canvasName/:filename` 提供访问。
+  - 临时图片上传与下载时会计算 dominant color 与 tone，并回传给前端。
   - 启动时清理画布中无效的 `assets` 引用并删除未被引用的文件。
   - **并发控制**：通过 `fileLock.ts` 的 `KeyedMutex`/`lockedFs` 将本地文件读写串行化。
 - **Image Analysis (`imageAnalysis.ts`)**

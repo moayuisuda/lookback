@@ -11,7 +11,7 @@ import {
 import { anchorActions } from "../store/anchorStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot } from "valtio";
-import { getTempDominantColor, type CanvasViewport } from "../service";
+import { type CanvasViewport } from "../service";
 import { API_BASE_URL } from "../config";
 import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
@@ -23,7 +23,7 @@ import { SelectionRect, type SelectionBoxState } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
 import { createTempMetasFromFiles } from "../utils/import";
 import { THEME } from "../theme";
-import { CANVAS_AUTO_LAYOUT } from "../events/uiEvents";
+import { CANVAS_AUTO_LAYOUT, onContainCanvasItem } from "../events/uiEvents";
 
 const createDroppedImageMeta = (file: {
   path?: string;
@@ -348,17 +348,16 @@ export const Canvas: React.FC = () => {
                 path?: string;
                 width?: number;
                 height?: number;
+                dominantColor?: string | null;
+                tone?: string | null;
               };
               if (result.success && result.filename && result.path) {
-                const dominantColor = await getTempDominantColor(
-                  result.path,
-                  canvasSnap.currentCanvasName
-                );
                 const meta = createDroppedImageMeta({
                   path: result.path,
-                  storedFilename: `assets/${result.filename}`,
+                  storedFilename: result.path,
                   originalName: result.filename,
-                  dominantColor,
+                  dominantColor: result.dominantColor ?? null,
+                  tone: result.tone ?? null,
                   width: result.width || 0,
                   height: result.height || 0,
                 });
@@ -942,7 +941,7 @@ export const Canvas: React.FC = () => {
     };
   }, []);
 
-  const handleContainImage = useCallback(
+  const handleContainItem = useCallback(
     (id: string) => {
       const items = canvasState.canvasItems || [];
       const target = items.find((item) => item.canvasId === id);
@@ -964,6 +963,12 @@ export const Canvas: React.FC = () => {
       zoomToBounds,
     ],
   );
+
+  useEffect(() => {
+    return onContainCanvasItem((detail) => {
+      handleContainItem(detail.id);
+    });
+  }, [handleContainItem]);
 
   const handleAutoLayout = useCallback(() => {
     if (selectedIds.size > 0) {
@@ -1496,7 +1501,7 @@ export const Canvas: React.FC = () => {
                 onScaleStart={(client) =>
                   handleItemScaleStart(item.canvasId, client)
                 }
-                onContain={() => handleContainImage(item.canvasId)}
+                onContain={() => handleContainItem(item.canvasId)}
                 globalFilters={canvasFilters}
               />
             );

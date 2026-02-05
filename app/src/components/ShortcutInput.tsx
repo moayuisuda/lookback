@@ -8,6 +8,7 @@ const normalizeMainKey = (key: string): string | null => {
   if (/^[a-z]$/i.test(k)) return k.toUpperCase();
   if (/^\d$/.test(k)) return k;
   if (/^F([1-9]|1[0-2])$/i.test(k)) return k.toUpperCase();
+  if (k === '/' || k === '?') return k;
   return null;
 };
 

@@ -1,5 +1,5 @@
 import { type ImageMeta } from '../store/canvasStore';
-import { getTempDominantColor, localApi } from '../service';
+import { localApi } from '../service';
 
 const fileToDataUrl = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -12,7 +12,14 @@ const fileToDataUrl = (file: File): Promise<string> =>
 const uploadTempImage = async (
   file: File,
   canvasName?: string
-): Promise<{ filename: string; path: string; width: number; height: number } | null> => {
+): Promise<{
+  filename: string;
+  path: string;
+  width: number;
+  height: number;
+  dominantColor?: string | null;
+  tone?: string | null;
+} | null> => {
   const imageBase64 = await fileToDataUrl(file);
   if (!imageBase64) return null;
 
@@ -22,6 +29,8 @@ const uploadTempImage = async (
     path?: string;
     width?: number;
     height?: number;
+    dominantColor?: string | null;
+    tone?: string | null;
   }>('/api/upload-temp', {
     imageBase64,
     filename: file.name,
@@ -40,6 +49,8 @@ const uploadTempImage = async (
     path: data.path,
     width: data.width || 0,
     height: data.height || 0,
+    dominantColor: data.dominantColor ?? null,
+    tone: data.tone ?? null,
   };
 };
 
@@ -102,16 +113,14 @@ export const createTempMetasFromFiles = async (
     try {
       const uploaded = await uploadTempImage(file, canvasName);
       if (!uploaded) continue;
-      const dominantColor = await getTempDominantColor(uploaded.path, canvasName);
-      
       const meta: ImageMeta = {
         id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         filename: uploaded.filename,
         imagePath: uploaded.path,
         tags: [],
         createdAt: Date.now(),
-        dominantColor,
-        tone: null,
+        dominantColor: uploaded.dominantColor ?? null,
+        tone: uploaded.tone ?? null,
         hasVector: false,
         width: uploaded.width,
         height: uploaded.height,

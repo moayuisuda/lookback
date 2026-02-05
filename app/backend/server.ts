@@ -10,9 +10,10 @@ import { debounce } from "radash";
 import { createSettingsRouter } from "./routes/settings";
 import { createCanvasRouter } from "./routes/canvas";
 import { createAnchorsRouter } from "./routes/anchors";
+import { createCommandsRouter } from "./routes/commands";
 import { createTempRouter } from "./routes/temp";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
-import { getDominantColor } from "./imageAnalysis";
+import { calculateTone, getDominantColor } from "./imageAnalysis";
 
 export type RendererChannel =
   | "image-updated"
@@ -316,10 +317,16 @@ export async function startServer() {
     })
   );
   server.use(
+    createCommandsRouter({
+      getStorageDir: () => STORAGE_DIR,
+    })
+  );
+  server.use(
     createTempRouter({
       getCanvasAssetsDir,
       downloadImage,
       getDominantColor,
+      getTone: calculateTone,
     })
   );
   server.get("/api/assets/:canvasName/:filename", async (req, res) => {

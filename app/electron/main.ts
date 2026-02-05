@@ -622,6 +622,50 @@ ipcMain.handle("choose-storage-dir", async () => {
   app.exit(0);
 });
 
+ipcMain.handle(
+  "save-image-file",
+  async (
+    _event,
+    {
+      dataUrl,
+      defaultName,
+    }: { dataUrl: string; defaultName?: string }
+  ) => {
+    try {
+      if (typeof dataUrl !== "string") {
+        return { success: false, error: "Invalid data" };
+      }
+      const match = dataUrl.match(/^data:image\/png;base64,(.+)$/);
+      if (!match) {
+        return { success: false, error: "Invalid data" };
+      }
+      const locale = await getLocale();
+      const fallbackName = `stitched_${Date.now()}.png`;
+      const safeName =
+        typeof defaultName === "string" && defaultName.trim()
+          ? defaultName.trim()
+          : fallbackName;
+      const result = await dialog.showSaveDialog({
+        title: translate(locale, "dialog.saveImageTitle"),
+        defaultPath: path.join(getStorageDir(), safeName),
+        filters: [{ name: "PNG", extensions: ["png"] }],
+      });
+      if (result.canceled || !result.filePath) {
+        return { success: false, canceled: true };
+      }
+      let filePath = result.filePath;
+      if (!filePath.toLowerCase().endsWith(".png")) {
+        filePath += ".png";
+      }
+      const buffer = Buffer.from(match[1], "base64");
+      await fs.outputFile(filePath, buffer);
+      return { success: true, path: filePath };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+);
+
 app.whenReady().then(async () => {
   log.info("App starting...");
   log.info("Log file location:", log.transports.file.getFile().path);

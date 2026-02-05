@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('electron', {
   setSettingsOpen: (open: boolean) => ipcRenderer.send('settings-open-changed', open),
   getStorageDir: () => ipcRenderer.invoke('get-storage-dir'),
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
+  saveImageFile: (dataUrl: string, defaultName?: string) =>
+    ipcRenderer.invoke('save-image-file', { dataUrl, defaultName }),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   onImageUpdated: (callback: (data: unknown) => void) => {
     const handler = (_: unknown, data: unknown) => callback(data);

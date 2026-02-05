@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { globalActions } from "./store/globalStore.ts";
 import { i18nActions } from "./store/i18nStore.ts";
 import { canvasActions } from "./store/canvasStore.ts";
+import { commandActions } from "./store/commandStore.ts";
 
 // Global error handlers
 window.addEventListener("error", (event) => {
@@ -59,6 +60,7 @@ const bootstrap = async () => {
     i18nActions.hydrate(),
     globalActions.hydrateSettings(),
     canvasActions.hydrateSettings(),
+    commandActions.hydrateSettings(),
   ]);
 
   window.electron?.setPinMode?.(true, 0);

@@ -7,9 +7,10 @@
 - **UI 渲染**: 使用 React 构建用户界面。
 - **状态管理**: 使用 `valtio` (`store.ts`) 管理全局状态（图片列表、画布状态、搜索词、Tag 排序）。
 - **启动流程**: `main.tsx` 会在 React 挂载前先 hydrate i18n 与 settings（如 sidebarWidth / Gallery 抽屉状态），减少启动闪动并确保窗口状态可恢复；初始化 settings 使用批量接口减少请求次数。
-- **快捷键管理**: 使用 `react-hotkeys-hook` 统一管理应用内快捷键，集中在 `hooks/useAppShortcuts.ts`。
+- **快捷键管理**: 使用 `react-hotkeys-hook` 管理应用内快捷键，command palette 通过自定义解析在 `hooks/useAppShortcuts.ts` 处理并支持设置项。
 
 - **组件结构**:
+  - `components/CommandPalette.tsx`: 全局 command 弹窗，支持指令与文本搜索，提供图片色调/颜色联合搜索与拼接导出入口。
   - `components/Gallery.tsx`: 左侧瀑布流图片展示与搜索。
     - 搜索逻辑：普通查询使用 `/api/images`（默认 mode 为 text），向量检索使用 `/api/images?mode=vector`（可选翻译后再发起）；普通查询先返回并渲染，向量结果异步合并且永远排在普通结果之后；文本与向量分页使用游标（createdAt/rowid/galleryOrder 与 distance/rowid），请求会话使用 AbortController 隔离竞态，旧请求不会覆盖新请求状态。
     - 颜色过滤：支持选择颜色后按图片主体色近似过滤，并可与 Tag/文本组合。

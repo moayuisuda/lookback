@@ -8,6 +8,7 @@ type TempRouteDeps = {
   getCanvasAssetsDir: (canvasName: string) => string;
   downloadImage: (url: string, targetPath: string) => Promise<void>;
   getDominantColor: (arg: string) => Promise<string | null>;
+  getTone: (arg: string) => Promise<string | null>;
 };
 
 export const createTempRouter = (deps: TempRouteDeps) => {
@@ -75,6 +76,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
       let width = 0;
       let height = 0;
+      let dominantColor: string | null = null;
+      let tone: string | null = null;
 
       await withFileLocks([assetsDir, filepath], async () => {
         await deps.downloadImage(trimmedUrl, filepath);
@@ -85,6 +88,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         } catch (e) {
           console.error("Failed to read image metadata", e);
         }
+        dominantColor = await deps.getDominantColor(filepath);
+        tone = await deps.getTone(filepath);
       });
 
       res.json({
@@ -93,6 +98,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         path: `assets/${uniqueFilename}`,
         width,
         height,
+        dominantColor,
+        tone,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -129,6 +136,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
       let width = 0;
       let height = 0;
+      let dominantColor: string | null = null;
+      let tone: string | null = null;
 
       await withFileLocks([assetsDir, filepath], async () => {
         await fs.writeFile(filepath, base64Data, "base64");
@@ -139,6 +148,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         } catch (e) {
           console.error("Failed to read image metadata", e);
         }
+        dominantColor = await deps.getDominantColor(filepath);
+        tone = await deps.getTone(filepath);
       });
 
       res.json({
@@ -147,6 +158,8 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         path: `assets/${uniqueFilename}`,
         width,
         height,
+        dominantColor,
+        tone,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

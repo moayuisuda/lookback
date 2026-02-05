@@ -17,6 +17,7 @@ import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 
 import { WindowResizer } from "./components/WindowResizer";
+import { CommandPalette } from "./components/CommandPalette";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -171,6 +172,7 @@ function App() {
           "relative flex flex-1 overflow-hidden transition-colors duration-300",
         )}
       >
+        <CommandPalette />
         <div className="flex-1 w-full h-full">
           <Canvas />
         </div>
