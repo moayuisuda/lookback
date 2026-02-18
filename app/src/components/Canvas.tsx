@@ -313,10 +313,8 @@ export const Canvas: React.FC = () => {
       if (!ids.has(item.itemId)) return;
 
       const scale = item.scale || 1;
-      const rawW =
-        (item.width || 0) * scale;
-      const rawH =
-        (item.height || 0) * scale;
+      const rawW = (item.width || 0) * scale;
+      const rawH = (item.height || 0) * scale;
       const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
 
       const itemMinX = item.x + bbox.offsetX;
@@ -547,9 +545,7 @@ export const Canvas: React.FC = () => {
         }
 
         setMultiSelectUnion(
-          newIds.length > 1
-            ? computeMultiSelectUnion(new Set(newIds))
-            : null,
+          newIds.length > 1 ? computeMultiSelectUnion(new Set(newIds)) : null,
         );
       } catch (err: unknown) {
         console.error("Drop error", err);
@@ -1006,7 +1002,8 @@ export const Canvas: React.FC = () => {
       const height = y2 - y1;
 
       const isClick = width <= 2 && height <= 2;
-      const zoomArea = width * height * canvasViewport.scale * canvasViewport.scale;
+      const zoomArea =
+        width * height * canvasViewport.scale * canvasViewport.scale;
       const shouldZoom = zoomArea >= MIN_ZOOM_AREA;
 
       if (canvasState.selectionMode === "zoom") {
@@ -1127,8 +1124,7 @@ export const Canvas: React.FC = () => {
     items.forEach((item) => {
       const scale = item.scale || 1;
       const rawW = (item.width || 0) * scale;
-      const rawH =
-        (item.height || 0) * scale;
+      const rawH = (item.height || 0) * scale;
       const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
 
       minX = Math.min(minX, item.x + bbox.offsetX);
@@ -1249,11 +1245,7 @@ export const Canvas: React.FC = () => {
       }
 
       // Undo: Ctrl+Z / Cmd+Z
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        e.key === "z"
-      ) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "z") {
         e.preventDefault();
         canvasActions.undoCanvas();
         clearSelection();
@@ -1261,11 +1253,7 @@ export const Canvas: React.FC = () => {
       }
 
       // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key === "Z"
-      ) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Z") {
         e.preventDefault();
         canvasActions.redoCanvas();
         clearSelection();
@@ -1403,12 +1391,8 @@ export const Canvas: React.FC = () => {
       const height = target.height || 0;
       const rotation = target.rotation || 0;
 
-      const rawW =
-        width *
-        scale;
-      const rawH =
-        height *
-        scale;
+      const rawW = width * scale;
+      const rawH = height * scale;
 
       if (rawW <= 0 || rawH <= 0) return;
 
@@ -1591,6 +1575,8 @@ export const Canvas: React.FC = () => {
     return getCssFilters(canvasFilters);
   }, [canvasFilters]);
 
+  const globalSnap = useSnapshot(globalState);
+
   return (
     <div
       ref={containerRef}
@@ -1609,7 +1595,7 @@ export const Canvas: React.FC = () => {
         onAutoLayout={handleAutoLayout}
         onRequestClear={() => setIsClearModalOpen(true)}
       />
-      
+
       {canvasItems.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
           <div className="flex flex-col items-center gap-6 p-8">
@@ -1622,7 +1608,7 @@ export const Canvas: React.FC = () => {
                 <Upload className="w-6 h-6 text-primary/60" />
               </div>
             </div>
-            
+
             <div className="text-center space-y-2 max-w-sm">
               <h3 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
                 {t("canvas.empty.title")}
@@ -1631,7 +1617,7 @@ export const Canvas: React.FC = () => {
                 {t("canvas.empty.dragHint")}
               </p>
             </div>
-            
+
             {/* 装饰性元素：快捷键提示 */}
             <div className="flex items-center gap-4 text-xs text-neutral-400 dark:text-neutral-600 font-mono mt-4">
               <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-800">
@@ -1669,7 +1655,11 @@ export const Canvas: React.FC = () => {
         <g
           id="canvas-content-layer"
           transform={`translate(${canvasViewport.x} ${canvasViewport.y}) scale(${canvasViewport.scale})`}
-          style={{ filter: filterStyle, willChange: "transform" }}
+          style={{
+            filter: filterStyle,
+            willChange: "transform",
+            opacity: globalSnap.canvasOpacity,
+          }}
         >
           <CanvasItemsLayer
             onDragStart={handleDragStart}
