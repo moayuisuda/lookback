@@ -22,11 +22,8 @@ export const Minimap: React.FC = () => {
 
   (canvasSnap.canvasItems || []).forEach((item) => {
     const scale = item.scale || 1;
-    const w = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
-    const h =
-      (item.height || 0) *
-      scale *
-      Math.abs(item.type === "text" ? 1 : item.scaleY || 1);
+    const w = (item.width || 0) * scale;
+    const h = (item.height || 0) * scale;
     minX = Math.min(minX, item.x - w / 2);
     minY = Math.min(minY, item.y - h / 2);
     maxX = Math.max(maxX, item.x + w / 2);
@@ -115,8 +112,8 @@ export const Minimap: React.FC = () => {
         .filter((item): item is CanvasImage => item.type === "image")
         .map((item) => {
           const scale = item.scale || 1;
-          const w = (item.width || 0) * scale * Math.abs(item.scaleX || 1);
-          const h = (item.height || 0) * scale * Math.abs(item.scaleY || 1);
+          const w = (item.width || 0) * scale;
+          const h = (item.height || 0) * scale;
 
           const dominantColor =
             typeof item.dominantColor === "string" &&
@@ -126,7 +123,7 @@ export const Minimap: React.FC = () => {
 
           return (
             <div
-              key={item.canvasId}
+              key={item.itemId}
               className="absolute"
               style={{
                 left: toMapX(item.x - w / 2),

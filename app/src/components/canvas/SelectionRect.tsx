@@ -8,10 +8,16 @@ export interface SelectionBoxState {
 
 interface SelectionRectProps {
   selectionBox: SelectionBoxState;
+  stageScale: number;
+  isZoomMode: boolean;
 }
+
+export const MIN_ZOOM_AREA = 600;
 
 export const SelectionRect: React.FC<SelectionRectProps> = ({
   selectionBox,
+  stageScale,
+  isZoomMode,
 }) => {
   if (!selectionBox.start || !selectionBox.current) return null;
 
@@ -20,15 +26,22 @@ export const SelectionRect: React.FC<SelectionRectProps> = ({
   const width = Math.abs(selectionBox.current.x - selectionBox.start.x);
   const height = Math.abs(selectionBox.current.y - selectionBox.start.y);
 
+  const zoomArea = width * height * stageScale * stageScale;
+  const isBelowZoomThreshold = isZoomMode && zoomArea < MIN_ZOOM_AREA;
+
   return (
     <rect
       x={x}
       y={y}
       width={width}
       height={height}
-      fill={THEME.canvas.selectionFill}
+      fill={isBelowZoomThreshold ? "none" : THEME.canvas.selectionFill}
       stroke={THEME.primary}
       strokeWidth={1}
+      strokeDasharray={
+        isBelowZoomThreshold ? `${6} ${4}` : undefined
+      }
+      vectorEffect="non-scaling-stroke"
       pointerEvents="none"
     />
   );

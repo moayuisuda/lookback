@@ -14,6 +14,7 @@ import { createCommandsRouter } from "./routes/commands";
 import { createTempRouter } from "./routes/temp";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
 import { calculateTone, getDominantColor } from "./imageAnalysis";
+import AdmZip from "adm-zip";
 
 export type RendererChannel =
   | "image-updated"
@@ -95,6 +96,31 @@ const ensureStorageDirs = async (root: string) => {
   ]);
 };
 
+const DEFAULT_COMMAND_FILES = [
+  "canvasImportExport.jsx",
+  "imageSearch.jsx",
+  "stitchExport.jsx",
+];
+
+const ensureDefaultCommands = async () => {
+  const commandsDir = path.join(STORAGE_DIR, "commands");
+  await lockedFs.ensureDir(commandsDir);
+  const sourceDir = path.join(app.getAppPath(), "src", "commands-pending");
+  await Promise.all(
+    DEFAULT_COMMAND_FILES.map(async (fileName) => {
+      const destPath = path.join(commandsDir, fileName);
+      if (await lockedFs.pathExists(destPath)) return;
+      const srcPath = path.join(sourceDir, fileName);
+      try {
+        const content = await lockedFs.readFile(srcPath, "utf-8");
+        await lockedFs.writeFile(destPath, content);
+      } catch (error) {
+        console.error("Failed to seed default command", fileName, error);
+      }
+    })
+  );
+};
+
 export const getStorageDir = (): string => STORAGE_DIR;
 
 export const setStorageRoot = async (root: string) => {
@@ -152,6 +178,7 @@ const initializeStorage = async () => {
   updateStoragePaths(root);
   settingsCache = null;
   await ensureStorageDirs(STORAGE_DIR);
+  await ensureDefaultCommands();
 };
 
 const getCanvasAssetsDir = (canvasName: string): string => {
@@ -328,6 +355,149 @@ export async function startServer() {
       getDominantColor,
       getTone: calculateTone,
     })
+  );
+  server.get("/api/canvas-export", async (req, res) => {
+    try {
+      const canvasNameRaw = (req.query.canvasName as string) || "Default";
+      const safeName = canvasNameRaw.replace(/[/\\:*?"<>|]/g, "_") || "Default";
+      const canvasDir = path.join(CANVASES_DIR, safeName);
+      const dataFile = path.join(canvasDir, "canvas.json");
+      const viewportFile = path.join(canvasDir, "canvas_viewport.json");
+      const assetsDir = path.join(canvasDir, "assets");
+
+      const items = await withFileLock(dataFile, async () => {
+        if (await fs.pathExists(dataFile)) return fs.readJson(dataFile);
+        return [];
+      });
+      const viewport = await withFileLock(viewportFile, async () => {
+        if (await fs.pathExists(viewportFile)) return fs.readJson(viewportFile);
+        return null;
+      });
+
+      const imageItems = Array.isArray(items)
+        ? items.filter((it) => it && typeof it === "object" && it.type === "image")
+        : [];
+      const referencedFiles = new Set<string>();
+      for (const it of imageItems) {
+        const p = typeof it.imagePath === "string" ? it.imagePath : "";
+        if (p.startsWith("assets/")) {
+          const filename = path.basename(p);
+          referencedFiles.add(filename);
+        }
+      }
+
+      const zip = new AdmZip();
+      const manifest = {
+        version: 1,
+        name: safeName,
+        timestamp: Date.now(),
+        items,
+        viewport,
+      };
+      zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"));
+
+      for (const filename of referencedFiles) {
+        const filePath = path.join(assetsDir, filename);
+        const exists = await withFileLock(filePath, () => fs.pathExists(filePath));
+        if (!exists) continue;
+        const data = await fs.readFile(filePath);
+        zip.addFile(path.posix.join("assets", filename), data);
+      }
+
+      const buf = zip.toBuffer();
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.lb"`);
+      res.send(buf);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  server.post(
+    "/api/canvas-import",
+    express.raw({ type: "application/octet-stream", limit: "500mb" }),
+    async (req, res) => {
+      try {
+        const body = req.body as Buffer;
+        if (!Buffer.isBuffer(body) || body.length === 0) {
+          res.status(400).json({ error: "Invalid file body" });
+          return;
+        }
+        const zip = new AdmZip(body);
+        const entry = zip.getEntry("manifest.json");
+        if (!entry) {
+          res.status(400).json({ error: "manifest.json missing" });
+          return;
+        }
+        const manifestRaw = entry.getData().toString("utf-8");
+        const manifest = JSON.parse(manifestRaw) as {
+          version?: number;
+          name?: string;
+          items?: unknown[];
+          viewport?: unknown;
+        };
+        const desiredName = (manifest.name || "Imported").toString();
+        const baseName = desiredName.replace(/[/\\:*?"<>|]/g, "_").trim() || "Imported";
+
+        // Resolve unique canvas dir
+        const resolveUniqueCanvasName = async (name: string): Promise<string> => {
+          const canvasesDir = CANVASES_DIR;
+          await lockedFs.ensureDir(canvasesDir);
+          let candidate = name;
+          let idx = 1;
+          while (await lockedFs.pathExists(path.join(canvasesDir, candidate))) {
+            candidate = `${name}_${idx}`;
+            idx += 1;
+          }
+          return candidate;
+        };
+        const finalName = await resolveUniqueCanvasName(baseName);
+        const canvasDir = path.join(CANVASES_DIR, finalName);
+        const dataFile = path.join(canvasDir, "canvas.json");
+        const viewportFile = path.join(canvasDir, "canvas_viewport.json");
+        const assetsDir = path.join(canvasDir, "assets");
+
+        await withFileLocks([canvasDir, assetsDir], async () => {
+          await fs.ensureDir(canvasDir);
+          await fs.ensureDir(assetsDir);
+        });
+
+        // Extract assets/
+        const entries = zip.getEntries();
+        for (const e of entries) {
+          const name = e.entryName;
+          if (name.startsWith("assets/") && !e.isDirectory) {
+            const filename = path.basename(name);
+            const target = path.join(assetsDir, filename);
+            await withFileLock(target, async () => {
+              // Resolve conflict by appending index
+              let candidate = target;
+              let idx = 1;
+              const parsed = path.parse(target);
+              while (await fs.pathExists(candidate)) {
+                candidate = path.join(parsed.dir, `${parsed.name}_${idx}${parsed.ext}`);
+                idx += 1;
+              }
+              await fs.writeFile(candidate, e.getData());
+            });
+          }
+        }
+
+        // Write items and viewport
+        await withFileLocks([dataFile, viewportFile], async () => {
+          const items = Array.isArray(manifest.items) ? manifest.items : [];
+          await fs.writeJson(dataFile, items);
+          if (manifest.viewport) {
+            await fs.writeJson(viewportFile, manifest.viewport);
+          }
+        });
+
+        res.json({ success: true, name: finalName });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ error: message });
+      }
+    }
   );
   server.get("/api/assets/:canvasName/:filename", async (req, res) => {
     const { canvasName, filename } = req.params;

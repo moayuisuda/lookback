@@ -256,7 +256,7 @@ async function createWindow(options?: { load?: boolean }) {
     height: windowState.height || Math.floor(height * 0.8),
     x: windowState.x,
     y: windowState.y,
-    icon: path.join(__dirname, "../resources/icon.svg"),
+    icon: path.join(__dirname, "../resources/icon.png"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -527,7 +527,7 @@ function registerShortcut(
       // If failed, try to restore old one
       if (prev !== next) {
         globalShortcut.unregister(next);
-        globalShortcut.register(prev, handler); // Note: we re-register prev with SAME handler
+        globalShortcut.register(prev, handler);
       }
       return {
         success: false,
@@ -719,6 +719,45 @@ ipcMain.handle(
     return registerToggleMouseThroughShortcut(accelerator);
   },
 );
+
+ipcMain.handle("import-command", async () => {
+  const locale = await getLocale();
+  const result = await dialog.showOpenDialog({
+    title: translate(locale, "dialog.importCommandTitle"),
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "JavaScript/TypeScript", extensions: ["js", "jsx", "ts", "tsx"] }],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+
+  const destDir = path.join(getStorageDir(), "commands");
+  await fs.ensureDir(destDir);
+
+  const results = [];
+  for (const srcPath of result.filePaths) {
+    const fileName = path.basename(srcPath);
+    const destPath = path.join(destDir, fileName);
+    try {
+      await fs.copy(srcPath, destPath);
+      results.push({ success: true, path: destPath });
+    } catch (e) {
+      results.push({ success: false, error: e instanceof Error ? e.message : String(e), path: srcPath });
+    }
+  }
+
+  const failures = results.filter(r => !r.success);
+  if (failures.length > 0) {
+    return { 
+      success: false, 
+      error: `Failed to import ${failures.length} files. First error: ${failures[0].error}`,
+      partialSuccess: results.length - failures.length > 0
+    };
+  }
+
+  return { success: true, count: results.length };
+});
 
 ipcMain.on(
   "set-ignore-mouse-events",

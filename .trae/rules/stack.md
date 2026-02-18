@@ -17,3 +17,4 @@
 13. 能在对应 valtio store 管理的，不要用 useState
 14. 文件读写操作，都要通过 fileLock 文件的方法来进行，避免并发读写导致数据损坏
 15. 代码任务完成后，必须运行 npm run lint 来检查代码质量
+16. 和状态强相关的函数尽量放在 valtio store 中

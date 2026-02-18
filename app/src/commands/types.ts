@@ -1,27 +1,22 @@
 import type { I18nKey } from '../../shared/i18n/types';
-import type { canvasActions, canvasState } from '../store/canvasStore';
-import type { globalActions, globalState } from '../store/globalStore';
-import type { commandActions, commandState } from '../store/commandStore';
+import type { canvasActions } from '../store/canvasStore';
+import type { globalActions } from '../store/globalStore';
+import type { commandActions } from '../store/commandStore';
 import type { useSnapshot } from 'valtio';
+import type { useEnvState } from '../hooks/useEnvState';
+import type { useT } from '../i18n/useT';
 
 export type CommandContext = {
   React: typeof import('react');
   hooks: {
     useSnapshot: typeof useSnapshot;
-  };
-  state: {
-    canvasState: typeof canvasState;
-    globalState: typeof globalState;
-    commandState: typeof commandState;
+    useEnvState: typeof useEnvState;
+    useT: typeof useT;
   };
   actions: {
     canvasActions: typeof canvasActions;
     globalActions: typeof globalActions;
     commandActions: typeof commandActions;
-    emitContainCanvasItem: (detail: { id: string }) => void;
-  };
-  utils: {
-    getRenderBbox: (width: number, height: number, rotation: number) => { offsetX: number; offsetY: number; width: number; height: number };
   };
   config: {
     API_BASE_URL: string;
@@ -41,4 +36,8 @@ export type CommandDefinition = {
   keywords?: string[];
   ui?: React.FC<{ context: CommandContext }>;
   run?: (context: CommandContext) => Promise<void> | void;
+  external?: {
+    folder: string;
+    entry: string;
+  };
 };

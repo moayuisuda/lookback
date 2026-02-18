@@ -436,6 +436,34 @@ var createCommandsRouter = (deps) => {
       res.status(500).json({ error: message });
     }
   });
+  router.delete("/api/commands/:folder", async (req, res) => {
+    try {
+      const { folder } = req.params;
+      const entry = typeof req.query.entry === "string" ? req.query.entry : "";
+      if (!entry) {
+        res.status(400).json({ error: "Missing entry" });
+        return;
+      }
+      if (!isSafeSegment(folder) || !isSafeSegment(entry) || !isScriptFile(entry)) {
+        res.status(400).json({ error: "Invalid path" });
+        return;
+      }
+      const commandsDir = getCommandsDir();
+      const dirPath = folder === ROOT_FOLDER ? commandsDir : import_path4.default.join(commandsDir, folder);
+      const scriptPath = import_path4.default.join(dirPath, entry);
+      await withFileLock(scriptPath, async () => {
+        if (!await import_fs_extra4.default.pathExists(scriptPath)) {
+          res.status(404).json({ error: "Not found" });
+          return;
+        }
+        await import_fs_extra4.default.remove(scriptPath);
+        res.json({ success: true });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
   return router;
 };
 
@@ -778,6 +806,7 @@ async function calculateTone(filePath) {
 }
 
 // backend/server.ts
+var import_adm_zip = __toESM(require("adm-zip"), 1);
 var SERVER_PORT = 30001;
 var CONFIG_FILE = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
 var DEFAULT_STORAGE_DIR = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_storage");
@@ -831,6 +860,29 @@ var ensureStorageDirs = async (root) => {
     lockedFs.ensureDir(import_path6.default.join(root, "canvases"))
   ]);
 };
+var DEFAULT_COMMAND_FILES = [
+  "canvasImportExport.jsx",
+  "imageSearch.jsx",
+  "stitchExport.jsx"
+];
+var ensureDefaultCommands = async () => {
+  const commandsDir = import_path6.default.join(STORAGE_DIR, "commands");
+  await lockedFs.ensureDir(commandsDir);
+  const sourceDir = import_path6.default.join(import_electron.app.getAppPath(), "src", "commands-pending");
+  await Promise.all(
+    DEFAULT_COMMAND_FILES.map(async (fileName) => {
+      const destPath = import_path6.default.join(commandsDir, fileName);
+      if (await lockedFs.pathExists(destPath)) return;
+      const srcPath = import_path6.default.join(sourceDir, fileName);
+      try {
+        const content = await lockedFs.readFile(srcPath, "utf-8");
+        await lockedFs.writeFile(destPath, content);
+      } catch (error) {
+        console.error("Failed to seed default command", fileName, error);
+      }
+    })
+  );
+};
 var getStorageDir = () => STORAGE_DIR;
 var setStorageRoot = async (root) => {
   const trimmed = root.trim();
@@ -880,6 +932,7 @@ var initializeStorage = async () => {
   updateStoragePaths(root);
   settingsCache = null;
   await ensureStorageDirs(STORAGE_DIR);
+  await ensureDefaultCommands();
 };
 var getCanvasAssetsDir = (canvasName) => {
   const safeName = canvasName.replace(/[/\\:*?"<>|]/g, "_") || "Default";
@@ -1036,6 +1089,128 @@ async function startServer() {
       getTone: calculateTone
     })
   );
+  server.get("/api/canvas-export", async (req, res) => {
+    try {
+      const canvasNameRaw = req.query.canvasName || "Default";
+      const safeName = canvasNameRaw.replace(/[/\\:*?"<>|]/g, "_") || "Default";
+      const canvasDir = import_path6.default.join(CANVASES_DIR, safeName);
+      const dataFile = import_path6.default.join(canvasDir, "canvas.json");
+      const viewportFile = import_path6.default.join(canvasDir, "canvas_viewport.json");
+      const assetsDir = import_path6.default.join(canvasDir, "assets");
+      const items = await withFileLock(dataFile, async () => {
+        if (await import_fs_extra6.default.pathExists(dataFile)) return import_fs_extra6.default.readJson(dataFile);
+        return [];
+      });
+      const viewport = await withFileLock(viewportFile, async () => {
+        if (await import_fs_extra6.default.pathExists(viewportFile)) return import_fs_extra6.default.readJson(viewportFile);
+        return null;
+      });
+      const imageItems = Array.isArray(items) ? items.filter((it) => it && typeof it === "object" && it.type === "image") : [];
+      const referencedFiles = /* @__PURE__ */ new Set();
+      for (const it of imageItems) {
+        const p = typeof it.imagePath === "string" ? it.imagePath : "";
+        if (p.startsWith("assets/")) {
+          const filename = import_path6.default.basename(p);
+          referencedFiles.add(filename);
+        }
+      }
+      const zip = new import_adm_zip.default();
+      const manifest = {
+        version: 1,
+        name: safeName,
+        timestamp: Date.now(),
+        items,
+        viewport
+      };
+      zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"));
+      for (const filename of referencedFiles) {
+        const filePath = import_path6.default.join(assetsDir, filename);
+        const exists = await withFileLock(filePath, () => import_fs_extra6.default.pathExists(filePath));
+        if (!exists) continue;
+        const data = await import_fs_extra6.default.readFile(filePath);
+        zip.addFile(import_path6.default.posix.join("assets", filename), data);
+      }
+      const buf = zip.toBuffer();
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.lb"`);
+      res.send(buf);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+  server.post(
+    "/api/canvas-import",
+    import_express6.default.raw({ type: "application/octet-stream", limit: "500mb" }),
+    async (req, res) => {
+      try {
+        const body = req.body;
+        if (!Buffer.isBuffer(body) || body.length === 0) {
+          res.status(400).json({ error: "Invalid file body" });
+          return;
+        }
+        const zip = new import_adm_zip.default(body);
+        const entry = zip.getEntry("manifest.json");
+        if (!entry) {
+          res.status(400).json({ error: "manifest.json missing" });
+          return;
+        }
+        const manifestRaw = entry.getData().toString("utf-8");
+        const manifest = JSON.parse(manifestRaw);
+        const desiredName = (manifest.name || "Imported").toString();
+        const baseName = desiredName.replace(/[/\\:*?"<>|]/g, "_").trim() || "Imported";
+        const resolveUniqueCanvasName = async (name) => {
+          const canvasesDir = CANVASES_DIR;
+          await lockedFs.ensureDir(canvasesDir);
+          let candidate = name;
+          let idx = 1;
+          while (await lockedFs.pathExists(import_path6.default.join(canvasesDir, candidate))) {
+            candidate = `${name}_${idx}`;
+            idx += 1;
+          }
+          return candidate;
+        };
+        const finalName = await resolveUniqueCanvasName(baseName);
+        const canvasDir = import_path6.default.join(CANVASES_DIR, finalName);
+        const dataFile = import_path6.default.join(canvasDir, "canvas.json");
+        const viewportFile = import_path6.default.join(canvasDir, "canvas_viewport.json");
+        const assetsDir = import_path6.default.join(canvasDir, "assets");
+        await withFileLocks([canvasDir, assetsDir], async () => {
+          await import_fs_extra6.default.ensureDir(canvasDir);
+          await import_fs_extra6.default.ensureDir(assetsDir);
+        });
+        const entries = zip.getEntries();
+        for (const e of entries) {
+          const name = e.entryName;
+          if (name.startsWith("assets/") && !e.isDirectory) {
+            const filename = import_path6.default.basename(name);
+            const target = import_path6.default.join(assetsDir, filename);
+            await withFileLock(target, async () => {
+              let candidate = target;
+              let idx = 1;
+              const parsed = import_path6.default.parse(target);
+              while (await import_fs_extra6.default.pathExists(candidate)) {
+                candidate = import_path6.default.join(parsed.dir, `${parsed.name}_${idx}${parsed.ext}`);
+                idx += 1;
+              }
+              await import_fs_extra6.default.writeFile(candidate, e.getData());
+            });
+          }
+        }
+        await withFileLocks([dataFile, viewportFile], async () => {
+          const items = Array.isArray(manifest.items) ? manifest.items : [];
+          await import_fs_extra6.default.writeJson(dataFile, items);
+          if (manifest.viewport) {
+            await import_fs_extra6.default.writeJson(viewportFile, manifest.viewport);
+          }
+        });
+        res.json({ success: true, name: finalName });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ error: message });
+      }
+    }
+  );
   server.get("/api/assets/:canvasName/:filename", async (req, res) => {
     const { canvasName, filename } = req.params;
     const safeCanvasDirName = canvasName.replace(/[/\\:*?"<>|]/g, "_") || "Default";
@@ -1086,6 +1261,10 @@ var en = {
   "common.reset": "Reset",
   "common.search": "Search",
   "common.back": "Back",
+  "upload.progress.title": "Uploading...",
+  "upload.progress.counter": "{{completed}} / {{total}}",
+  "upload.progress.percent": "{{percent}}%",
+  "upload.progress.failed": "{{failed}} failed",
   "commandPalette.placeholder": "Search commands or text",
   "commandPalette.imageSearchPlaceholder": "Search images by tone and color",
   "commandPalette.commandLabel": "Command",
@@ -1099,6 +1278,11 @@ var en = {
   "commandPalette.color": "Color",
   "commandPalette.clearColor": "Clear",
   "commandPalette.back": "Back",
+  "commandPalette.import": "Import Command",
+  "commandPalette.importUnavailable": "Import is unavailable",
+  "commandPalette.delete": "Delete",
+  "commandPalette.deleteTitle": "Delete Command",
+  "commandPalette.deleteMessage": 'Delete "{{name}}"? This cannot be undone.',
   "commandPalette.toneAny": "Any",
   "command.stitchExport.title": "Stitch Export",
   "command.stitchExport.description": "Stitch selected images and export",
@@ -1121,6 +1305,7 @@ var en = {
   "titleBar.toggleMouseThrough": "Toggle Paper Mode",
   "titleBar.toggleGallery": "Toggle Gallery",
   "titleBar.canvasGroup": "Smart Layout (Canvas)",
+  "titleBar.zoomToFit": "Zoom to Fit",
   "titleBar.shortcutClickToRecord": "Click to record",
   "titleBar.shortcutRecording": "Press a shortcut\u2026",
   "titleBar.index": "Index",
@@ -1157,6 +1342,10 @@ var en = {
   "toast.command.exported": "Stitched image exported",
   "toast.command.scriptFailed": "Command script failed",
   "toast.command.externalMessage": "{{message}}",
+  "toast.importSuccess": "Command imported",
+  "toast.importFailed": "Failed to import command: {{error}}",
+  "toast.commandDeleted": "Command deleted",
+  "toast.commandDeleteFailed": "Failed to delete command: {{error}}",
   "indexing.starting": "Starting...",
   "indexing.progress": "Indexing {{current}}/{{total}}...",
   "indexing.completed": "Completed",
@@ -1198,7 +1387,7 @@ var en = {
   "canvas.toolbar.collapse": "Collapse Toolbar",
   "canvas.toolbar.filters": "Filters",
   "canvas.filters.grayscale": "Grayscale",
-  "canvas.filters.posterize": "Oil Paint Block",
+  "canvas.filters.posterize": "Posterize",
   "canvas.filters.trianglePixelate": "Triangle Pixelate",
   "canvas.toolbar.toggleGrayscale": "Toggle Grayscale Mode",
   "canvas.toolbar.grayscale": "Grayscale",
@@ -1215,6 +1404,10 @@ var en = {
   "canvas.clearCanvasTitle": "Clear Canvas",
   "canvas.clearCanvasMessage": "Are you sure you want to clear the canvas? This action cannot be undone.",
   "canvas.clearCanvasConfirm": "Clear",
+  "canvas.empty.title": "Start Your Canvas",
+  "canvas.empty.dragHint": "Drag images or folders here to begin",
+  "canvas.empty.panHint": "Middle Click or Space + Drag to Pan",
+  "canvas.empty.zoomHint": "Wheel to Zoom",
   "swatch.replaceHint": "{{color}} (long press to replace)",
   "tone.key.high": "High",
   "tone.key.mid": "Mid",
@@ -1273,26 +1466,35 @@ var zh = {
   "common.language.en": "EN",
   "common.language.zh": "\u4E2D\u6587",
   "common.reset": "\u91CD\u7F6E",
-  "common.search": "Search",
-  "common.back": "Back",
-  "commandPalette.placeholder": "Search commands or text",
-  "commandPalette.imageSearchPlaceholder": "Search images by tone and color",
-  "commandPalette.commandLabel": "Command",
-  "commandPalette.textLabel": "Text",
-  "commandPalette.imageLabel": "Image",
-  "commandPalette.empty": "No results",
-  "commandPalette.imageSearchEmpty": "No images matched",
-  "commandPalette.exportBackground": "Background",
-  "commandPalette.exportHint": "Press Enter to export",
-  "commandPalette.tone": "Tone",
-  "commandPalette.color": "Color",
-  "commandPalette.clearColor": "Clear",
-  "commandPalette.back": "Back",
-  "commandPalette.toneAny": "Any",
-  "command.stitchExport.title": "Stitch Export",
-  "command.stitchExport.description": "Stitch selected images and export",
-  "command.imageSearch.title": "Image Search",
-  "command.imageSearch.description": "Search images by tone and color",
+  "common.search": "\u641C\u7D22",
+  "common.back": "\u8FD4\u56DE",
+  "upload.progress.title": "\u4E0A\u4F20\u4E2D...",
+  "upload.progress.counter": "{{completed}} / {{total}}",
+  "upload.progress.percent": "{{percent}}%",
+  "upload.progress.failed": "\u5931\u8D25 {{failed}}",
+  "commandPalette.placeholder": "\u641C\u7D22\u547D\u4EE4\u6216\u6587\u672C",
+  "commandPalette.imageSearchPlaceholder": "\u6309\u8272\u8C03\u548C\u989C\u8272\u641C\u7D22\u56FE\u7247",
+  "commandPalette.commandLabel": "\u547D\u4EE4",
+  "commandPalette.textLabel": "\u6587\u672C",
+  "commandPalette.imageLabel": "\u56FE\u7247",
+  "commandPalette.empty": "\u65E0\u7ED3\u679C",
+  "commandPalette.imageSearchEmpty": "\u672A\u627E\u5230\u5339\u914D\u7684\u56FE\u7247",
+  "commandPalette.exportBackground": "\u80CC\u666F",
+  "commandPalette.exportHint": "\u6309\u56DE\u8F66\u5BFC\u51FA",
+  "commandPalette.tone": "\u8272\u8C03",
+  "commandPalette.color": "\u989C\u8272",
+  "commandPalette.clearColor": "\u6E05\u9664",
+  "commandPalette.back": "\u8FD4\u56DE",
+  "commandPalette.import": "\u5BFC\u5165\u547D\u4EE4",
+  "commandPalette.importUnavailable": "\u5BFC\u5165\u4E0D\u53EF\u7528",
+  "commandPalette.delete": "\u5220\u9664",
+  "commandPalette.deleteTitle": "\u5220\u9664\u547D\u4EE4",
+  "commandPalette.deleteMessage": '\u786E\u5B9A\u5220\u9664 "{{name}}"\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002',
+  "commandPalette.toneAny": "\u4EFB\u610F",
+  "command.stitchExport.title": "\u62FC\u56FE\u5BFC\u51FA",
+  "command.stitchExport.description": "\u62FC\u63A5\u9009\u4E2D\u7684\u56FE\u7247\u5E76\u5BFC\u51FA",
+  "command.imageSearch.title": "\u4EE5\u56FE\u641C\u56FE",
+  "command.imageSearch.description": "\u6309\u8272\u8C03\u548C\u989C\u8272\u641C\u7D22\u56FE\u7247",
   "titleBar.settings": "\u8BBE\u7F6E",
   "titleBar.alwaysOnTop": "\u7F6E\u9876",
   "titleBar.dataFolder": "\u6570\u636E\u6587\u4EF6\u5939",
@@ -1310,6 +1512,7 @@ var zh = {
   "titleBar.toggleMouseThrough": "\u5207\u6362\u9F20\u6807\u7A7F\u900F",
   "titleBar.toggleGallery": "\u5207\u6362\u56FE\u5E93\u62BD\u5C49",
   "titleBar.canvasGroup": "\u753B\u5E03\u667A\u80FD\u5E03\u5C40",
+  "titleBar.zoomToFit": "\u9002\u5E94\u753B\u5E03",
   "titleBar.shortcutClickToRecord": "\u70B9\u51FB\u5F55\u5236",
   "titleBar.shortcutRecording": "\u8BF7\u6309\u952E...",
   "titleBar.index": "\u7D22\u5F15",
@@ -1341,11 +1544,15 @@ var zh = {
   "toast.openFileFailed": "\u6253\u5F00\u6587\u4EF6\u5931\u8D25",
   "toast.shortcutInvalid": "\u5FEB\u6377\u952E\u65E0\u6548",
   "toast.shortcutUpdateFailed": "\u66F4\u65B0\u5FEB\u6377\u952E\u5931\u8D25\uFF1A{{error}}",
-  "toast.command.exportNoSelection": "Select images to export",
-  "toast.command.exportFailed": "Failed to export stitched image",
-  "toast.command.exported": "Stitched image exported",
+  "toast.command.exportNoSelection": "\u8BF7\u9009\u62E9\u8981\u5BFC\u51FA\u7684\u56FE\u7247",
+  "toast.command.exportFailed": "\u62FC\u56FE\u5BFC\u51FA\u5931\u8D25",
+  "toast.command.exported": "\u62FC\u56FE\u5DF2\u5BFC\u51FA",
   "toast.command.scriptFailed": "Command \u811A\u672C\u6267\u884C\u5931\u8D25",
   "toast.command.externalMessage": "{{message}}",
+  "toast.importSuccess": "\u547D\u4EE4\u5BFC\u5165\u6210\u529F",
+  "toast.importFailed": "\u547D\u4EE4\u5BFC\u5165\u5931\u8D25: {{error}}",
+  "toast.commandDeleted": "\u547D\u4EE4\u5DF2\u5220\u9664",
+  "toast.commandDeleteFailed": "\u5220\u9664\u547D\u4EE4\u5931\u8D25: {{error}}",
   "envInit.brandTitle": "Oh, Captain!",
   "envInit.heading": "\u6B63\u5728\u914D\u7F6E Python \u73AF\u5883\u2026",
   "envInit.subheading": "\u9996\u6B21\u8FD0\u884C\u53EF\u80FD\u4F1A\u4E0B\u8F7D\u5DE5\u5177\u5E76\u5B89\u88C5\u4F9D\u8D56\uFF0C\u8FD9\u662F\u4E00\u6B21\u6027\u6B65\u9AA4\u3002",
@@ -1406,7 +1613,7 @@ var zh = {
   "canvas.toolbar.collapse": "\u6536\u8D77\u5DE5\u5177\u680F",
   "canvas.toolbar.filters": "\u6EE4\u955C",
   "canvas.filters.grayscale": "\u7070\u5EA6",
-  "canvas.filters.posterize": "\u6CB9\u753B\u8272\u5757",
+  "canvas.filters.posterize": "\u8272\u8C03\u5206\u79BB",
   "canvas.filters.trianglePixelate": "\u4E09\u89D2\u5F62\u50CF\u7D20\u5316",
   "canvas.toolbar.toggleGrayscale": "\u5207\u6362\u7070\u5EA6\u6A21\u5F0F",
   "canvas.toolbar.grayscale": "\u7070\u5EA6",
@@ -1423,6 +1630,10 @@ var zh = {
   "canvas.clearCanvasTitle": "\u6E05\u7A7A\u753B\u5E03",
   "canvas.clearCanvasMessage": "\u786E\u5B9A\u8981\u6E05\u7A7A\u753B\u5E03\u5417\uFF1F\u6B64\u64CD\u4F5C\u65E0\u6CD5\u64A4\u9500\u3002",
   "canvas.clearCanvasConfirm": "\u6E05\u7A7A",
+  "canvas.empty.title": "\u5F00\u59CB\u4F60\u7684\u753B\u5E03",
+  "canvas.empty.dragHint": "\u62D6\u62FD\u56FE\u7247\u6216\u6587\u4EF6\u5939\u5230\u6B64\u5904\u5F00\u59CB",
+  "canvas.empty.panHint": "\u4E2D\u952E\u6216\u7A7A\u683C\u62D6\u62FD\u5E73\u79FB",
+  "canvas.empty.zoomHint": "\u6EDA\u8F6E\u7F29\u653E",
   "swatch.replaceHint": "{{color}}\uFF08\u957F\u6309\u66FF\u6362\uFF09",
   "tone.key.high": "\u9AD8",
   "tone.key.mid": "\u4E2D",
@@ -1473,6 +1684,9 @@ var dictionaries = {
 };
 function t(locale, key, params) {
   const template = dictionaries[locale][key];
+  if (typeof template !== "string" || !template) {
+    return key;
+  }
   if (!params) return template;
   return template.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (match, name) => {
     const value = params[name];
@@ -1655,7 +1869,7 @@ async function createWindow(options) {
     height: windowState.height || Math.floor(height * 0.8),
     x: windowState.x,
     y: windowState.y,
-    icon: import_path7.default.join(__dirname, "../resources/icon.svg"),
+    icon: import_path7.default.join(__dirname, "../resources/icon.png"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -2034,6 +2248,39 @@ import_electron2.ipcMain.handle(
     return registerToggleMouseThroughShortcut(accelerator);
   }
 );
+import_electron2.ipcMain.handle("import-command", async () => {
+  const locale = await getLocale();
+  const result = await import_electron2.dialog.showOpenDialog({
+    title: t(locale, "dialog.importCommandTitle"),
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "JavaScript/TypeScript", extensions: ["js", "jsx", "ts", "tsx"] }]
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+  const destDir = import_path7.default.join(getStorageDir(), "commands");
+  await import_fs_extra7.default.ensureDir(destDir);
+  const results = [];
+  for (const srcPath of result.filePaths) {
+    const fileName = import_path7.default.basename(srcPath);
+    const destPath = import_path7.default.join(destDir, fileName);
+    try {
+      await import_fs_extra7.default.copy(srcPath, destPath);
+      results.push({ success: true, path: destPath });
+    } catch (e) {
+      results.push({ success: false, error: e instanceof Error ? e.message : String(e), path: srcPath });
+    }
+  }
+  const failures = results.filter((r) => !r.success);
+  if (failures.length > 0) {
+    return {
+      success: false,
+      error: `Failed to import ${failures.length} files. First error: ${failures[0].error}`,
+      partialSuccess: results.length - failures.length > 0
+    };
+  }
+  return { success: true, count: results.length };
+});
 import_electron2.ipcMain.on(
   "set-ignore-mouse-events",
   (_event, ignore, options) => {

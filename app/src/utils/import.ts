@@ -1,5 +1,54 @@
 import { type ImageMeta } from '../store/canvasStore';
 import { localApi } from '../service';
+import { globalActions } from '../store/globalStore';
+
+const MAX_DROP_SCAN_CONCURRENCY = 16;
+const MAX_UPLOAD_CONCURRENCY = 16;
+
+const clampInt = (value: number, min: number, max: number) => {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+};
+
+const getHardwareConcurrency = () => {
+  const n = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined;
+  if (typeof n === 'number' && Number.isFinite(n) && n > 0) return n;
+  return 8;
+};
+
+const getDropScanConcurrency = (workItems: number) => {
+  const hw = getHardwareConcurrency();
+  const base = clampInt(hw, 4, MAX_DROP_SCAN_CONCURRENCY);
+  return clampInt(Math.min(base, Math.max(1, workItems)), 1, MAX_DROP_SCAN_CONCURRENCY);
+};
+
+const getUploadConcurrency = (workItems: number) => {
+  const hw = getHardwareConcurrency();
+  const base = clampInt(hw, 4, MAX_UPLOAD_CONCURRENCY);
+  return clampInt(Math.min(base, Math.max(1, workItems)), 1, MAX_UPLOAD_CONCURRENCY);
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  const limit = Math.max(1, Math.floor(concurrency || 1));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+};
 
 const fileToDataUrl = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -56,17 +105,17 @@ const uploadTempImage = async (
 
 export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File[]> => {
   const items = Array.from(dataTransfer.items);
-  const files: File[] = [];
 
-  const scanEntry = async (entry: FileSystemEntry) => {
+  const scanEntry = async (entry: FileSystemEntry): Promise<File[]> => {
     if (entry.isFile) {
       try {
         const file = await new Promise<File>((resolve, reject) => {
           (entry as FileSystemFileEntry).file(resolve, reject);
         });
-        files.push(file);
+        return [file];
       } catch (e) {
         console.error('Failed to read file entry', entry.name, e);
+        return [];
       }
     } else if (entry.isDirectory) {
       try {
@@ -84,53 +133,72 @@ export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File
         };
         
         const entries = await readAllEntries();
-        for (const e of entries) {
-          await scanEntry(e);
-        }
+        const lists = await mapWithConcurrency(
+          entries,
+          getDropScanConcurrency(entries.length),
+          async (child) => scanEntry(child),
+        );
+        return lists.flat();
       } catch (e) {
         console.error('Failed to read directory entry', entry.name, e);
+        return [];
       }
     }
+    return [];
   };
 
-  for (const item of items) {
-    const entry = item.webkitGetAsEntry();
-    if (entry) {
-      await scanEntry(entry);
-    }
-  }
-  return files;
+  const entries = items
+    .map((item) => item.webkitGetAsEntry())
+    .filter((entry): entry is FileSystemEntry => Boolean(entry));
+
+  const lists = await mapWithConcurrency(
+    entries,
+    getDropScanConcurrency(entries.length),
+    async (entry) => scanEntry(entry),
+  );
+  return lists.flat();
 };
 
 export const createTempMetasFromFiles = async (
   files: File[],
   canvasName?: string
 ): Promise<ImageMeta[]> => {
-  const metas: ImageMeta[] = [];
-
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) continue;
-    try {
-      const uploaded = await uploadTempImage(file, canvasName);
-      if (!uploaded) continue;
-      const meta: ImageMeta = {
-        id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        filename: uploaded.filename,
-        imagePath: uploaded.path,
-        tags: [],
-        createdAt: Date.now(),
-        dominantColor: uploaded.dominantColor ?? null,
-        tone: uploaded.tone ?? null,
-        hasVector: false,
-        width: uploaded.width,
-        height: uploaded.height,
-      };
-      
-      metas.push(meta);
-    } catch (e) {
-      console.error('Error creating temp meta', file.name, e);
-    }
+  const imageFiles = files.filter((f) => f.type.startsWith('image/'));
+  if (imageFiles.length > 0) {
+    globalActions.beginUploadProgress(imageFiles.length);
   }
 
-  return metas;
+  const results = await mapWithConcurrency(
+    imageFiles,
+    getUploadConcurrency(imageFiles.length),
+    async (file) => {
+      try {
+        const uploaded = await uploadTempImage(file, canvasName);
+        if (!uploaded) {
+          globalActions.tickUploadProgress({ completed: 1, failed: 1 });
+          return null;
+        }
+        const meta: ImageMeta = {
+          id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          filename: uploaded.filename,
+          imagePath: uploaded.path,
+          tags: [],
+          createdAt: Date.now(),
+          dominantColor: uploaded.dominantColor ?? null,
+          tone: uploaded.tone ?? null,
+          hasVector: false,
+          width: uploaded.width,
+          height: uploaded.height,
+        };
+        globalActions.tickUploadProgress({ completed: 1 });
+        return meta;
+      } catch (e) {
+        console.error('Error creating temp meta', file.name, e);
+        globalActions.tickUploadProgress({ completed: 1, failed: 1 });
+        return null;
+      }
+    },
+  );
+
+  return results.filter((m): m is ImageMeta => m !== null);
 };

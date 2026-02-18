@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { TitleBar } from "./components/TitleBar";
 import { Canvas } from "./components/Canvas";
 import {
@@ -26,6 +26,47 @@ function App() {
   useAppShortcuts();
   const globalSnap = useSnapshot(globalState);
   const { t } = useT();
+  const uploadShowTimerRef = useRef<number | null>(null);
+  const uploadVisible = globalSnap.uploadProgress.visible;
+  const uploadTotal = globalSnap.uploadProgress.total;
+  const uploadCompleted = globalSnap.uploadProgress.completed;
+  const uploadStartedAt = globalSnap.uploadProgress.startedAt;
+
+  useEffect(() => {
+    if (uploadShowTimerRef.current !== null) {
+      window.clearTimeout(uploadShowTimerRef.current);
+      uploadShowTimerRef.current = null;
+    }
+
+    if (uploadVisible) return;
+    if (uploadTotal <= 0) return;
+    if (uploadCompleted >= uploadTotal) return;
+    if (uploadStartedAt <= 0) return;
+
+    const elapsed = Date.now() - uploadStartedAt;
+    const delayMs = Math.max(0, 1000 - elapsed);
+
+    uploadShowTimerRef.current = window.setTimeout(() => {
+      const current = globalState.uploadProgress;
+      if (current.visible) return;
+      if (current.total > 0 && current.completed < current.total) {
+        globalActions.showUploadProgress();
+      }
+    }, delayMs);
+
+    return () => {
+      if (uploadShowTimerRef.current !== null) {
+        window.clearTimeout(uploadShowTimerRef.current);
+        uploadShowTimerRef.current = null;
+      }
+    };
+  }, [uploadVisible, uploadTotal, uploadCompleted, uploadStartedAt]);
+
+  useEffect(() => {
+    if (uploadTotal <= 0) return;
+    if (uploadCompleted < uploadTotal) return;
+    globalActions.hideUploadProgress();
+  }, [uploadTotal, uploadCompleted]);
 
   useEffect(() => {
     // 监听 Toast 消息
@@ -105,33 +146,31 @@ function App() {
           files,
           canvasState.currentCanvasName
         );
-        
-        const newIds: string[] = [];
-        metas.forEach((meta, index) => {
-          let newId: string | undefined;
-          if (!center) {
-            newId = canvasActions.addToCanvas(meta);
-          } else {
-            const offset = index * 24;
-            newId = canvasActions.addToCanvas(meta, center.x + offset, center.y + offset);
-          }
-          if (newId) newIds.push(newId);
-        });
+        if (metas.length === 0) return;
 
-        if (newIds.length > 1) {
-          setTimeout(() => {
-            canvasActions.autoLayoutCanvas(newIds, {
-              startX: center?.x ?? 100,
-              startY: center?.y ?? 100,
-            });
-          }, 50);
+        if (metas.length > 1) {
+          canvasActions.addManyImagesToCanvasCentered(metas, center ?? { x: 100, y: 100 });
+          return;
         }
+
+        if (center) {
+          canvasActions.addToCanvas(metas[0], center.x, center.y);
+          return;
+        }
+
+        canvasActions.addToCanvas(metas[0]);
       }
     };
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
   }, []);
+
+  const upload = globalSnap.uploadProgress;
+  const uploadPercent =
+    upload.total > 0 ? (upload.completed / Math.max(1, upload.total)) * 100 : 0;
+  const uploadPercentClamped = Math.max(0, Math.min(100, uploadPercent));
+  const uploadPercentLabel = Math.round(uploadPercentClamped);
 
   return (
     <div
@@ -177,6 +216,43 @@ function App() {
           <Canvas />
         </div>
       </div>
+      {upload.visible && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-6 shadow-xl">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="text-lg font-semibold text-white">
+                {t("upload.progress.title")}
+              </h3>
+              <div className="text-xs text-neutral-400">
+                {t("upload.progress.counter", {
+                  completed: upload.completed,
+                  total: upload.total,
+                })}
+              </div>
+            </div>
+
+            <div className="mt-4 h-2 w-full overflow-hidden rounded bg-neutral-800">
+              <div
+                className="h-full rounded bg-primary transition-[width] duration-200"
+                style={{
+                  width: `${uploadPercentClamped}%`,
+                }}
+              />
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-neutral-400">
+              <div>
+                {t("upload.progress.percent", { percent: uploadPercentLabel })}
+              </div>
+              {upload.failed > 0 && (
+                <div className="text-danger">
+                  {t("upload.progress.failed", { failed: upload.failed })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

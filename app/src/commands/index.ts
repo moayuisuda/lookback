@@ -1,30 +1,24 @@
-import React from 'react';
-import { useSnapshot } from 'valtio';
-import { canvasActions, canvasState, getRenderBbox } from '../store/canvasStore';
-import { globalActions, globalState } from '../store/globalStore';
-import { commandActions, commandState } from '../store/commandStore';
-import type { CommandContext, CommandDefinition } from './types';
-import { emitContainCanvasItem } from '../events/uiEvents';
-import { API_BASE_URL } from '../config';
+import React from "react";
+import { useSnapshot } from "valtio";
+import { canvasActions } from "../store/canvasStore";
+import { globalActions } from "../store/globalStore";
+import { commandActions, commandState } from "../store/commandStore";
+import type { CommandContext, CommandDefinition } from "./types";
+import { API_BASE_URL } from "../config";
+import { useEnvState } from "../hooks/useEnvState";
+import { useT } from "../i18n/useT";
 
 export const getCommandContext = (): CommandContext => ({
   React,
   hooks: {
     useSnapshot,
-  },
-  state: {
-    canvasState,
-    globalState,
-    commandState,
+    useEnvState,
+    useT,
   },
   actions: {
     canvasActions,
     globalActions,
     commandActions,
-    emitContainCanvasItem,
-  },
-  utils: {
-    getRenderBbox,
   },
   config: {
     API_BASE_URL,

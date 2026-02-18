@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { globalActions, globalState } from "../store/globalStore";
 
 type Direction = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
@@ -58,10 +59,11 @@ export const WindowResizer: React.FC = () => {
         setIsResizing(false);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
+        globalActions.setWindowResizing(false);
 
         // If mouse is not hovering the resizer anymore (moved out during drag),
         // we should restore the ignore mouse events state
-        if (!isHoveringRef.current) {
+        if (!isHoveringRef.current && globalState.mouseThrough) {
           window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
         }
       }
@@ -96,6 +98,10 @@ export const WindowResizer: React.FC = () => {
       startBounds,
     };
     setIsResizing(true);
+    globalActions.setWindowResizing(true);
+    if (globalState.mouseThrough) {
+      window.electron?.setIgnoreMouseEvents?.(false);
+    }
 
     let cursor = "default";
     if (direction === "nw" || direction === "se") cursor = "nwse-resize";

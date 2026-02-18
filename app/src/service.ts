@@ -203,12 +203,32 @@ export async function loadCommandScript(
 ): Promise<string> {
   const params = entry ? `?entry=${encodeURIComponent(entry)}` : "";
   const res = await fetch(
-    `${API_BASE_URL}/api/commands/${encodeURIComponent(folder)}/script${params}`
+    `${API_BASE_URL}/api/commands/${encodeURIComponent(folder)}/script${params}`,
+    { cache: "no-store" },
   );
   if (!res.ok) {
     throw new Error(`Failed to load script: ${res.status}`);
   }
   return res.text();
+}
+
+export async function deleteExternalCommand(
+  folder: string,
+  entry: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const result = await localApi<{ success?: boolean; error?: string }>(
+      `/api/commands/${encodeURIComponent(folder)}?entry=${encodeURIComponent(entry)}`,
+      undefined,
+      { method: "DELETE" },
+    );
+    if (result && result.success) {
+      return { success: true };
+    }
+    return { success: false, error: result?.error || "Delete failed" };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export type RequestOptions = {

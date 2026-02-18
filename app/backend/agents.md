@@ -10,6 +10,8 @@
   - Canvas 临时图片存放在 `canvases/<name>/assets`，通过 `/api/assets/:canvasName/:filename` 提供访问。
   - 临时图片上传与下载时会计算 dominant color 与 tone，并回传给前端。
   - 启动时清理画布中无效的 `assets` 引用并删除未被引用的文件。
+  - 启动时将内置命令脚本写入 storage 的 `commands` 目录。
+  - 提供命令脚本 API（列出、读取、删除），所有文件操作使用 `fileLock` 防并发。
   - **并发控制**：通过 `fileLock.ts` 的 `KeyedMutex`/`lockedFs` 将本地文件读写串行化。
 - **Image Analysis (`imageAnalysis.ts`)**
   - 计算 dominant color 与 tone 时忽略透明像素。

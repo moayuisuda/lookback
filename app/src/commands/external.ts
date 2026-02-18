@@ -1,6 +1,8 @@
 import type { CommandContext, CommandDefinition } from './types';
 import { loadCommandScript } from '../service';
 import { transform } from 'sucrase';
+import type { I18nDict, Locale } from '../../shared/i18n/types';
+import { registerI18n } from '../../shared/i18n/t';
 
 export type ExternalCommandRecord = {
   folder: string;
@@ -11,11 +13,15 @@ export type ExternalCommandRecord = {
 type CommandModule = {
   run?: (context: CommandContext, helpers: CommandHelpers) => Promise<void> | void;
   ui?: React.FC<{ context: CommandContext }>;
+  i18n?: CommandI18n;
   config?: {
     id: string;
     title?: string;
+    titleKey?: string;
     description?: string;
+    descriptionKey?: string;
     keywords?: string[];
+    i18n?: CommandI18n;
   };
 };
 
@@ -23,9 +29,9 @@ type CommandHelpers = {
   openExternal: (url: string) => Promise<void>;
   copyText: (text: string) => Promise<void>;
   toast: (message: string) => void;
-  getInput: (fieldId: string, fallback?: string) => string;
-  getInputs: () => Record<string, string>;
 };
+
+type CommandI18n = Partial<Record<Locale, I18nDict>>;
 
 const copyText = async (text: string) => {
   if (navigator.clipboard?.writeText) {
@@ -44,8 +50,7 @@ const copyText = async (text: string) => {
 };
 
 const buildHelpers = (
-  context: CommandContext,
-  commandId: string
+  context: CommandContext
 ): CommandHelpers => ({
   openExternal: async (url: string) => {
     const target = url.trim();
@@ -65,16 +70,6 @@ const buildHelpers = (
     const text = message.trim();
     if (!text) return;
     context.actions.globalActions.pushToast({ key: 'toast.command.externalMessage', params: { message: text } });
-  },
-  getInput: (fieldId: string, fallback?: string) => {
-    if (!fieldId.trim()) return fallback ?? '';
-    const inputs = context.state.commandState.commandInputs[commandId] ?? {};
-    const value = inputs[fieldId];
-    return typeof value === 'string' ? value : fallback ?? '';
-  },
-  getInputs: () => {
-    const inputs = context.state.commandState.commandInputs[commandId] ?? {};
-    return { ...inputs };
   },
 });
 
@@ -101,19 +96,12 @@ const loadModule = async (
   }
 };
 
-// Cache for loaded modules to avoid reloading script on every run/render
-// This is a simple in-memory cache.
-const moduleCache = new Map<string, CommandModule>();
+const resolveModuleI18n = (module?: CommandModule): CommandI18n | undefined =>
+  module?.i18n ?? module?.config?.i18n;
 
-const getOrLoadModule = async (
-  record: ExternalCommandRecord,
-): Promise<CommandModule> => {
-  if (moduleCache.has(record.id)) {
-    return moduleCache.get(record.id)!;
-  }
-  const module = await loadModule(record);
-  moduleCache.set(record.id, module);
-  return module;
+const hasI18nKey = (i18n: CommandI18n | undefined, key?: string): boolean => {
+  if (!key) return false;
+  return Boolean(i18n?.en?.[key] || i18n?.zh?.[key]);
 };
 
 export const mapExternalCommands = (
@@ -123,7 +111,7 @@ export const mapExternalCommands = (
     payload.map(async (item) => {
       let module: CommandModule | undefined;
       try {
-        module = await getOrLoadModule(item);
+        module = await loadModule(item);
       } catch {
         return {
           id: item.id,
@@ -133,24 +121,38 @@ export const mapExternalCommands = (
       if (!module?.config || !module.config.id) {
         return {
           id: item.id,
+          external: {
+            folder: item.folder,
+            entry: item.entry,
+          },
         };
       }
 
       const config = module.config;
       const hasRun = typeof module?.run === 'function';
+      const i18n = resolveModuleI18n(module);
+      if (i18n) registerI18n(i18n);
+      const titleKey = config.titleKey ?? (hasI18nKey(i18n, config.title) ? config.title : undefined);
+      const descriptionKey = config.descriptionKey ?? (hasI18nKey(i18n, config.description) ? config.description : undefined);
 
       return {
         id: config.id,
+        titleKey,
         title: config.title,
+        descriptionKey,
         description: config.description,
         keywords: config.keywords,
         ui: module?.ui,
+        external: {
+          folder: item.folder,
+          entry: item.entry,
+        },
         run: hasRun
           ? async (ctx: CommandContext) => {
               try {
-                const mod = await getOrLoadModule(item);
+                const mod = await loadModule(item);
                 if (typeof mod.run === 'function') {
-                  await mod.run(ctx, buildHelpers(ctx, item.id));
+                  await mod.run(ctx, buildHelpers(ctx));
                 }
               } catch (error) {
                 void error;

@@ -7,8 +7,23 @@ const dictionaries: Record<Locale, I18nDict> = {
   zh,
 };
 
+export function registerI18n(payload: Partial<Record<Locale, I18nDict>>): void {
+  const locales = Object.keys(dictionaries) as Locale[];
+  locales.forEach((locale) => {
+    const extra = payload[locale];
+    if (!extra) return;
+    dictionaries[locale] = {
+      ...dictionaries[locale],
+      ...extra,
+    };
+  });
+}
+
 export function t(locale: Locale, key: I18nKey, params?: I18nParams): string {
   const template = dictionaries[locale][key];
+  if (typeof template !== 'string' || !template) {
+    return key;
+  }
   if (!params) return template;
   return template.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (match, name) => {
     const value = params[name];

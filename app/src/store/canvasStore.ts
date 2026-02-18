@@ -1,4 +1,4 @@
-import { proxy } from 'valtio';
+import { proxy, snapshot } from "valtio";
 import {
   settingStorage,
   getSettingsSnapshot,
@@ -8,8 +8,8 @@ import {
   saveCanvasViewport,
   localApi,
   type CanvasViewport,
-} from '../service';
-import { debounce } from 'radash';
+} from "../service";
+import { debounce } from "radash";
 
 export interface ImageMeta {
   id: string;
@@ -26,59 +26,61 @@ export interface ImageMeta {
 }
 
 export interface CanvasText {
-  type: 'text';
-  canvasId: string;
+  type: "text";
+  itemId: string;
   x: number;
   y: number;
   rotation: number;
   scale: number;
-  scaleX?: number;
   text: string;
   fontSize: number;
   fill: string;
   width?: number;
   height?: number;
   align?: string;
+  isSelected?: boolean;
+  isAutoEdit?: boolean;
 }
 
 export interface CanvasImage extends ImageMeta {
-  type: 'image';
-  canvasId: string;
+  type: "image";
+  itemId: string;
   x: number;
   y: number;
   scale: number;
-  scaleX?: number;
-  scaleY?: number;
+  flipX?: boolean;
   rotation: number;
   width: number;
   height: number;
   grayscale?: boolean; // Deprecated
   filters?: string[];
+  isSelected?: boolean;
 }
+
+const GROUP_GAP = 40;
 
 export type CanvasItem = CanvasImage | CanvasText;
 
 export interface CanvasPersistedItem {
-  type: 'image' | 'text';
-  kind?: 'ref' | 'temp';
-  canvasId: string;
+  type: "image" | "text";
+  kind?: "ref" | "temp";
+  itemId: string;
   x: number;
   y: number;
   rotation: number;
   scale: number;
-  scaleX?: number;
-  scaleY?: number;
   width?: number;
   height?: number;
-  
+
   // Image specific
+  flipX?: boolean;
   imageId?: string;
   imagePath?: string;
   dominantColor?: string | null;
   tone?: string | null;
   grayscale?: boolean; // Deprecated
   filters?: string[];
-  
+
   // Temp image specific
   // name, localPath removed
   pageUrl?: string;
@@ -165,15 +167,16 @@ interface CanvasStoreState {
   isCanvasToolbarExpanded: boolean;
 
   isClearModalOpen: boolean;
-  selectedIds: Set<string>;
   primaryId: string | null;
-  autoEditId: string | null;
   dimensions: { width: number; height: number };
   isSpaceDown: boolean;
   multiSelectUnion: CanvasSelectionRect | null;
   selectionBox: CanvasSelectionBoxState;
+  selectionMode: "select" | "zoom";
   currentCanvasName: string;
 }
+
+import { packRectangles } from "../utils/packer";
 
 const DEFAULT_CANVAS_VIEWPORT: CanvasViewport = {
   x: 0,
@@ -192,9 +195,7 @@ export const canvasState = proxy<CanvasStoreState>({
   showMinimap: true,
   isCanvasToolbarExpanded: true,
   isClearModalOpen: false,
-  selectedIds: new Set<string>(),
   primaryId: null,
-  autoEditId: null,
   dimensions: { width: 0, height: 0 },
   isSpaceDown: false,
   multiSelectUnion: null,
@@ -202,35 +203,21 @@ export const canvasState = proxy<CanvasStoreState>({
     start: null,
     current: null,
   },
+  selectionMode: "select",
   currentCanvasName: "Default",
 });
-
-const cloneCanvasItem = (item: CanvasItem): CanvasItem => {
-  if (item.type === 'text') {
-    return { ...item };
-  }
-  const img = item as CanvasImage;
-  return {
-    ...img,
-    tags: [...img.tags],
-  };
-};
-
-const cloneCanvasItems = (items: CanvasItem[]): CanvasItem[] =>
-  items.map(cloneCanvasItem);
 
 const persistCanvasItems = async (items: CanvasItem[]) => {
   try {
     const normalized: CanvasPersistedItem[] = items.map((item) => {
-      if (item.type === 'text') {
+      if (item.type === "text") {
         return {
-          type: 'text',
-          canvasId: item.canvasId,
+          type: "text",
+          itemId: item.itemId,
           x: item.x,
           y: item.y,
           rotation: item.rotation,
           scale: item.scale,
-          scaleX: item.scaleX,
           text: item.text,
           fontSize: item.fontSize,
           fill: item.fill,
@@ -241,21 +228,23 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
       }
 
       const img = item as CanvasImage;
-      const kind: CanvasPersistedItem['kind'] = img.imagePath.startsWith('assets/')
-        ? 'temp'
-        : 'ref';
+      const kind: CanvasPersistedItem["kind"] = img.imagePath.startsWith(
+        "assets/",
+      )
+        ? "temp"
+        : "ref";
 
-      if (kind === 'temp') {
+      console.log({ img });
+      if (kind === "temp") {
         return {
-          type: 'image',
-          kind: 'temp',
-          canvasId: img.canvasId,
+          type: "image",
+          kind: "temp",
+          itemId: img.itemId,
           x: img.x,
           y: img.y,
           rotation: img.rotation,
           scale: img.scale,
-          scaleX: img.scaleX,
-          scaleY: img.scaleY,
+          flipX: img.flipX,
           width: img.width,
           height: img.height,
           grayscale: img.grayscale,
@@ -264,33 +253,32 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
           tags: [...img.tags],
           createdAt: img.createdAt,
           dominantColor:
-            typeof img.dominantColor === 'string' ? img.dominantColor : null,
-          tone: typeof img.tone === 'string' ? img.tone : null,
+            typeof img.dominantColor === "string" ? img.dominantColor : null,
+          tone: typeof img.tone === "string" ? img.tone : null,
         };
       }
 
       return {
-        type: 'image',
-        kind: 'ref',
-        canvasId: img.canvasId,
+        type: "image",
+        kind: "ref",
+        itemId: img.itemId,
         x: img.x,
         y: img.y,
         rotation: img.rotation,
         scale: img.scale,
-        scaleX: img.scaleX,
-        scaleY: img.scaleY,
+        flipX: img.flipX,
         width: img.width,
         height: img.height,
         grayscale: img.grayscale,
         imageId: img.id,
         imagePath: img.imagePath,
         dominantColor:
-          typeof img.dominantColor === 'string' ? img.dominantColor : null,
-        tone: typeof img.tone === 'string' ? img.tone : null,
+          typeof img.dominantColor === "string" ? img.dominantColor : null,
+        tone: typeof img.tone === "string" ? img.tone : null,
       };
     });
 
-    await localApi<{ success?: boolean }>('/api/save-canvas', {
+    await localApi<{ success?: boolean }>("/api/save-canvas", {
       images: normalized,
       canvasName: canvasState.currentCanvasName,
     });
@@ -307,7 +295,10 @@ const persistCanvasViewport = async (viewport: CanvasViewport) => {
   }
 };
 
-const debouncedPersistCanvasViewport = debounce({ delay: 500 }, persistCanvasViewport);
+const debouncedPersistCanvasViewport = debounce(
+  { delay: 500 },
+  persistCanvasViewport,
+);
 
 export const canvasActions = {
   hydrateSettings: async () => {
@@ -315,17 +306,17 @@ export const canvasActions = {
       const settings = await getSettingsSnapshot();
       const rawCanvasFilters = readSetting<unknown>(
         settings,
-        'canvasFilters',
+        "canvasFilters",
         canvasState.canvasFilters,
       );
       const rawShowMinimap = readSetting<unknown>(
         settings,
-        'showMinimap',
+        "showMinimap",
         canvasState.showMinimap,
       );
       const rawIsCanvasToolbarExpanded = readSetting<unknown>(
         settings,
-        'isCanvasToolbarExpanded',
+        "isCanvasToolbarExpanded",
         canvasState.isCanvasToolbarExpanded,
       );
 
@@ -333,11 +324,11 @@ export const canvasActions = {
         canvasState.canvasFilters = rawCanvasFilters as string[];
       }
 
-      if (typeof rawShowMinimap === 'boolean') {
+      if (typeof rawShowMinimap === "boolean") {
         canvasState.showMinimap = rawShowMinimap;
       }
 
-      if (typeof rawIsCanvasToolbarExpanded === 'boolean') {
+      if (typeof rawIsCanvasToolbarExpanded === "boolean") {
         canvasState.isCanvasToolbarExpanded = rawIsCanvasToolbarExpanded;
       }
     } catch (error) {
@@ -353,10 +344,10 @@ export const canvasActions = {
   initCanvas: async (): Promise<void> => {
     try {
       const lastActive = await settingStorage.get<string>({
-        key: 'lastActiveCanvas',
-        fallback: 'Default',
+        key: "lastActiveCanvas",
+        fallback: "Default",
       });
-        canvasState.currentCanvasName = lastActive;
+      canvasState.currentCanvasName = lastActive;
 
       const [itemsRaw, viewportRaw] = await Promise.all([
         loadCanvasImages<CanvasPersistedItem[]>(lastActive).catch(
@@ -369,37 +360,38 @@ export const canvasActions = {
       const reconstructed: CanvasItem[] = [];
 
       persisted.forEach((item) => {
-        if (!item || typeof item !== 'object') return;
+        if (!item || typeof item !== "object") return;
 
-        if (item.type === 'text') {
+        if (item.type === "text") {
           reconstructed.push({
-            type: 'text',
-            canvasId: item.canvasId,
+            type: "text",
+            itemId: item.itemId,
             x: item.x,
             y: item.y,
             rotation: item.rotation,
             scale: item.scale,
-            scaleX: item.scaleX,
-            text: item.text || '',
+            text: item.text || "",
             fontSize: item.fontSize || 24,
-            fill: item.fill || '#000000',
+            fill: item.fill || "#000000",
             width: item.width || 0,
             height: item.height,
             align: item.align,
+            isSelected: false,
+            isAutoEdit: false,
           });
           return;
         }
 
-        if (item.kind === 'temp') {
+        if (item.kind === "temp") {
           const temp = item;
           if (!temp.imagePath) return;
           const rawName = temp.imagePath.split(/[\\/]/).pop() || temp.imagePath;
-          const dot = rawName.lastIndexOf('.');
+          const dot = rawName.lastIndexOf(".");
           const filename = dot > 0 ? rawName.slice(0, dot) : rawName;
 
           const img: CanvasImage = {
-            type: 'image',
-            id: `temp_${temp.canvasId}`,
+            type: "image",
+            id: `temp_${temp.itemId}`,
             filename,
             imagePath: temp.imagePath,
             pageUrl: temp.pageUrl,
@@ -408,70 +400,72 @@ export const canvasActions = {
             dominantColor: temp.dominantColor ?? null,
             tone: temp.tone ?? null,
             hasVector: false,
-            canvasId: temp.canvasId,
+            itemId: temp.itemId,
             x: temp.x,
             y: temp.y,
             scale: temp.scale,
-            scaleX: temp.scaleX,
-            scaleY: temp.scaleY,
+            flipX: temp.flipX,
             rotation: temp.rotation,
             width: temp.width!,
             height: temp.height!,
             grayscale: temp.grayscale,
+            isSelected: false,
           };
           reconstructed.push(img);
           return;
         }
 
-        if (item.kind === 'ref' || (!item.kind && item.type === 'image')) {
+        if (item.kind === "ref" || (!item.kind && item.type === "image")) {
           const ref = item;
           if (!ref.imageId) return;
 
           // For ref images, we construct metadata from persisted info
           // This decouples canvas restoration from gallery state
-          let filename = 'image';
+          let filename = "image";
           if (ref.imagePath) {
             const rawName = ref.imagePath.split(/[\\/]/).pop() || ref.imagePath;
-            const dot = rawName.lastIndexOf('.');
+            const dot = rawName.lastIndexOf(".");
             filename = dot > 0 ? rawName.slice(0, dot) : rawName;
           }
 
           const img: CanvasImage = {
             id: ref.imageId,
             filename,
-            imagePath: ref.imagePath || '', // Should ideally have imagePath
+            imagePath: ref.imagePath || "", // Should ideally have imagePath
             tags: [], // Tags not persisted for ref images currently
             createdAt: 0, // CreatedAt not persisted for ref images currently
             dominantColor: ref.dominantColor,
             tone: ref.tone,
             hasVector: false,
-            type: 'image',
-            canvasId: ref.canvasId,
+            type: "image",
+            itemId: ref.itemId,
             x: ref.x,
             y: ref.y,
             scale: ref.scale,
-            scaleX: ref.scaleX,
-            scaleY: ref.scaleY,
+            flipX: ref.flipX,
             rotation: ref.rotation,
             width: ref.width!,
             height: ref.height!,
             grayscale: ref.grayscale,
+            isSelected: false,
           };
           reconstructed.push(img);
         }
       });
 
       canvasState.canvasItems = reconstructed;
-      canvasState.canvasHistory = [cloneCanvasItems(reconstructed)];
+      canvasState.canvasHistory = [
+        snapshot(canvasState).canvasItems as CanvasItem[],
+      ];
       canvasState.canvasHistoryIndex = 0;
 
       if (
         viewportRaw &&
-        typeof viewportRaw.x === 'number' &&
-        typeof viewportRaw.y === 'number' &&
-        typeof viewportRaw.width === 'number' &&
-        typeof viewportRaw.height === 'number' &&
-        typeof viewportRaw.scale === 'number'
+        typeof viewportRaw.x === "number" &&
+        typeof viewportRaw.y === "number" &&
+        typeof viewportRaw.width === "number" &&
+        typeof viewportRaw.height === "number" &&
+        typeof viewportRaw.scale === "number"
       ) {
         canvasState.canvasViewport = { ...viewportRaw };
       }
@@ -495,7 +489,7 @@ export const canvasActions = {
     }
 
     // Update storage
-    await settingStorage.set('lastActiveCanvas', name);
+    await settingStorage.set("lastActiveCanvas", name);
 
     // Clear state
     canvasState.canvasItems = [];
@@ -507,19 +501,21 @@ export const canvasActions = {
   },
 
   commitCanvasChange: () => {
-    const snapshot = cloneCanvasItems(canvasState.canvasItems);
+    const snap = snapshot(canvasState);
+    const nextSnapshot = snap.canvasItems as CanvasItem[];
     const nextIndex = canvasState.canvasHistoryIndex + 1;
 
     const current =
       canvasState.canvasHistoryIndex >= 0
-        ? canvasState.canvasHistory[canvasState.canvasHistoryIndex]
+        ? snap.canvasHistory[canvasState.canvasHistoryIndex]
         : null;
-    if (current && JSON.stringify(current) === JSON.stringify(snapshot)) {
+
+    if (current && current === nextSnapshot) {
       return;
     }
 
     canvasState.canvasHistory = canvasState.canvasHistory.slice(0, nextIndex);
-    canvasState.canvasHistory.push(snapshot);
+    canvasState.canvasHistory.push(nextSnapshot);
     canvasState.canvasHistoryIndex = nextIndex;
 
     if (canvasState.canvasHistory.length > 50) {
@@ -533,9 +529,10 @@ export const canvasActions = {
   undoCanvas: () => {
     if (canvasState.canvasHistoryIndex > 0) {
       canvasState.canvasHistoryIndex--;
-      canvasState.canvasItems = cloneCanvasItems(
-        canvasState.canvasHistory[canvasState.canvasHistoryIndex],
-      );
+      const snap = snapshot(canvasState);
+      canvasState.canvasItems = JSON.parse(
+        JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
+      ) as CanvasItem[];
       void persistCanvasItems(canvasState.canvasItems);
     }
   },
@@ -543,26 +540,28 @@ export const canvasActions = {
   redoCanvas: () => {
     if (canvasState.canvasHistoryIndex < canvasState.canvasHistory.length - 1) {
       canvasState.canvasHistoryIndex++;
-      canvasState.canvasItems = cloneCanvasItems(
-        canvasState.canvasHistory[canvasState.canvasHistoryIndex],
-      );
+      const snap = snapshot(canvasState);
+      canvasState.canvasItems = snap.canvasHistory[
+        canvasState.canvasHistoryIndex
+      ] as CanvasItem[];
       void persistCanvasItems(canvasState.canvasItems);
     }
   },
 
-  addTextToCanvas: (x: number, y: number) => {
+  addTextToCanvas: (x: number, y: number, fontSize?: number) => {
     const id = `text_${Date.now()}`;
     canvasState.canvasItems.push({
-      type: 'text',
-      canvasId: id,
+      type: "text",
+      itemId: id,
       x,
       y,
       rotation: 0,
       scale: 1,
-      scaleX: 1,
-      text: 'Double click to edit',
-      fontSize: 96,
-      fill: '#ffffff',
+      text: "Double click to edit",
+      fontSize: fontSize || 96,
+      fill: "#ffffff",
+      isSelected: false,
+      isAutoEdit: false,
     });
     canvasActions.commitCanvasChange();
     return id;
@@ -572,7 +571,7 @@ export const canvasActions = {
     let targetX = x;
     let targetY = y;
 
-    if (typeof targetX !== 'number' || typeof targetY !== 'number') {
+    if (typeof targetX !== "number" || typeof targetY !== "number") {
       const index = canvasState.canvasItems.length;
       const columns = 4;
       const spacingX = 260;
@@ -586,41 +585,111 @@ export const canvasActions = {
       targetY = baseY + row * spacingY;
     }
 
-    const canvasId = `img_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const itemId = `img_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     canvasState.canvasItems.push({
-      type: 'image',
+      type: "image",
       ...image,
-      canvasId,
+      itemId,
       x: targetX,
       y: targetY,
       scale: 1,
       rotation: 0,
+      isSelected: false,
     });
     canvasActions.commitCanvasChange();
-    return canvasId;
+    return itemId;
   },
 
-  updateCanvasImageTransient: (canvasId: string, props: Partial<CanvasItem>) => {
+  addManyImagesToCanvasCentered: (
+    images: ImageMeta[],
+    center: { x: number; y: number },
+  ) => {
+    if (images.length === 0) return [];
+
+    const gap = GROUP_GAP;
+    const rects = images.map((image, index) => {
+      const rawW = image.width || 0;
+      const rawH = image.height || 0;
+      const bbox = getRenderBbox(rawW, rawH, 0);
+      return {
+        id: String(index),
+        w: bbox.width,
+        h: bbox.height,
+        offsetX: bbox.offsetX,
+        offsetY: bbox.offsetY,
+        x: 0,
+        y: 0,
+      };
+    });
+
+    packRectangles(rects, gap);
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    rects.forEach((r) => {
+      const x = r.x ?? 0;
+      const y = r.y ?? 0;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + r.w);
+      maxY = Math.max(maxY, y + r.h);
+    });
+
+    const layoutCenterX =
+      Number.isFinite(minX) && Number.isFinite(maxX) ? (minX + maxX) / 2 : 0;
+    const layoutCenterY =
+      Number.isFinite(minY) && Number.isFinite(maxY) ? (minY + maxY) / 2 : 0;
+
+    const dx = center.x - layoutCenterX;
+    const dy = center.y - layoutCenterY;
+
+    const now = Date.now();
+    const ids: string[] = [];
+    images.forEach((image, index) => {
+      const r = rects[index];
+      const x = (r.x ?? 0) - r.offsetX + dx;
+      const y = (r.y ?? 0) - r.offsetY + dy;
+      const itemId = `img_${now}_${Math.random().toString(16).slice(2)}_${index}`;
+      canvasState.canvasItems.push({
+        type: "image",
+        ...image,
+        itemId,
+        x,
+        y,
+        scale: 1,
+        rotation: 0,
+        isSelected: false,
+      });
+      ids.push(itemId);
+    });
+
+    canvasActions.commitCanvasChange();
+    return ids;
+  },
+
+  updateCanvasImageTransient: (itemId: string, props: Partial<CanvasItem>) => {
     const index = canvasState.canvasItems.findIndex(
-      (img) => img.canvasId === canvasId,
+      (img) => img.itemId === itemId,
     );
     if (index !== -1) {
       Object.assign(canvasState.canvasItems[index], props);
     }
   },
 
-  updateCanvasImageSilent: (canvasId: string, props: Partial<CanvasItem>) => {
+  updateCanvasImageSilent: (itemId: string, props: Partial<CanvasItem>) => {
     const index = canvasState.canvasItems.findIndex(
-      (img) => img.canvasId === canvasId,
+      (img) => img.itemId === itemId,
     );
     if (index !== -1) {
       Object.assign(canvasState.canvasItems[index], props);
     }
   },
 
-  updateCanvasImage: (canvasId: string, props: Partial<CanvasItem>) => {
+  updateCanvasImage: (itemId: string, props: Partial<CanvasItem>) => {
     const index = canvasState.canvasItems.findIndex(
-      (img) => img.canvasId === canvasId,
+      (img) => img.itemId === itemId,
     );
     if (index !== -1) {
       Object.assign(canvasState.canvasItems[index], props);
@@ -628,9 +697,9 @@ export const canvasActions = {
     }
   },
 
-  removeFromCanvas: (canvasId: string) => {
+  removeFromCanvas: (itemId: string) => {
     const index = canvasState.canvasItems.findIndex(
-      (img) => img.canvasId === canvasId,
+      (img) => img.itemId === itemId,
     );
     if (index !== -1) {
       canvasState.canvasItems.splice(index, 1);
@@ -642,7 +711,7 @@ export const canvasActions = {
     if (!canvasIds.length) return;
     const idSet = new Set(canvasIds);
     canvasState.canvasItems = canvasState.canvasItems.filter(
-      (img) => !idSet.has(img.canvasId),
+      (img) => !idSet.has(img.itemId),
     );
     canvasActions.commitCanvasChange();
   },
@@ -650,7 +719,7 @@ export const canvasActions = {
   removeImageFromCanvas: (imageId: string) => {
     const prevLen = canvasState.canvasItems.length;
     canvasState.canvasItems = canvasState.canvasItems.filter((img) => {
-      if (img.type === 'text') return true;
+      if (img.type === "text") return true;
       return img.id !== imageId;
     });
     if (canvasState.canvasItems.length !== prevLen) {
@@ -664,7 +733,7 @@ export const canvasActions = {
   ) => {
     if (canvasState.canvasItems.length === 0) return;
 
-    const gap = 60;
+    const gap = GROUP_GAP;
     const startX = options?.startX ?? 100;
     const startY = options?.startY ?? 100;
 
@@ -672,187 +741,39 @@ export const canvasActions = {
       .map((item, index) => ({ item, index }))
       .filter(
         (entry): entry is { item: CanvasImage; index: number } =>
-          entry.item.type === 'image' &&
+          entry.item.type === "image" &&
           (!targetIds ||
             targetIds.length === 0 ||
-            targetIds.includes(entry.item.canvasId)),
+            targetIds.includes(entry.item.itemId)),
       );
 
-    const rects = imageEntries.map(({ item, index }) => {
+    const rects = imageEntries.map(({ item }) => {
       const scale = item.scale || 1;
-      const rawW = item.width * scale * Math.abs(item.scaleX || 1);
-      const rawH = item.height * scale * Math.abs(item.scaleY || 1);
+      const rawW = item.width * scale;
+      const rawH = item.height * scale;
       const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
       return {
-        item,
-        index,
+        id: item.itemId,
         w: bbox.width,
         h: bbox.height,
         offsetX: bbox.offsetX,
         offsetY: bbox.offsetY,
+        x: 0,
+        y: 0,
       };
     });
     if (rects.length === 0) return;
 
-    let totalArea = 0;
-    let totalWidth = 0;
+    // Use bin packing algorithm for compact layout
+    packRectangles(rects, gap);
 
-    rects.forEach((r) => {
-      totalArea += r.w * r.h;
-      totalWidth += r.w;
-    });
-
-    const isLocalLayout = Array.isArray(targetIds) && targetIds.length > 0;
-    
-    const sortedWidths = rects.map((r) => r.w).sort((a, b) => a - b);
-    const medianRectWidth =
-      sortedWidths.length > 0
-        ? sortedWidths[Math.floor(sortedWidths.length / 2)]
-        : 250;
-    // Use median width as the effective width to calculate columns, 
-    // so that a single very large image doesn't force a single column layout.
-    const averageRectWidth = rects.length > 0 ? totalWidth / rects.length : 250;
-    const effectiveRectWidth = medianRectWidth > 0 ? medianRectWidth : averageRectWidth;
-
-    const baseSide =
-      totalArea > 0
-        ? Math.sqrt(totalArea)
-        : Math.sqrt(effectiveRectWidth * effectiveRectWidth * rects.length);
-
-    const viewportScale =
-      typeof canvasState.canvasViewport.scale === 'number' &&
-      canvasState.canvasViewport.scale > 0
-        ? canvasState.canvasViewport.scale
-        : 1;
-    const viewportWidth =
-      typeof canvasState.dimensions.width === 'number'
-        ? canvasState.dimensions.width / viewportScale
-        : 0;
-    const viewportHeight =
-      typeof canvasState.dimensions.height === 'number'
-        ? canvasState.dimensions.height / viewportScale
-        : 0;
-
-    let targetAspect = 1;
-    if (!isLocalLayout && viewportWidth > 0 && viewportHeight > 0) {
-      targetAspect = viewportWidth / viewportHeight;
-    }
-
-    // We want the final layout aspect ratio to match the viewport aspect ratio.
-    // Since the canvas is zoomable, we don't care about absolute width overflow,
-    // only about the shape (aspect ratio).
-    const maxColumns = Math.max(1, rects.length);
-
-    // Initial guess based on area to get a square-ish layout if targetAspect is 1
-    const baseColumns = Math.max(
-      1,
-      Math.round(baseSide * Math.sqrt(targetAspect) / effectiveRectWidth),
-    );
-
-    const sortedRects = rects.slice().sort((a, b) => {
-      if (b.h !== a.h) return b.h - a.h;
-      return a.index - b.index;
-    });
-
-    const findShortestColumnIndex = (heights: number[]) => {
-      let bestIndex = 0;
-      let bestHeight = heights[0] ?? startY;
-      for (let i = 1; i < heights.length; i++) {
-        const height = heights[i] ?? startY;
-        if (height < bestHeight) {
-          bestHeight = height;
-          bestIndex = i;
-        }
-      }
-      return bestIndex;
-    };
-
-    const simulateLayout = (columnCount: number) => {
-      const columnHeights = new Array(columnCount).fill(startY);
-      const columnMaxWidths = new Array(columnCount).fill(0);
-
-      sortedRects.forEach((r) => {
-        const colIndex = findShortestColumnIndex(columnHeights);
-        columnMaxWidths[colIndex] = Math.max(columnMaxWidths[colIndex], r.w);
-        columnHeights[colIndex] += r.h + gap;
-      });
-
-      const width =
-        columnMaxWidths.reduce((sum, w) => sum + (w > 0 ? w : 0), 0) +
-        gap * Math.max(0, columnCount - 1);
-      const height = Math.max(...columnHeights) - startY;
-      return { width, height };
-    };
-
-    const scoreColumns = (columnCount: number) => {
-      const metrics = simulateLayout(columnCount);
-      const currentAspect =
-        metrics.height > 0 ? metrics.width / metrics.height : Number.POSITIVE_INFINITY;
-      const safeCurrentAspect = currentAspect > 0 ? currentAspect : 1e-6;
-      const safeTargetAspect = targetAspect > 0 ? targetAspect : 1;
-      
-      // Score based purely on how close the aspect ratio is to the target
-      const aspectScore = Math.abs(
-        Math.log(safeCurrentAspect / safeTargetAspect),
-      );
-
-      return { columns: columnCount, score: aspectScore };
-    };
-
-    const isBetterCandidate = (
-      candidate: { columns: number; score: number },
-      currentBest: { columns: number; score: number },
-    ) => {
-      if (candidate.score < currentBest.score - 1e-6) return true;
-      if (Math.abs(candidate.score - currentBest.score) > 1e-6) return false;
-      // If scores are equal, prefer the one closer to the base column count (stability)
-      return (
-        Math.abs(candidate.columns - baseColumns) <
-        Math.abs(currentBest.columns - baseColumns)
-      );
-    };
-
-    let columns = baseColumns;
-    if (maxColumns > 1) {
-      let best = scoreColumns(baseColumns);
-      for (let candidate = 1; candidate <= maxColumns; candidate++) {
-        const scored = scoreColumns(candidate);
-        if (isBetterCandidate(scored, best)) best = scored;
-      }
-      columns = best.columns;
-    }
-
-    const columnHeights = new Array(columns).fill(startY);
-    const columnMaxWidths = new Array(columns).fill(0);
-    const assignedColById = new Map<string, number>();
-
-    sortedRects.forEach((r) => {
-      const colIndex = findShortestColumnIndex(columnHeights);
-
-      r.item.y = columnHeights[colIndex] - r.offsetY;
-      assignedColById.set(r.item.canvasId, colIndex);
-
-      columnMaxWidths[colIndex] = Math.max(columnMaxWidths[colIndex], r.w);
-      columnHeights[colIndex] += r.h + gap;
-    });
-
-    const columnXs: number[] = [];
-    let currentX = startX;
-    for (let i = 0; i < columns; i++) {
-      columnXs[i] = currentX;
-      if (columnMaxWidths[i] > 0) {
-        currentX += columnMaxWidths[i] + gap;
-      }
-    }
-
-    const rectMap = new Map(rects.map((r) => [r.item.canvasId, r]));
+    const rectMap = new Map(rects.map((r) => [r.id, r]));
 
     canvasState.canvasItems.forEach((item) => {
-      const colIndex = assignedColById.get(item.canvasId);
-      if (typeof colIndex === 'number') {
-        const r = rectMap.get(item.canvasId);
-        const offsetX = r ? r.offsetX : 0;
-        item.x = columnXs[colIndex] - offsetX;
+      const r = rectMap.get(item.itemId);
+      if (r && typeof r.x === "number" && typeof r.y === "number") {
+        item.x = r.x + startX - r.offsetX;
+        item.y = r.y + startY - r.offsetY;
       }
     });
 
@@ -866,9 +787,9 @@ export const canvasActions = {
     canvasActions.commitCanvasChange();
   },
 
-  bringToFront: (canvasId: string) => {
+  bringToFront: (itemId: string) => {
     const index = canvasState.canvasItems.findIndex(
-      (img) => img.canvasId === canvasId,
+      (img) => img.itemId === itemId,
     );
     if (index !== -1 && index !== canvasState.canvasItems.length - 1) {
       const [img] = canvasState.canvasItems.splice(index, 1);
@@ -879,23 +800,102 @@ export const canvasActions = {
 
   setCanvasFilters: (filters: string[]) => {
     canvasState.canvasFilters = filters;
-    void settingStorage.set('canvasFilters', filters);
+    void settingStorage.set("canvasFilters", filters);
   },
 
   toggleCanvasToolbarExpanded: () => {
     canvasState.isCanvasToolbarExpanded = !canvasState.isCanvasToolbarExpanded;
     void settingStorage.set(
-      'isCanvasToolbarExpanded',
+      "isCanvasToolbarExpanded",
       canvasState.isCanvasToolbarExpanded,
     );
   },
 
   toggleMinimap: () => {
     canvasState.showMinimap = !canvasState.showMinimap;
-    void settingStorage.set('showMinimap', canvasState.showMinimap);
+    void settingStorage.set("showMinimap", canvasState.showMinimap);
   },
 
   cancelPendingSave: () => {
     debouncedPersistCanvasViewport.cancel();
+  },
+
+  containCanvasItem: (id: string) => {
+    const item = canvasState.canvasItems.find((i) => i.itemId === id);
+    if (!item) return;
+
+    const scale = item.scale || 1;
+    const rawW = (item.width || 0) * scale;
+    const rawH = (item.height || 0) * scale;
+    const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+    const width = bbox.width;
+    const height = bbox.height;
+    const padding = 0;
+
+    const { width: containerWidth, height: containerHeight } =
+      canvasState.dimensions;
+
+    if (containerWidth <= 0 || containerHeight <= 0) return;
+
+    const scaleByWidth = (containerWidth - padding * 2) / width;
+    const scaleByHeight = (containerHeight - padding * 2) / height;
+    const newScale = Math.min(scaleByWidth, scaleByHeight);
+
+    const centerX = item.x + bbox.offsetX + width / 2;
+    const centerY = item.y + bbox.offsetY + height / 2;
+
+    const newX = containerWidth / 2 - centerX * newScale;
+    const newY = containerHeight / 2 - centerY * newScale;
+
+    canvasActions.setCanvasViewport({
+      x: newX,
+      y: newY,
+      width: containerWidth,
+      height: containerHeight,
+      scale: newScale,
+    });
+
+    canvasState.primaryId = null;
+    canvasState.multiSelectUnion = null;
+    const currItem = canvasState.canvasItems.find(
+      (i) => i.itemId === id,
+    ) as CanvasItem;
+    currItem.isSelected = false;
+  },
+  panToCanvasItem: (id: string) => {
+    const item = canvasState.canvasItems.find((i) => i.itemId === id);
+    if (!item) return;
+
+    const scale = item.scale || 1;
+    const rawW = (item.width || 0) * scale;
+    const rawH = (item.height || 0) * scale;
+    const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+    const width = bbox.width;
+    const height = bbox.height;
+
+    const { width: containerWidth, height: containerHeight } =
+      canvasState.dimensions;
+
+    if (containerWidth <= 0 || containerHeight <= 0) return;
+
+    const currentScale = canvasState.canvasViewport.scale || 1;
+    const centerX = item.x + bbox.offsetX + width / 2;
+    const centerY = item.y + bbox.offsetY + height / 2;
+
+    const newX = containerWidth / 2 - centerX * currentScale;
+    const newY = containerHeight / 2 - centerY * currentScale;
+
+    canvasActions.setCanvasViewport({
+      x: newX,
+      y: newY,
+      width: containerWidth,
+      height: containerHeight,
+      scale: currentScale,
+    });
+
+    canvasState.primaryId = null;
+    canvasState.multiSelectUnion = null;
   },
 };

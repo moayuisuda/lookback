@@ -1,21 +1,16 @@
 import React, { useRef } from "react";
-import { THEME } from "../../theme";
+import { canvasState } from "../../store/canvasStore";
 
 interface CanvasNodeProps {
   id: string;
   x: number;
   y: number;
   rotation: number;
-  scaleX?: number;
-  scaleY?: number;
+  scale?: number;
   draggable: boolean;
-  isSelected: boolean;
-  isPanModifierActive?: boolean;
-  stageScale?: number;
-  showControls: boolean;
-  onDragStart?: (pos: { x: number; y: number }) => void;
-  onDragMove?: (pos: { x: number; y: number }) => void;
-  onDragEnd?: (pos: { x: number; y: number }) => void;
+  onDragStart?: (pos: { clientX: number; clientY: number }) => void;
+  onDragMove?: (delta: { dx: number; dy: number }) => void;
+  onDragEnd?: (delta: { dx: number; dy: number }) => void;
   onSelect?: (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
   ) => void;
@@ -28,18 +23,8 @@ interface CanvasNodeProps {
   onTap?: (e: React.MouseEvent<SVGGElement>) => void;
   onDoubleClick?: (e: React.MouseEvent<SVGGElement>) => void;
   children: React.ReactNode;
-  controls?: React.ReactNode;
-  selectionRect?: CanvasSelectionRect | null;
 
   transformerProps?: Record<string, unknown>;
-}
-
-interface CanvasSelectionRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  strokeWidth?: number;
 }
 
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
@@ -47,12 +32,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   x,
   y,
   rotation,
-  scaleX = 1,
-  scaleY = 1,
+  scale = 1,
   draggable,
-  isPanModifierActive,
-  stageScale = 1,
-  showControls,
   onDragStart,
   onDragMove,
   onDragEnd,
@@ -61,8 +42,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onClick,
   onDoubleClick,
   children,
-  controls,
-  selectionRect,
 }) => {
   const dragStateRef = useRef<{
     startX: number;
@@ -72,8 +51,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   } | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent<SVGGElement>) => {
-    if (isPanModifierActive) return;
-    if (e.button !== 0) return; // Only left click
+    if (e.button !== 0) return;
+    if (canvasState.isSpaceDown) return;
 
     if (onSelect) {
       onSelect(e);
@@ -93,29 +72,25 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       originClientY: e.clientY,
     };
 
-    onDragStart({ x, y });
+    onDragStart({ clientX: e.clientX, clientY: e.clientY });
 
     const handleWindowPointerMove = (ev: PointerEvent) => {
       const state = dragStateRef.current;
       if (!state) return;
 
-      const dx = (ev.clientX - state.originClientX) / stageScale;
-      const dy = (ev.clientY - state.originClientY) / stageScale;
-      const nextX = state.startX + dx;
-      const nextY = state.startY + dy;
-      onDragMove({ x: nextX, y: nextY });
+      const dx = ev.clientX - state.originClientX;
+      const dy = ev.clientY - state.originClientY;
+      onDragMove({ dx, dy });
     };
 
     const handleWindowPointerUp = (ev: PointerEvent) => {
       const state = dragStateRef.current;
       if (!state) return;
 
-      const dx = (ev.clientX - state.originClientX) / stageScale;
-      const dy = (ev.clientY - state.originClientY) / stageScale;
-      const nextX = state.startX + dx;
-      const nextY = state.startY + dy;
+      const dx = ev.clientX - state.originClientX;
+      const dy = ev.clientY - state.originClientY;
 
-      onDragEnd({ x: nextX, y: nextY });
+      onDragEnd({ dx, dy });
 
       dragStateRef.current = null;
       window.removeEventListener("pointermove", handleWindowPointerMove);
@@ -129,28 +104,13 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   return (
     <g
       id={id}
-      transform={`translate(${x} ${y}) rotate(${rotation}) scale(${scaleX} ${scaleY})`}
+      transform={`translate(${x} ${y}) rotate(${rotation}) scale(${scale})`}
       onPointerDown={handlePointerDown}
       onClick={onClick}
       className="select-none"
       onDoubleClick={onDoubleClick}
     >
       {children}
-      {selectionRect ? (
-        <rect
-          x={selectionRect.x}
-          y={selectionRect.y}
-          width={selectionRect.width}
-          height={selectionRect.height}
-          fill="none"
-          stroke={THEME.primary}
-          strokeWidth={selectionRect.strokeWidth ?? 3}
-          vectorEffect="non-scaling-stroke"
-        />
-      ) : null}
-      {showControls && controls ? (
-        <g style={{ pointerEvents: "auto", cursor: "pointer" }}>{controls}</g>
-      ) : null}
     </g>
   );
 };

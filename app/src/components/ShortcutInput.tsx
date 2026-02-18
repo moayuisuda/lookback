@@ -3,13 +3,17 @@ import { clsx } from 'clsx';
 import { useT } from '../i18n/useT';
 
 const normalizeMainKey = (key: string): string | null => {
+  if (key === ' ') return 'Space';
+  if (key === '+') return 'Plus';
+  if (key === 'ArrowUp') return 'Up';
+  if (key === 'ArrowDown') return 'Down';
+  if (key === 'ArrowLeft') return 'Left';
+  if (key === 'ArrowRight') return 'Right';
+  if (key === 'Escape') return 'Esc';
+
   const k = key.trim();
   if (!k) return null;
-  if (/^[a-z]$/i.test(k)) return k.toUpperCase();
-  if (/^\d$/.test(k)) return k;
-  if (/^F([1-9]|1[0-2])$/i.test(k)) return k.toUpperCase();
-  if (k === '/' || k === '?') return k;
-  return null;
+  return k;
 };
 
 const isMacPlatform = (): boolean => {
@@ -32,8 +36,27 @@ const buildAccelerator = (e: KeyboardEvent): string | null => {
   if (e.altKey) mods.push('Alt');
   if (e.shiftKey) mods.push('Shift');
 
-  if (mods.length === 0) return null;
+  // if (mods.length === 0) {
+  //   if (mainKey === '/' || /^F([1-9]|1[0-2])$/.test(mainKey)) {
+  //     return mainKey;
+  //   }
+  //   return null;
+  // }
   return [...mods, mainKey].join('+');
+};
+
+const formatShortcutDisplay = (accelerator: string) => {
+  const raw = accelerator.trim();
+  if (!raw) return '';
+  const parts = raw
+    .split('+')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return '';
+  const mainKey = parts[parts.length - 1];
+  const modifiers = parts.slice(0, -1);
+  const displayKey = mainKey.length === 1 ? mainKey.toUpperCase() : mainKey;
+  return [...modifiers, displayKey].join('+');
 };
 
 export type ShortcutInputProps = {
@@ -54,7 +77,7 @@ export const ShortcutInput: React.FC<ShortcutInputProps> = ({
 
   const displayText = useMemo(() => {
     if (recording) return t('titleBar.shortcutRecording');
-    return value || t('titleBar.shortcutClickToRecord');
+    return value ? formatShortcutDisplay(value) : t('titleBar.shortcutClickToRecord');
   }, [recording, t, value]);
 
   useEffect(() => {

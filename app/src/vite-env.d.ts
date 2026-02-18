@@ -36,5 +36,10 @@ interface Window {
     log: (level: string, ...args: unknown[]) => void;
     getLogContent: () => Promise<string>;
     ensureModelReady: () => Promise<{ success: boolean; error?: string }>;
+    importCommand: () => Promise<{
+      success: boolean;
+      error?: string;
+      partialSuccess?: boolean;
+    }>;
   };
 }

@@ -21,10 +21,20 @@ export type LLMSettings = {
   model: string;
 };
 
+export type UploadProgress = {
+  visible: boolean;
+  total: number;
+  completed: number;
+  failed: number;
+  startedAt: number;
+  updatedAt: number;
+};
+
 export interface GlobalState {
   tagColors: Record<string, string>;
   colorSwatches: string[];
   toasts: Toast[];
+  uploadProgress: UploadProgress;
   pinMode: boolean;
   pinTransparent: boolean;
   toggleWindowShortcut: string;
@@ -34,8 +44,11 @@ export interface GlobalState {
   canvasOpacityDownShortcut: string;
   toggleMouseThroughShortcut: string;
   canvasGroupShortcut: string;
+  zoomToFitShortcut: string;
   commandPaletteShortcut: string;
   isAppHidden: boolean;
+  isWindowResizing: boolean;
+  isTitleBarVisible: boolean;
 }
 
 const DEFAULT_COLOR_SWATCHES = [
@@ -79,12 +92,20 @@ const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
-const DEFAULT_COMMAND_PALETTE_SHORTCUT = isMac ? 'Command+/' : 'Ctrl+/';
+const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
 
 export const globalState = proxy<GlobalState>({
   tagColors: {},
   colorSwatches: [...DEFAULT_COLOR_SWATCHES],
   toasts: [],
+  uploadProgress: {
+    visible: false,
+    total: 0,
+    completed: 0,
+    failed: 0,
+    startedAt: 0,
+    updatedAt: 0,
+  },
   pinMode: true,
   pinTransparent: true,
   toggleWindowShortcut: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
@@ -94,8 +115,11 @@ export const globalState = proxy<GlobalState>({
   canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
+  zoomToFitShortcut: '',
   commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
   isAppHidden: false,
+  isWindowResizing: false,
+  isTitleBarVisible: true,
 });
 
 export const globalActions = {
@@ -139,6 +163,11 @@ export const globalActions = {
         settings,
         'commandPaletteShortcut',
         DEFAULT_COMMAND_PALETTE_SHORTCUT,
+      );
+      const rawZoomToFitShortcut = readSetting<unknown>(
+        settings,
+        'zoomToFitShortcut',
+        '',
       );
 
       const nextTagColors: Record<string, string> = {};
@@ -198,6 +227,12 @@ export const globalActions = {
       ) {
         globalState.commandPaletteShortcut = rawCommandPaletteShortcut.trim();
       }
+      if (
+        typeof rawZoomToFitShortcut === 'string' &&
+        rawZoomToFitShortcut.trim()
+      ) {
+        globalState.zoomToFitShortcut = rawZoomToFitShortcut.trim();
+      }
 
     } catch (error) {
       console.error('Failed to hydrate settings:', error);
@@ -219,6 +254,62 @@ export const globalActions = {
 
   removeToast: (id: string) => {
     globalState.toasts = globalState.toasts.filter((t) => t.id !== id);
+  },
+
+  beginUploadProgress: (total: number) => {
+    const count = Math.max(0, Math.floor(total || 0));
+    if (count <= 0) return;
+    const now = Date.now();
+
+    const running =
+      globalState.uploadProgress.total > 0 &&
+      globalState.uploadProgress.completed < globalState.uploadProgress.total;
+
+    if (!running) {
+      globalState.uploadProgress = {
+        visible: false,
+        total: count,
+        completed: 0,
+        failed: 0,
+        startedAt: now,
+        updatedAt: now,
+      };
+      return;
+    }
+
+    const nextTotal = globalState.uploadProgress.total + count;
+    globalState.uploadProgress.total = nextTotal;
+    globalState.uploadProgress.updatedAt = now;
+  },
+
+  showUploadProgress: () => {
+    const upload = globalState.uploadProgress;
+    const running = upload.total > 0 && upload.completed < upload.total;
+    if (!running) return;
+    if (upload.visible) return;
+    upload.visible = true;
+    upload.updatedAt = Date.now();
+  },
+
+  tickUploadProgress: (options: { completed?: number; failed?: number }) => {
+    if (globalState.uploadProgress.total <= 0) return;
+    const completedDelta = Math.max(0, Math.floor(options.completed || 0));
+    const failedDelta = Math.max(0, Math.floor(options.failed || 0));
+
+    const nextCompleted = Math.min(
+      globalState.uploadProgress.total,
+      globalState.uploadProgress.completed + completedDelta,
+    );
+    const nextFailed = Math.min(nextCompleted, globalState.uploadProgress.failed + failedDelta);
+
+    globalState.uploadProgress.completed = nextCompleted;
+    globalState.uploadProgress.failed = nextFailed;
+    globalState.uploadProgress.updatedAt = Date.now();
+  },
+
+  hideUploadProgress: () => {
+    if (!globalState.uploadProgress.visible) return;
+    globalState.uploadProgress.visible = false;
   },
 
   setTagColor: (tag: string, color: string) => {
@@ -338,6 +429,13 @@ export const globalActions = {
     await settingStorage.set('canvasGroupShortcut', next);
     return true;
   },
+  setZoomToFitShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.zoomToFitShortcut = next;
+    await settingStorage.set('zoomToFitShortcut', next);
+    return true;
+  },
   setCommandPaletteShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
@@ -346,7 +444,15 @@ export const globalActions = {
     return true;
   },
 
+  setWindowResizing: (active: boolean) => {
+    globalState.isWindowResizing = active;
+  },
+
   setAppHidden: (hidden: boolean) => {
     globalState.isAppHidden = hidden;
+  },
+
+  setTitleBarVisible: (visible: boolean) => {
+    globalState.isTitleBarVisible = visible;
   },
 };

@@ -15,6 +15,11 @@ export const en = {
   'common.search': 'Search',
   'common.back': 'Back',
 
+  'upload.progress.title': 'Uploading...',
+  'upload.progress.counter': '{{completed}} / {{total}}',
+  'upload.progress.percent': '{{percent}}%',
+  'upload.progress.failed': '{{failed}} failed',
+
   'commandPalette.placeholder': 'Search commands or text',
   'commandPalette.imageSearchPlaceholder': 'Search images by tone and color',
   'commandPalette.commandLabel': 'Command',
@@ -28,6 +33,11 @@ export const en = {
   'commandPalette.color': 'Color',
   'commandPalette.clearColor': 'Clear',
   'commandPalette.back': 'Back',
+  'commandPalette.import': 'Import Command',
+  'commandPalette.importUnavailable': 'Import is unavailable',
+  'commandPalette.delete': 'Delete',
+  'commandPalette.deleteTitle': 'Delete Command',
+  'commandPalette.deleteMessage': 'Delete "{{name}}"? This cannot be undone.',
   'commandPalette.toneAny': 'Any',
 
   'command.stitchExport.title': 'Stitch Export',
@@ -52,6 +62,7 @@ export const en = {
   'titleBar.toggleMouseThrough': 'Toggle Paper Mode',
   'titleBar.toggleGallery': 'Toggle Gallery',
   'titleBar.canvasGroup': 'Smart Layout (Canvas)',
+  'titleBar.zoomToFit': 'Zoom to Fit',
   'titleBar.shortcutClickToRecord': 'Click to record',
   'titleBar.shortcutRecording': 'Press a shortcut…',
   'titleBar.index': 'Index',
@@ -89,6 +100,10 @@ export const en = {
   'toast.command.exported': 'Stitched image exported',
   'toast.command.scriptFailed': 'Command script failed',
   'toast.command.externalMessage': '{{message}}',
+  'toast.importSuccess': 'Command imported',
+  'toast.importFailed': 'Failed to import command: {{error}}',
+  'toast.commandDeleted': 'Command deleted',
+  'toast.commandDeleteFailed': 'Failed to delete command: {{error}}',
 
   'indexing.starting': 'Starting...',
   'indexing.progress': 'Indexing {{current}}/{{total}}...',
@@ -135,7 +150,7 @@ export const en = {
   'canvas.toolbar.collapse': 'Collapse Toolbar',
   'canvas.toolbar.filters': 'Filters',
   'canvas.filters.grayscale': 'Grayscale',
-  'canvas.filters.posterize': 'Oil Paint Block',
+  'canvas.filters.posterize': 'Posterize',
   'canvas.filters.trianglePixelate': 'Triangle Pixelate',
   'canvas.toolbar.toggleGrayscale': 'Toggle Grayscale Mode',
   'canvas.toolbar.grayscale': 'Grayscale',
@@ -153,6 +168,10 @@ export const en = {
   'canvas.clearCanvasMessage':
     'Are you sure you want to clear the canvas? This action cannot be undone.',
   'canvas.clearCanvasConfirm': 'Clear',
+  'canvas.empty.title': 'Start Your Canvas',
+  'canvas.empty.dragHint': 'Drag images or folders here to begin',
+  'canvas.empty.panHint': 'Middle Click or Space + Drag to Pan',
+  'canvas.empty.zoomHint': 'Wheel to Zoom',
 
   'swatch.replaceHint': '{{color}} (long press to replace)',
 

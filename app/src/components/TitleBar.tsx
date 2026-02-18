@@ -4,6 +4,7 @@ import {
   Square,
   X,
   Settings,
+  Settings2,
   Ghost,
   Plus,
   Trash2,
@@ -70,6 +71,10 @@ export const TitleBar: React.FC = () => {
   }, [settingsOpen]);
 
   useEffect(() => {
+    window.electron?.setSettingsOpen?.(settingsOpen);
+  }, [settingsOpen]);
+
+  useEffect(() => {
     if (canvasMenuOpen) {
       void refreshCanvases();
     }
@@ -79,6 +84,7 @@ export const TitleBar: React.FC = () => {
     if (!newCanvasName.trim()) return;
     try {
       await createCanvas(newCanvasName);
+      await canvasActions.switchCanvas(newCanvasName);
       setNewCanvasName("");
       setIsCreatingCanvas(false);
       await refreshCanvases();
@@ -178,11 +184,7 @@ export const TitleBar: React.FC = () => {
   }, []);
 
   const handleToggleSettings = () => {
-    setSettingsOpen((prev) => {
-      const next = !prev;
-      window.electron?.setSettingsOpen?.(next);
-      return next;
-    });
+    setSettingsOpen((prev) => !prev);
   };
 
   const handleChangeStorageDir = async () => {
@@ -227,6 +229,10 @@ export const TitleBar: React.FC = () => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
 
+  const handleSetZoomToFitShortcut = async (accelerator: string) => {
+    await globalActions.setZoomToFitShortcut(accelerator);
+  };
+
   const handleSetCommandPaletteShortcut = async (accelerator: string) => {
     await globalActions.setCommandPaletteShortcut(accelerator);
   };
@@ -249,12 +255,18 @@ export const TitleBar: React.FC = () => {
   useEffect(() => {
     if (!snap.mouseThrough) return;
 
-    // Initial state assumption: when entering mouseThrough, it's ignored (true)
-    // Force set once to ensure state sync
     window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
     isIgnoringMouseRef.current = true;
 
     const checkAndSetIgnore = (clientX: number, clientY: number) => {
+      if (snap.isWindowResizing) {
+        if (isIgnoringMouseRef.current) {
+          window.electron?.setIgnoreMouseEvents?.(false);
+          isIgnoringMouseRef.current = false;
+        }
+        return;
+      }
+
       if (!titleBarRef.current) return;
 
       const rect = titleBarRef.current.getBoundingClientRect();
@@ -277,6 +289,13 @@ export const TitleBar: React.FC = () => {
       }
     };
 
+    if (lastMousePosRef.current) {
+      checkAndSetIgnore(
+        lastMousePosRef.current.x,
+        lastMousePosRef.current.y,
+      );
+    }
+
     const handleGlobalMouseMove = (e: MouseEvent) => {
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
       checkAndSetIgnore(e.clientX, e.clientY);
@@ -286,7 +305,54 @@ export const TitleBar: React.FC = () => {
     return () => {
       window.removeEventListener("mousemove", handleGlobalMouseMove);
     };
-  }, [snap.mouseThrough]);
+  }, [snap.mouseThrough, snap.isWindowResizing]);
+
+  const [mouseY, setMouseY] = useState(1000);
+  const [isHovering, setIsHovering] = useState(false);
+  const isMouseDownRef = useRef(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // If mouse is down (dragging), do not trigger titlebar by proximity
+      if (isMouseDownRef.current) return;
+      setMouseY(e.clientY);
+    };
+    
+    const handleMouseDown = (e: MouseEvent) => {
+      // If clicking inside titlebar, let it function.
+      if (e.target instanceof Element && e.target.closest('.title-bar-container')) {
+        return;
+      }
+      isMouseDownRef.current = true;
+      setIsHovering(false);
+    };
+
+    const handleMouseUp = () => {
+      isMouseDownRef.current = false;
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  const shouldShow =
+    mouseY < 48 ||
+    isHovering ||
+    settingsOpen ||
+    canvasMenuOpen ||
+    isCreatingCanvas ||
+    !!editingCanvas ||
+    !!deleteConfirmCanvas;
+
+  useEffect(() => {
+    globalActions.setTitleBarVisible(shouldShow);
+  }, [shouldShow]);
 
   const handleCanvasOpacityChange = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -296,16 +362,19 @@ export const TitleBar: React.FC = () => {
   };
 
   return (
-    <div className="flex w-full">
+    <div
+      className={clsx(
+        "flex w-full fixed left-0 right-0 z-[100] title-bar-container",
+      )}
+      style={{ top: shouldShow ? 0 : -32 }}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+    >
       <div
         ref={titleBarRef}
         className={clsx(
           "relative z-[100] bg-neutral-900 h-8 transition-all inline-flex items-center select-none border-b border-neutral-800",
-          snap.mouseThrough
-            ? "justify-start rounded-tr-xl w-auto flex-none"
-            : "justify-between w-auto flex-1 pr-2 pl-2",
-          // Padding adjustment for visual consistency
-          snap.mouseThrough ? "px-2" : "",
+          "justify-between w-auto flex-1 pr-2 pl-2",
         )}
       >
         {/* Draggable area - leaves top 8px (top-2) for window resizing */}
@@ -319,6 +388,28 @@ export const TitleBar: React.FC = () => {
           >
             LookBack
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              canvasActions.toggleCanvasToolbarExpanded();
+            }}
+            className={clsx(
+              "p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white no-drag",
+              canvasSnap.isCanvasToolbarExpanded && "bg-neutral-800",
+            )}
+            style={{
+              color: canvasSnap.isCanvasToolbarExpanded
+                ? THEME.primary
+                : undefined,
+            }}
+            title={
+              canvasSnap.isCanvasToolbarExpanded
+                ? t("canvas.toolbar.collapse")
+                : t("canvas.toolbar.expand")
+            }
+          >
+            <Settings2 size={14} />
+          </button>
         </div>
 
         <div className="relative z-10 flex items-center gap-1 no-drag">
@@ -341,7 +432,7 @@ export const TitleBar: React.FC = () => {
               <div
                 className={clsx(
                   "absolute top-8 mt-1 w-64 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag z-[110]",
-                  snap.mouseThrough ? "left-0" : "right-0",
+                  "right-0",
                 )}
               >
                 <div className="space-y-1">
@@ -471,26 +562,22 @@ export const TitleBar: React.FC = () => {
             )}
           </div>
 
-          {!snap.mouseThrough && (
-            <>
-              <div className="w-px h-4 bg-neutral-700 mx-1" />
-              <button
-                ref={settingsBtnRef}
-                onClick={handleToggleSettings}
-                className={clsx(
-                  "p-1 hover:bg-neutral-800 rounded transition-colors",
-                  settingsOpen && "bg-neutral-800",
-                )}
-                style={{ color: settingsOpen ? THEME.primary : undefined }}
-                title={t("titleBar.settings")}
-              >
-                <Settings size={14} />
-              </button>
-            </>
-          )}
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <button
+            ref={settingsBtnRef}
+            onClick={handleToggleSettings}
+            className={clsx(
+              "p-1 hover:bg-neutral-800 rounded transition-colors",
+              settingsOpen && "bg-neutral-800",
+            )}
+            style={{ color: settingsOpen ? THEME.primary : undefined }}
+            title={t("titleBar.settings")}
+          >
+            <Settings size={14} />
+          </button>
           <button
             onClick={handleToggleMouseThrough}
-            className="p-1 hover:bg-neutral-800 rounded transition-colors"
+            className="p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white"
             style={{ color: snap.mouseThrough ? THEME.primary : undefined }}
             title={t("titleBar.mouseThrough")}
           >
@@ -522,7 +609,7 @@ export const TitleBar: React.FC = () => {
             ref={settingsMenuRef}
             className={clsx(
               "absolute top-8 mt-1 w-80 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-3 text-xs text-neutral-200 no-drag flex flex-col gap-3 max-h-[85vh] overflow-y-auto custom-scrollbar",
-              snap.mouseThrough ? "left-0" : "right-2",
+              "right-2",
             )}
           >
             <div className="font-semibold px-1">{t("titleBar.settings")}</div>
@@ -679,6 +766,16 @@ export const TitleBar: React.FC = () => {
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.zoomToFit")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.zoomToFitShortcut}
+                    onChange={(accel) => void handleSetZoomToFitShortcut(accel)}
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
                 {snap.pinMode && (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] text-neutral-300">
@@ -698,16 +795,6 @@ export const TitleBar: React.FC = () => {
           </div>
         )}
       </div>
-
-      <div
-        className={clsx(
-          "h-full no-drag ease-in-out",
-          snap.mouseThrough ? "flex-1" : "flex-none w-0",
-        )}
-        onMouseEnter={() => {
-          window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-        }}
-      />
 
       <ConfirmModal
         isOpen={!!deleteConfirmCanvas}

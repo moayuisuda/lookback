@@ -95,5 +95,34 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
     }
   });
 
+  router.delete("/api/commands/:folder", async (req, res) => {
+    try {
+      const { folder } = req.params;
+      const entry = typeof req.query.entry === "string" ? req.query.entry : "";
+      if (!entry) {
+        res.status(400).json({ error: "Missing entry" });
+        return;
+      }
+      if (!isSafeSegment(folder) || !isSafeSegment(entry) || !isScriptFile(entry)) {
+        res.status(400).json({ error: "Invalid path" });
+        return;
+      }
+      const commandsDir = getCommandsDir();
+      const dirPath = folder === ROOT_FOLDER ? commandsDir : path.join(commandsDir, folder);
+      const scriptPath = path.join(dirPath, entry);
+      await withFileLock(scriptPath, async () => {
+        if (!(await fs.pathExists(scriptPath))) {
+          res.status(404).json({ error: "Not found" });
+          return;
+        }
+        await fs.remove(scriptPath);
+        res.json({ success: true });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+
   return router;
 };

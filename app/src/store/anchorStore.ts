@@ -3,7 +3,7 @@ import { localApi } from '../service';
 import { canvasState, canvasActions } from './canvasStore';
 
 export interface AnchorData {
-  canvasId: string;
+  itemId: string;
   x: number;
   y: number;
   scale: number;
@@ -33,7 +33,7 @@ export const anchorActions = {
     try {
       const { currentCanvasName, canvasViewport } = canvasState;
       const anchorData: AnchorData = {
-        canvasId: currentCanvasName,
+        itemId: currentCanvasName,
         x: canvasViewport.x,
         y: canvasViewport.y,
         scale: canvasViewport.scale,
@@ -55,8 +55,8 @@ export const anchorActions = {
 
     anchorState.lastTriggered = { slot, timestamp: Date.now() };
 
-    if (anchor.canvasId !== canvasState.currentCanvasName) {
-      await canvasActions.switchCanvas(anchor.canvasId);
+    if (anchor.itemId !== canvasState.currentCanvasName) {
+      await canvasActions.switchCanvas(anchor.itemId);
     }
     
     canvasActions.setCanvasViewport({

@@ -1,5 +1,5 @@
 import { proxy } from 'valtio';
-import { getSettingsSnapshot, loadExternalCommands, readSetting, settingStorage } from '../service';
+import { loadExternalCommands } from '../service';
 import { mapExternalCommands, type ExternalCommandRecord } from '../commands/external';
 import type { CommandDefinition } from '../commands/types';
 
@@ -8,52 +8,39 @@ export const commandState = proxy<{
   query: string;
   selectedIndex: number;
   activeCommandId: string | null;
-  commandInputs: Record<string, Record<string, string>>;
   externalCommands: CommandDefinition[];
+  deleteTarget: {
+    id: string;
+    title: string;
+    folder: string;
+    entry: string;
+  } | null;
 }>({
   isOpen: false,
   query: '',
   selectedIndex: 0,
   activeCommandId: null,
-  commandInputs: {},
   externalCommands: [],
+  deleteTarget: null,
 });
 
 export const commandActions = {
   hydrateSettings: async () => {
-    try {
-      const settings = await getSettingsSnapshot();
-      const rawInputs = readSetting<unknown>(settings, 'commandInputs', {});
-      const nextInputs: Record<string, Record<string, string>> = {};
-      if (rawInputs && typeof rawInputs === 'object') {
-        Object.entries(rawInputs as Record<string, unknown>).forEach(([key, value]) => {
-          if (!key.trim() || !value || typeof value !== 'object') return;
-          const row: Record<string, string> = {};
-          Object.entries(value as Record<string, unknown>).forEach(([field, fieldValue]) => {
-            if (!field.trim() || typeof fieldValue !== 'string') return;
-            row[field] = fieldValue;
-          });
-          if (Object.keys(row).length > 0) {
-            nextInputs[key] = row;
-          }
-        });
-      }
-      commandState.commandInputs = nextInputs;
-    } catch (error) {
-      void error;
-    }
+    // No-op for now as we removed commandInputs
   },
   open: () => {
     commandState.isOpen = true;
     commandState.query = '';
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;
+    commandState.deleteTarget = null;
   },
   close: () => {
     commandState.isOpen = false;
     commandState.query = '';
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;
+    commandState.deleteTarget = null;
   },
   toggle: () => {
     if (commandState.isOpen) {
@@ -69,20 +56,18 @@ export const commandActions = {
   setSelectedIndex: (index: number) => {
     commandState.selectedIndex = index;
   },
-  setCommandInput: async (commandId: string, fieldId: string, value: string) => {
-    if (!commandId.trim() || !fieldId.trim()) return;
-    const current = commandState.commandInputs[commandId] ?? {};
-    commandState.commandInputs = {
-      ...commandState.commandInputs,
-      [commandId]: {
-        ...current,
-        [fieldId]: value,
-      },
-    };
-    await settingStorage.set('commandInputs', commandState.commandInputs);
-  },
   setActiveCommand: (commandId: string | null) => {
     commandState.activeCommandId = commandId;
+  },
+  setDeleteTarget: (
+    target: {
+      id: string;
+      title: string;
+      folder: string;
+      entry: string;
+    } | null,
+  ) => {
+    commandState.deleteTarget = target;
   },
   loadExternalCommands: async () => {
     try {

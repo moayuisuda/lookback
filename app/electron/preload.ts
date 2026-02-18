@@ -61,4 +61,5 @@ contextBridge.exposeInMainWorld('electron', {
   log: (level: string, ...args: unknown[]) => ipcRenderer.send('log-message', level, ...args),
   getLogContent: () => ipcRenderer.invoke('get-log-content'),
   ensureModelReady: () => ipcRenderer.invoke('ensure-model-ready'),
+  importCommand: () => ipcRenderer.invoke('import-command'),
 });

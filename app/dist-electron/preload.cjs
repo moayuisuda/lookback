@@ -55,5 +55,6 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   },
   log: (level, ...args) => import_electron.ipcRenderer.send("log-message", level, ...args),
   getLogContent: () => import_electron.ipcRenderer.invoke("get-log-content"),
-  ensureModelReady: () => import_electron.ipcRenderer.invoke("ensure-model-ready")
+  ensureModelReady: () => import_electron.ipcRenderer.invoke("ensure-model-ready"),
+  importCommand: () => import_electron.ipcRenderer.invoke("import-command")
 });

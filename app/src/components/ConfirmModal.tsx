@@ -28,10 +28,21 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
   const confirmLabel = confirmText ?? t('common.confirm');
   const cancelLabel = cancelText ?? t('common.cancel');
+  const stopPropagation = (event: React.MouseEvent | React.TouchEvent) => {
+    event.stopPropagation();
+  };
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-6 shadow-xl">
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm no-drag"
+      onMouseDown={stopPropagation}
+      onTouchStart={stopPropagation}
+    >
+      <div
+        className="w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-6 shadow-xl no-drag"
+        onMouseDown={stopPropagation}
+        onTouchStart={stopPropagation}
+      >
         <h3 className="mb-2 text-lg font-semibold text-white">{title}</h3>
         <p className="mb-6 text-sm text-neutral-400">{message}</p>
         <div className="flex justify-end gap-3">
