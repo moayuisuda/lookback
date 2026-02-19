@@ -38,6 +38,7 @@ log.transports.file.archiveLog = (file) => {
 
 import {
   startServer as startApiServer,
+  DEFAULT_SERVER_PORT,
   getStorageDir,
   setStorageRoot,
   readSettings,
@@ -63,6 +64,8 @@ let isPinTransparent = true;
 let pinByAppTimer: NodeJS.Timeout | null = null;
 let pinByAppQuerying = false;
 let isPinByAppActive = false;
+let localServerPort = DEFAULT_SERVER_PORT;
+let localServerStartTask: Promise<number> | null = null;
 
 function normalizeAppIdentifier(name: string): string {
   return name.trim().toLowerCase();
@@ -769,11 +772,24 @@ function registerAnchorShortcuts() {
 }
 
 async function startServer() {
-  return startApiServer();
+  if (!localServerStartTask) {
+    localServerStartTask = startApiServer().then((port) => {
+      localServerPort = port;
+      return port;
+    });
+  }
+  return localServerStartTask;
 }
 
 ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
+});
+
+ipcMain.handle("get-server-port", async () => {
+  if (localServerStartTask) {
+    return localServerStartTask;
+  }
+  return localServerPort;
 });
 
 ipcMain.handle("choose-storage-dir", async () => {

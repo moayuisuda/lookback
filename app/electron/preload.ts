@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   setSettingsOpen: (open: boolean) => ipcRenderer.send('settings-open-changed', open),
   listRunningApps: () => ipcRenderer.invoke('list-running-apps'),
+  getServerPort: () => ipcRenderer.invoke('get-server-port'),
   getStorageDir: () => ipcRenderer.invoke('get-storage-dir'),
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>

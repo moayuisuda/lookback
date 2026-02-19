@@ -4,7 +4,7 @@
 
 ## 职责
 - **Local API (`server.ts`)**
-  - 启动本地 Express 服务（默认端口 `30001`），为前端与插件提供 REST API。
+  - 启动本地 Express 服务（从 `30001` 起，若冲突自动递增），为前端与插件提供 REST API。
   - 提供 settings 聚合接口 `/settings`。
   - 管理 Canvas 数据存储。
   - Canvas 临时图片存放在 `canvases/<name>/assets`，通过 `/api/assets/:canvasName/:filename` 提供访问。

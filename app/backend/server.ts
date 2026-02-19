@@ -24,7 +24,8 @@ export type RendererChannel =
   | "toast";
 export type SendToRenderer = (channel: RendererChannel, data: unknown) => void;
 
-export const SERVER_PORT = 30001;
+export const DEFAULT_SERVER_PORT = 30001;
+const MAX_SERVER_PORT = 65535;
 const CONFIG_FILE = path.join(app.getPath("userData"), "lookback_config.json");
 
 const DEFAULT_STORAGE_DIR = path.join(app.getPath("userData"), "lookback_storage");
@@ -348,7 +349,34 @@ function downloadImage(url: string, dest: string): Promise<void> {
   return requestRemote(url, 0);
 }
 
-export async function startServer() {
+const listenOnAvailablePort = (
+  appServer: express.Express,
+  startPort: number
+): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const tryListen = (port: number) => {
+      if (port > MAX_SERVER_PORT) {
+        reject(new Error("No available localhost port for local server"));
+        return;
+      }
+
+      const httpServer = appServer.listen(port, () => {
+        resolve(port);
+      });
+
+      httpServer.once("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EADDRINUSE") {
+          tryListen(port + 1);
+          return;
+        }
+        reject(error);
+      });
+    };
+
+    tryListen(startPort);
+  });
+
+export async function startServer(): Promise<number> {
   await initializeStorage();
   await cleanupCanvasAssets();
   const server = express();
@@ -576,9 +604,8 @@ export async function startServer() {
     }
   );
 
-  server.listen(SERVER_PORT, () => {
-    console.log(`Local server running on port ${SERVER_PORT}`);
-  });
+  const port = await listenOnAvailablePort(server, DEFAULT_SERVER_PORT);
+  console.log(`Local server running on port ${port}`);
 
-  return;
+  return port;
 }

@@ -7,6 +7,7 @@ import { globalActions, globalState } from "./store/globalStore.ts";
 import { i18nActions } from "./store/i18nStore.ts";
 import { canvasActions } from "./store/canvasStore.ts";
 import { commandActions } from "./store/commandStore.ts";
+import { hydrateApiBaseUrl } from "./config.ts";
 
 // Global error handlers
 window.addEventListener("error", (event) => {
@@ -56,6 +57,8 @@ const renderApp = () => {
 };
 
 const bootstrap = async () => {
+  await hydrateApiBaseUrl();
+
   await Promise.all([
     i18nActions.hydrate(),
     globalActions.hydrateSettings(),
