@@ -248,7 +248,6 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleToggleMouseThrough = () => {
-    if (!snap.pinMode) return;
     const next = !snap.mouseThrough;
     globalActions.setMouseThrough(next);
   };
@@ -260,7 +259,6 @@ export const TitleBar: React.FC = () => {
       return;
     }
     globalActions.setPinMode(false);
-    globalActions.setMouseThrough(false);
     window.electron?.setPinMode(false);
   };
 
@@ -314,9 +312,7 @@ export const TitleBar: React.FC = () => {
   useEffect(() => {
     const cleanup = window.electron?.onRendererEvent?.((event: string) => {
       if (event === "toggle-mouse-through") {
-        if (globalState.pinMode) {
-          globalActions.setMouseThrough(!globalState.mouseThrough);
-        }
+        globalActions.setMouseThrough(!globalState.mouseThrough);
       }
     });
     return cleanup;
@@ -726,10 +722,9 @@ export const TitleBar: React.FC = () => {
           </div>
           <button
             onClick={handleToggleMouseThrough}
-            className="p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white disabled:opacity-40"
+            className="p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white"
             style={{ color: snap.mouseThrough ? THEME.primary : undefined }}
             title={t("titleBar.mouseThrough")}
-            disabled={!snap.pinMode}
           >
             <Ghost size={14} />
           </button>
@@ -926,20 +921,18 @@ export const TitleBar: React.FC = () => {
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
-                {snap.pinMode && (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[10px] text-neutral-300">
-                      {t("titleBar.toggleMouseThrough")}
-                    </span>
-                    <ShortcutInput
-                      value={snap.toggleMouseThroughShortcut}
-                      onChange={(accel) =>
-                        void handleSetToggleMouseThroughShortcut(accel)
-                      }
-                      onInvalid={handleShortcutInvalid}
-                    />
-                  </div>
-                )}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.toggleMouseThrough")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.toggleMouseThroughShortcut}
+                    onChange={(accel) =>
+                      void handleSetToggleMouseThroughShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
               </div>
             </div>
           </div>

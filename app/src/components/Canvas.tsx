@@ -196,7 +196,7 @@ export const Canvas: React.FC = () => {
   } = canvasSnap;
 
   const { t } = useT();
-  const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
+  const shouldEnableMouseThrough = appSnap.mouseThrough;
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);

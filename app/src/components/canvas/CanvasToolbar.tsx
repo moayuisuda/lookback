@@ -143,7 +143,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
 }) => {
   const { t } = useT();
   const appSnap = useSnapshot(globalState);
-  const hideCanvasButtons = appSnap.pinMode && appSnap.mouseThrough;
+  const hideCanvasButtons = appSnap.mouseThrough;
 
   useEffect(() => {
     anchorActions.loadAnchors();

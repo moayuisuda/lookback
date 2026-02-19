@@ -15,7 +15,6 @@ function detectPlatform(): Platform {
 function App() {
   const { locale, setLocale, t } = useT();
   const snap = useSnapshot(siteState);
-  const activeFeature = FEATURE_LIST.find((feature) => feature.id === snap.activeFeatureId)!;
 
   useEffect(() => {
     // 先显示本地版本，随后异步刷新为最新 release 版本。
@@ -117,17 +116,6 @@ function App() {
                   <strong>{t(feature.titleKey)}</strong>
                 </button>
               ))}
-            </div>
-            <div className="feature-focus">
-              <div className="feature-focus-media">
-                <img
-                  src={activeFeature.image}
-                  alt={t('features.imageAlt', { index: activeFeature.id + 1 })}
-                />
-              </div>
-              <p>{activeFeature.id.toString().padStart(2, '0')}</p>
-              <h3>{t(activeFeature.titleKey)}</h3>
-              <p>{t(activeFeature.descKey)}</p>
             </div>
           </aside>
 

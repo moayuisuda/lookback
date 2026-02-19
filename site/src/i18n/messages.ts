@@ -4,11 +4,11 @@ export const zh = {
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
 
-  'hero.badge': '桌面视觉工作台',
-  'hero.title': '在一个画布里整理和协作视觉素材',
-  'hero.subtitle': '速度轻快，适配日常视觉工作流。',
+  'hero.badge': '素材整理画布',
+  'hero.title': '在一个画布中整理、参考视觉素材',
+  'hero.subtitle': '适用于 画师、设计师、视觉工作者。',
   'hero.desc':
-    'LookBack 将导入、布局、检索、分析与导出串联到同一流程中，减少重复操作和上下文切换。',
+    'LookBack 将图片导入、布局、检索、分析与导出串联到同一流程中，减少重复操作和上下文切换。',
   'hero.primary': '下载 mac & win',
   'hero.version': 'v{{version}}',
   'hero.secondary': '查看功能',
@@ -23,9 +23,9 @@ export const zh = {
   'feature.0.title': '自动最优布局',
   'feature.0.desc': '自动计算内容分布与留白，生成结构清晰且可继续编辑的画布布局。',
   'feature.1.title': '可扩展插件系统',
-  'feature.1.desc': '按你的业务流程挂载能力模块，保持主流程轻量，同时支持团队标准化沉淀。',
+  'feature.1.desc': '按你的业务流程挂载能力模块，保持主流程轻量，同时支持流程标准化沉淀。',
   'feature.2.title': '锚点跳转系统',
-  'feature.2.desc': '保存任意缩放与视角状态，一键回到关键工作位置，复盘与协作都更直接。',
+  'feature.2.desc': '保存任意缩放与视角状态，一键回到关键工作位置，复盘与执行都更直接。',
   'feature.3.title': '图片分析',
   'feature.3.desc': '内置色调分析与情绪版能力，支持从视觉资产到分析结果的导出。',
   'feature.4.title': '多方式导入',
@@ -46,7 +46,7 @@ export const zh = {
   'download.step.3.title': '03 · 启动',
   'download.step.3.desc': '首次启动后即可导入素材，开始布局、分析与导出。',
 
-  'footer.line': 'LookBack · 图片素材工作站',
+  'footer.line': 'LookBack · 素材整理画布',
   'footer.contact': '联系邮箱：ahhcr68@gmail.com',
   'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } as const;
@@ -57,9 +57,9 @@ export const en = {
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
 
-  'hero.badge': 'Desktop Visual Workspace',
-  'hero.title': 'Organize and collaborate on visual assets in one canvas',
-  'hero.subtitle': 'Fast and lightweight for everyday visual workflows.',
+  'hero.badge': 'Assets Organization Canvas',
+  'hero.title': 'Organize visual assets in one canvas',
+  'hero.subtitle': 'For illustrators, designers, and visual workers.',
   'hero.desc':
     'LookBack connects import, layout, search, analysis, and export in one flow to reduce repeated steps and context switching.',
   'hero.primary': 'Download mac & win',
@@ -77,9 +77,11 @@ export const en = {
   'feature.0.title': 'Automatic Optimal Layout',
   'feature.0.desc': 'Balances structure and spacing to generate clean, editable canvas compositions.',
   'feature.1.title': 'Extensible Plugin System',
-  'feature.1.desc': 'Attach workflow modules for your domain while keeping the core flow lean and team-friendly.',
+  'feature.1.desc':
+    'Attach workflow modules for your domain while keeping the core flow lean and process-friendly.',
   'feature.2.title': 'Anchor Snapshot System',
-  'feature.2.desc': 'Save any zoom/viewpoint state and jump back instantly for focused execution, review, and collaboration.',
+  'feature.2.desc':
+    'Save any zoom/viewpoint state and jump back instantly for focused execution and review.',
   'feature.3.title': 'Image Analysis',
   'feature.3.desc': 'Built-in tone analysis and moodboard export help turn visual assets into usable output.',
   'feature.4.title': 'Multi-Source Import',
@@ -102,7 +104,7 @@ export const en = {
   'download.step.3.title': '03 · Launch',
   'download.step.3.desc': 'After first launch, import assets and start layout, analysis, and export.',
 
-  'footer.line': 'LookBack · Your Visual Asset Workstation',
+  'footer.line': 'LookBack · Assets Organization Canvas',
   'footer.contact': 'Contact: ahhcr68@gmail.com',
   'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } satisfies Record<keyof typeof zh, string>;

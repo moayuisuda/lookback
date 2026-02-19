@@ -11,6 +11,8 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   resizeWindowBy: (delta) => import_electron.ipcRenderer.send("resize-window-by", delta),
   setWindowBounds: (bounds) => import_electron.ipcRenderer.send("set-window-bounds", bounds),
   setToggleWindowShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-window-shortcut", accelerator),
+  setCanvasOpacityUpShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-up-shortcut", accelerator),
+  setCanvasOpacityDownShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-canvas-opacity-down-shortcut", accelerator),
   setToggleMouseThroughShortcut: (accelerator) => import_electron.ipcRenderer.invoke("set-toggle-mouse-through-shortcut", accelerator),
   setIgnoreMouseEvents: (ignore, options) => import_electron.ipcRenderer.send("set-ignore-mouse-events", ignore, options),
   onRendererEvent: (callback) => {
@@ -20,6 +22,7 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   },
   setSettingsOpen: (open) => import_electron.ipcRenderer.send("settings-open-changed", open),
   listRunningApps: () => import_electron.ipcRenderer.invoke("list-running-apps"),
+  getServerPort: () => import_electron.ipcRenderer.invoke("get-server-port"),
   getStorageDir: () => import_electron.ipcRenderer.invoke("get-storage-dir"),
   chooseStorageDir: () => import_electron.ipcRenderer.invoke("choose-storage-dir"),
   saveImageFile: (dataUrl, defaultName) => import_electron.ipcRenderer.invoke("save-image-file", { dataUrl, defaultName }),

@@ -365,48 +365,6 @@ body {
   background: rgba(57, 197, 187, 0.14);
 }
 
-.feature-focus {
-  margin-top: 14px;
-  border: 1px solid rgba(95, 126, 163, 0.32);
-  border-radius: 14px;
-  background: var(--bg-card);
-  padding: 12px;
-}
-
-.feature-focus-media {
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(145, 181, 220, 0.26);
-}
-
-.feature-focus-media img {
-  width: 100%;
-  height: 170px;
-  display: block;
-  object-fit: cover;
-}
-
-.feature-focus p {
-  margin: 10px 0 0;
-  color: #84a0c1;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-}
-
-.feature-focus h3 {
-  margin: 6px 0 0;
-  font-size: 18px;
-  line-height: 1.35;
-}
-
-.feature-focus h3 + p {
-  margin-top: 8px;
-  color: var(--text-sub);
-  line-height: 1.6;
-  font-size: 13px;
-  letter-spacing: 0;
-}
-
 .feature-canvas {
   column-count: 2;
   column-gap: 14px;

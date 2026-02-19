@@ -26,7 +26,6 @@ var import_electron2 = require("electron");
 var import_path7 = __toESM(require("path"), 1);
 var import_fs_extra7 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
-var import_electron_updater = require("electron-updater");
 var import_node_child_process = require("child_process");
 
 // backend/fileLock.ts
@@ -808,7 +807,8 @@ async function calculateTone(filePath) {
 
 // backend/server.ts
 var import_adm_zip = __toESM(require("adm-zip"), 1);
-var SERVER_PORT = 30001;
+var DEFAULT_SERVER_PORT = 30001;
+var MAX_SERVER_PORT = 65535;
 var CONFIG_FILE = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
 var DEFAULT_STORAGE_DIR = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_storage");
 var loadStorageRoot = async () => {
@@ -1077,6 +1077,25 @@ function downloadImage(url, dest) {
   }
   return requestRemote(url, 0);
 }
+var listenOnAvailablePort = (appServer, startPort) => new Promise((resolve, reject) => {
+  const tryListen = (port) => {
+    if (port > MAX_SERVER_PORT) {
+      reject(new Error("No available localhost port for local server"));
+      return;
+    }
+    const httpServer = appServer.listen(port, () => {
+      resolve(port);
+    });
+    httpServer.once("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        tryListen(port + 1);
+        return;
+      }
+      reject(error);
+    });
+  };
+  tryListen(startPort);
+});
 async function startServer() {
   await initializeStorage();
   await cleanupCanvasAssets();
@@ -1273,10 +1292,9 @@ async function startServer() {
       res.status(500).json({ error: "Unexpected error", details: message });
     }
   );
-  server.listen(SERVER_PORT, () => {
-    console.log(`Local server running on port ${SERVER_PORT}`);
-  });
-  return;
+  const port = await listenOnAvailablePort(server, DEFAULT_SERVER_PORT);
+  console.log(`Local server running on port ${port}`);
+  return port;
 }
 
 // shared/i18n/locales/en.ts
@@ -1831,8 +1849,12 @@ import_electron_log.default.transports.file.archiveLog = (file) => {
 var mainWindow = null;
 var isAppHidden = false;
 var DEFAULT_TOGGLE_WINDOW_SHORTCUT = process.platform === "darwin" ? "Command+L" : "Ctrl+L";
+var DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
+var DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 var DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = process.platform === "darwin" ? "Command+T" : "Ctrl+T";
 var toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+var canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
+var canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 var toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
 var isSettingsOpen = false;
 var isPinMode = false;
@@ -1841,6 +1863,8 @@ var isPinTransparent = true;
 var pinByAppTimer = null;
 var pinByAppQuerying = false;
 var isPinByAppActive = false;
+var localServerPort = DEFAULT_SERVER_PORT;
+var localServerStartTask = null;
 function normalizeAppIdentifier(name) {
   return name.trim().toLowerCase();
 }
@@ -1863,12 +1887,12 @@ function setWindowPinnedToTargetApp(active) {
   }
   mainWindow.setVisibleOnAllWorkspaces(false);
 }
-function runAppleScript(script) {
+function runAppleScript(script, timeoutMs = 1500) {
   return new Promise((resolve, reject) => {
     (0, import_node_child_process.execFile)(
       "osascript",
       ["-e", script],
-      { timeout: 1500 },
+      { timeout: timeoutMs },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error((stderr == null ? void 0 : stderr.trim()) || error.message));
@@ -1935,7 +1959,9 @@ async function getFrontmostAppName() {
 async function getRunningAppNames() {
   if (process.platform !== "darwin" && process.platform !== "win32") return [];
   const output = process.platform === "darwin" ? await runAppleScript(
-    'tell application "System Events" to get name of every process whose background only is false'
+    'tell application "System Events" to get name of every process whose background only is false',
+    // First-time automation permission prompt on macOS can take several seconds.
+    15e3
   ) : await runPowerShell(
     [
       `Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne ${process.pid} }`,
@@ -2035,6 +2061,14 @@ async function loadShortcuts() {
     if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
     }
+    const rawOpacityUp = settings.canvasOpacityUpShortcut;
+    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
+      canvasOpacityUpShortcut = rawOpacityUp.trim();
+    }
+    const rawOpacityDown = settings.canvasOpacityDownShortcut;
+    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
+      canvasOpacityDownShortcut = rawOpacityDown.trim();
+    }
   } catch {
   }
 }
@@ -2068,43 +2102,6 @@ function loadMainWindow() {
     const filePath = import_path7.default.join(__dirname, "../dist-renderer/index.html");
     import_electron_log.default.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
-  }
-}
-function setupAutoUpdater() {
-  import_electron_updater.autoUpdater.logger = import_electron_log.default;
-  import_electron_updater.autoUpdater.autoDownload = true;
-  import_electron_updater.autoUpdater.on("checking-for-update", () => {
-    import_electron_log.default.info("Checking for update...");
-  });
-  import_electron_updater.autoUpdater.on("update-available", (info) => {
-    import_electron_log.default.info("Update available.", info);
-    if (mainWindow) {
-      mainWindow.webContents.send("update-available", info);
-    }
-  });
-  import_electron_updater.autoUpdater.on("update-not-available", (info) => {
-    import_electron_log.default.info("Update not available.", info);
-  });
-  import_electron_updater.autoUpdater.on("error", (err) => {
-    import_electron_log.default.error("Error in auto-updater.", err);
-  });
-  import_electron_updater.autoUpdater.on("download-progress", (progressObj) => {
-    let log_message = "Download speed: " + progressObj.bytesPerSecond;
-    log_message = log_message + " - Downloaded " + progressObj.percent + "%";
-    log_message = log_message + " (" + progressObj.transferred + "/" + progressObj.total + ")";
-    import_electron_log.default.info(log_message);
-    if (mainWindow) {
-      mainWindow.webContents.send("download-progress", progressObj);
-    }
-  });
-  import_electron_updater.autoUpdater.on("update-downloaded", (info) => {
-    import_electron_log.default.info("Update downloaded", info);
-    if (mainWindow) {
-      mainWindow.webContents.send("update-downloaded", info);
-    }
-  });
-  if (import_electron2.app.isPackaged) {
-    import_electron_updater.autoUpdater.checkForUpdatesAndNotify();
   }
 }
 async function saveWindowBounds() {
@@ -2184,7 +2181,6 @@ async function createWindow(options) {
   if ((options == null ? void 0 : options.load) !== false) {
     loadMainWindow();
   }
-  setupAutoUpdater();
   import_electron2.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
   import_electron2.ipcMain.on("window-max", () => {
     if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
@@ -2402,6 +2398,32 @@ function registerToggleMouseThroughShortcut(accelerator) {
     }
   );
 }
+function registerCanvasOpacityUpShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityUpShortcut,
+    (v) => {
+      canvasOpacityUpShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "adjust-canvas-opacity", 0.05);
+    },
+    true
+  );
+}
+function registerCanvasOpacityDownShortcut(accelerator) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityDownShortcut,
+    (v) => {
+      canvasOpacityDownShortcut = v;
+    },
+    () => {
+      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "adjust-canvas-opacity", -0.05);
+    },
+    true
+  );
+}
 function registerAnchorShortcuts() {
   const anchors = ["1", "2", "3"];
   anchors.forEach((key) => {
@@ -2416,10 +2438,22 @@ function registerAnchorShortcuts() {
   });
 }
 async function startServer2() {
-  return startServer();
+  if (!localServerStartTask) {
+    localServerStartTask = startServer().then((port) => {
+      localServerPort = port;
+      return port;
+    });
+  }
+  return localServerStartTask;
 }
 import_electron2.ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
+});
+import_electron2.ipcMain.handle("get-server-port", async () => {
+  if (localServerStartTask) {
+    return localServerStartTask;
+  }
+  return localServerPort;
 });
 import_electron2.ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();
@@ -2484,6 +2518,8 @@ import_electron2.app.whenReady().then(async () => {
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
   applyPinStateToWindow();
   registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
   registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
   registerAnchorShortcuts();
   if (mainWindow) {
@@ -2506,6 +2542,18 @@ import_electron2.ipcMain.handle(
   "set-toggle-window-shortcut",
   async (_event, accelerator) => {
     return registerToggleWindowShortcut(accelerator);
+  }
+);
+import_electron2.ipcMain.handle(
+  "set-canvas-opacity-up-shortcut",
+  async (_event, accelerator) => {
+    return registerCanvasOpacityUpShortcut(accelerator);
+  }
+);
+import_electron2.ipcMain.handle(
+  "set-canvas-opacity-down-shortcut",
+  async (_event, accelerator) => {
+    return registerCanvasOpacityDownShortcut(accelerator);
   }
 );
 import_electron2.ipcMain.handle(
