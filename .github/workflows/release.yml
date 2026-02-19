@@ -89,6 +89,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GH_TOKEN }}
+          repository: moayuisuda/lookback-release
+          tag_name: ${{ github.ref_name }}
           files: |
             release-assets/win/*.exe
             release-assets/win/*.exe.blockmap

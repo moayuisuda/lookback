@@ -4,8 +4,8 @@ import { useT } from './i18n/useT';
 import { siteActions, siteState } from './store/siteStore';
 import sitePackage from '../package.json';
 
-const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback/releases/latest';
-const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback/releases/latest';
+const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback-release/releases/latest';
+const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback-release/releases/latest';
 
 type ReleaseAsset = {
   name: string;
