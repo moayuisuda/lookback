@@ -9,3 +9,6 @@
 9.  文件读写操作，都要通过 fileLock 文件的方法来进行，避免并发读写导致数据损坏
 10. 代码任务完成后，必须运行 npm run lint 来检查代码质量
 11. 和状态强相关的函数尽量放在 valtio store 中
+
+版本发布：
+/Users/anhaohui/Documents/stocks/RroRef/scripts/release-tag.sh v0.1.2

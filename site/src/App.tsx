@@ -4,6 +4,36 @@ import { useT } from './i18n/useT';
 import { siteActions, siteState } from './store/siteStore';
 import sitePackage from '../package.json';
 
+const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback/releases/latest';
+const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback/releases/latest';
+
+type ReleaseAsset = {
+  name: string;
+  browser_download_url: string;
+};
+
+type LatestRelease = {
+  html_url: string;
+  assets: ReleaseAsset[];
+};
+
+function detectPlatform() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('mac')) return 'mac';
+  if (ua.includes('win')) return 'win';
+  return 'other';
+}
+
+function pickPlatformAsset(assets: ReleaseAsset[], platform: ReturnType<typeof detectPlatform>) {
+  if (platform === 'mac') {
+    return assets.find((asset) => asset.name.toLowerCase().endsWith('.dmg')) ?? null;
+  }
+  if (platform === 'win') {
+    return assets.find((asset) => asset.name.toLowerCase().endsWith('.exe')) ?? null;
+  }
+  return null;
+}
+
 function App() {
   const { locale, setLocale, t } = useT();
   const snap = useSnapshot(siteState);
@@ -16,6 +46,23 @@ function App() {
   function jumpToFeature(id: number) {
     siteActions.setActiveFeature(id);
     document.getElementById(`feature-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function downloadByPlatform() {
+    const platform = detectPlatform();
+    try {
+      const resp = await fetch(LATEST_RELEASE_API);
+      if (!resp.ok) {
+        window.location.assign(LATEST_RELEASE_PAGE);
+        return;
+      }
+
+      const release = (await resp.json()) as LatestRelease;
+      const asset = pickPlatformAsset(release.assets, platform);
+      window.location.assign(asset?.browser_download_url ?? release.html_url ?? LATEST_RELEASE_PAGE);
+    } catch {
+      window.location.assign(LATEST_RELEASE_PAGE);
+    }
   }
 
   return (
@@ -56,7 +103,7 @@ function App() {
             <p className="hero-subtitle">{t('hero.subtitle')}</p>
             <p className="hero-desc">{t('hero.desc')}</p>
             <div className="hero-actions">
-              <button type="button" className="hero-btn primary">
+              <button type="button" className="hero-btn primary" onClick={downloadByPlatform}>
                 {`${t('hero.primary')} ${t('hero.version', { version: sitePackage.version })}`}
               </button>
               <button type="button" className="hero-btn secondary" onClick={jumpToFeatures}>

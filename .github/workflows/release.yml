@@ -88,8 +88,15 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GH_TOKEN }}
           files: |
-            release-assets/win/**/*
-            release-assets/mac/**/*
+            release-assets/win/*.exe
+            release-assets/win/*.exe.blockmap
+            release-assets/win/latest.yml
+            release-assets/mac/*.dmg
+            release-assets/mac/*.dmg.blockmap
+            release-assets/mac/*-mac.zip
+            release-assets/mac/latest-mac.yml
+          overwrite_files: true
           generate_release_notes: true
           fail_on_unmatched_files: false
