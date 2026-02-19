@@ -5,6 +5,7 @@ import {
   X,
   Settings,
   Settings2,
+  Pin,
   Ghost,
   Plus,
   Trash2,
@@ -34,16 +35,24 @@ export const TitleBar: React.FC = () => {
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
+  const [pinMenuOpen, setPinMenuOpen] = useState(false);
+  const [runningApps, setRunningApps] = useState<string[]>([]);
+  const [loadingRunningApps, setLoadingRunningApps] = useState(false);
   const [storageDir, setStorageDir] = useState("");
   const [loadingStorageDir, setLoadingStorageDir] = useState(false);
   const [updatingStorageDir, setUpdatingStorageDir] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
 
   const canvasMenuRef = useRef<HTMLDivElement>(null);
+  const pinBtnRef = useRef<HTMLButtonElement>(null);
+  const pinMenuRef = useRef<HTMLDivElement>(null);
   const settingsBtnRef = useRef<HTMLButtonElement>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(canvasMenuRef, () => setCanvasMenuOpen(false));
+  useClickOutside<HTMLElement>([pinBtnRef, pinMenuRef], () =>
+    setPinMenuOpen(false),
+  );
   useClickOutside<HTMLElement>([settingsBtnRef, settingsMenuRef], () =>
     setSettingsOpen(false),
   );
@@ -79,6 +88,44 @@ export const TitleBar: React.FC = () => {
       void refreshCanvases();
     }
   }, [canvasMenuOpen]);
+
+  useEffect(() => {
+    if (!pinMenuOpen) return;
+    if (!window.electron?.listRunningApps) return;
+
+    setLoadingRunningApps(true);
+    void window.electron
+      .listRunningApps()
+      .then((result) => {
+        if (result.success) {
+          setRunningApps(result.apps);
+          return;
+        }
+        setRunningApps([]);
+        globalActions.pushToast(
+          {
+            key: "toast.loadRunningAppsFailed",
+            params: { error: result.error ?? "unknown" },
+          },
+          "error",
+        );
+      })
+      .catch((error: unknown) => {
+        setRunningApps([]);
+        globalActions.pushToast(
+          {
+            key: "toast.loadRunningAppsFailed",
+            params: {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          },
+          "error",
+        );
+      })
+      .finally(() => {
+        setLoadingRunningApps(false);
+      });
+  }, [pinMenuOpen]);
 
   const handleCreateCanvas = async () => {
     if (!newCanvasName.trim()) return;
@@ -201,8 +248,35 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleToggleMouseThrough = () => {
+    if (!snap.pinMode) return;
     const next = !snap.mouseThrough;
     globalActions.setMouseThrough(next);
+  };
+
+  const applyPinMode = (enabled: boolean, appName = "") => {
+    if (enabled) {
+      globalActions.setPinTargetApp(appName);
+      window.electron?.setPinMode(enabled, appName);
+      return;
+    }
+    globalActions.setPinMode(false);
+    globalActions.setMouseThrough(false);
+    window.electron?.setPinMode(false);
+  };
+
+  const handlePinGlobal = () => {
+    applyPinMode(true);
+    setPinMenuOpen(false);
+  };
+
+  const handlePinToApp = (appName: string) => {
+    applyPinMode(true, appName);
+    setPinMenuOpen(false);
+  };
+
+  const handlePinOff = () => {
+    applyPinMode(false);
+    setPinMenuOpen(false);
   };
 
   const handleShortcutInvalid = () => {
@@ -346,6 +420,7 @@ export const TitleBar: React.FC = () => {
     isHovering ||
     settingsOpen ||
     canvasMenuOpen ||
+    pinMenuOpen ||
     isCreatingCanvas ||
     !!editingCanvas ||
     !!deleteConfirmCanvas;
@@ -575,11 +650,86 @@ export const TitleBar: React.FC = () => {
           >
             <Settings size={14} />
           </button>
+          <div className="relative flex items-center">
+            <button
+              ref={pinBtnRef}
+              onClick={() => setPinMenuOpen((prev) => !prev)}
+              className={clsx(
+                "p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white",
+                pinMenuOpen && "bg-neutral-800",
+              )}
+              style={{ color: snap.pinMode ? THEME.primary : undefined }}
+              title={t("titleBar.alwaysOnTop")}
+            >
+              <Pin size={14} />
+            </button>
+            {pinMenuOpen && (
+              <div
+                ref={pinMenuRef}
+                className="absolute right-0 top-8 mt-1 w-56 rounded border border-neutral-700 bg-neutral-900/95 shadow-lg p-1 text-xs text-neutral-200 no-drag z-[120]"
+              >
+                <button
+                  onClick={handlePinOff}
+                  className={clsx(
+                    "w-full flex items-center justify-between rounded px-2 py-1 text-[10px] hover:bg-neutral-800",
+                    !snap.pinMode && "text-white",
+                  )}
+                >
+                  <span>{t("titleBar.pinOff")}</span>
+                  {!snap.pinMode && <Check size={12} />}
+                </button>
+                <button
+                  onClick={handlePinGlobal}
+                  className={clsx(
+                    "w-full flex items-center justify-between rounded px-2 py-1 text-[10px] hover:bg-neutral-800",
+                    snap.pinMode && !snap.pinTargetApp && "text-white",
+                  )}
+                >
+                  <span>{t("titleBar.alwaysOnTop")}</span>
+                  {snap.pinMode && !snap.pinTargetApp && <Check size={12} />}
+                </button>
+                <div className="mt-1 border-t border-neutral-800 pt-1">
+                  <div className="px-2 pb-1 text-[10px] text-neutral-400">
+                    {t("titleBar.pinToApp")}
+                  </div>
+                  {loadingRunningApps && (
+                    <div className="px-2 py-1 text-[10px] text-neutral-500">
+                      {t("titleBar.pinLoadingApps")}
+                    </div>
+                  )}
+                  {!loadingRunningApps && runningApps.length === 0 && (
+                    <div className="px-2 py-1 text-[10px] text-neutral-500">
+                      {t("titleBar.pinNoApps")}
+                    </div>
+                  )}
+                  {!loadingRunningApps &&
+                    runningApps.map((appName) => (
+                      <button
+                        key={appName}
+                        onClick={() => handlePinToApp(appName)}
+                        className={clsx(
+                          "w-full flex items-center justify-between rounded px-2 py-1 text-[10px] hover:bg-neutral-800",
+                          snap.pinMode &&
+                            snap.pinTargetApp === appName &&
+                            "text-white",
+                        )}
+                      >
+                        <span className="truncate">{appName}</span>
+                        {snap.pinMode && snap.pinTargetApp === appName && (
+                          <Check size={12} />
+                        )}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
           <button
             onClick={handleToggleMouseThrough}
-            className="p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white"
+            className="p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white disabled:opacity-40"
             style={{ color: snap.mouseThrough ? THEME.primary : undefined }}
             title={t("titleBar.mouseThrough")}
+            disabled={!snap.pinMode}
           >
             <Ghost size={14} />
           </button>

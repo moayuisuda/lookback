@@ -98,6 +98,7 @@ const ensureStorageDirs = async (root: string) => {
 
 const DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
+  "imageGene.jsx",
   "imageSearch.jsx",
   "stitchExport.jsx",
 ];
@@ -247,62 +248,104 @@ const cleanupCanvasAssets = async () => {
 };
 
 function downloadImage(url: string, dest: string): Promise<void> {
-  return withFileLock(dest, () => new Promise((resolve, reject) => {
-    if (url.startsWith("file://") || url.startsWith("/")) {
-      let srcPath = url;
-      if (url.startsWith("file://")) {
-        srcPath = new URL(url).pathname;
-        if (
-          process.platform === "win32" &&
-          srcPath.startsWith("/") &&
-          srcPath.includes(":")
-        ) {
-          srcPath = srcPath.substring(1);
-        }
+  const REQUEST_TIMEOUT_MS = 15000;
+  const MAX_REDIRECTS = 5;
+
+  const copyFromLocalPath = async (targetUrl: string): Promise<void> => {
+    let srcPath = targetUrl;
+    if (targetUrl.startsWith("file://")) {
+      srcPath = new URL(targetUrl).pathname;
+      if (
+        process.platform === "win32" &&
+        srcPath.startsWith("/") &&
+        srcPath.includes(":")
+      ) {
+        srcPath = srcPath.substring(1);
       }
-
-      srcPath = decodeURIComponent(srcPath);
-
-      fs.copy(srcPath, dest)
-        .then(() => resolve())
-        .catch((err) => {
-          fs.unlink(dest, () => {});
-          reject(err);
-        });
-      return;
     }
+    await fs.copy(decodeURIComponent(srcPath), dest);
+  };
 
-    const file = fs.createWriteStream(dest);
-    const client = url.startsWith("https") ? https : http;
+  const requestRemote = async (targetUrl: string, redirectCount = 0): Promise<void> => {
+    await new Promise<void>((resolve, reject) => {
+      const client = targetUrl.startsWith("https") ? https : http;
+      const file = fs.createWriteStream(dest);
 
-    const request = client.get(url, (response) => {
-      if (response.statusCode === 200) {
-        response.pipe(file);
-        file.on("finish", () => {
-          file.close();
-          resolve();
-        });
-      } else {
-        file.close();
+      const cleanup = () => {
         fs.unlink(dest, () => {});
-        reject(
-          new Error(
-            `Server responded with ${response.statusCode}: ${response.statusMessage}`
-          )
-        );
-      }
-    });
+      };
 
-    request.on("error", (err) => {
-      fs.unlink(dest, () => {});
-      reject(err);
-    });
+      const fail = (error: Error) => {
+        file.destroy();
+        cleanup();
+        reject(error);
+      };
 
-    file.on("error", (err) => {
-      fs.unlink(dest, () => {});
-      reject(err);
+      const request = client.get(
+        targetUrl,
+        {
+          timeout: REQUEST_TIMEOUT_MS,
+          headers: {
+            // 某些站点（例如 twitter 图片 CDN）会基于 UA 做拦截
+            "User-Agent": "Mozilla/5.0 LookBack/1.0",
+          },
+        },
+        (response) => {
+          const statusCode = response.statusCode ?? 0;
+          const locationHeader = response.headers.location;
+
+          if (
+            statusCode >= 300 &&
+            statusCode < 400 &&
+            typeof locationHeader === "string"
+          ) {
+            file.close();
+            cleanup();
+            response.resume();
+            if (redirectCount >= MAX_REDIRECTS) {
+              reject(new Error("Too many redirects"));
+              return;
+            }
+            const nextUrl = new URL(locationHeader, targetUrl).toString();
+            void requestRemote(nextUrl, redirectCount + 1).then(resolve).catch(reject);
+            return;
+          }
+
+          if (statusCode !== 200) {
+            file.close();
+            cleanup();
+            response.resume();
+            reject(
+              new Error(`Server responded with ${statusCode}: ${response.statusMessage}`)
+            );
+            return;
+          }
+
+          response.pipe(file);
+          file.on("finish", () => {
+            file.close();
+            resolve();
+          });
+        }
+      );
+
+      request.on("timeout", () => {
+        request.destroy(new Error("Download timeout"));
+      });
+      request.on("error", (err) => {
+        fail(err);
+      });
+      file.on("error", (err) => {
+        request.destroy(err);
+        fail(err);
+      });
     });
-  }));
+  };
+
+  if (url.startsWith("file://") || url.startsWith("/")) {
+    return copyFromLocalPath(url);
+  }
+  return requestRemote(url, 0);
 }
 
 export async function startServer() {

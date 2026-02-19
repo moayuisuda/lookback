@@ -7,7 +7,7 @@ interface Window {
     close: () => void;
     focus: () => void;
     toggleAlwaysOnTop: (flag: boolean) => void;
-    setPinMode: (enabled: boolean, widthDelta: number) => void;
+    setPinMode: (enabled: boolean, targetApp?: string) => void;
     setPinTransparent: (enabled: boolean) => void;
     resizeWindowBy: (delta: number) => void;
     setWindowBounds: (bounds: { x?: number; y?: number; width?: number; height?: number }) => void;
@@ -26,6 +26,11 @@ interface Window {
     onIndexingProgress: (callback: (data: unknown) => void) => () => void;
     onToast: (callback: (data: unknown) => void) => () => void;
     onRendererEvent: (callback: (channel: string, data: unknown) => void) => () => void;
+    listRunningApps: () => Promise<{
+      success: boolean;
+      apps: string[];
+      error?: string;
+    }>;
     getStorageDir: () => Promise<string>;
     chooseStorageDir: () => Promise<string | null>;
     saveImageFile: (

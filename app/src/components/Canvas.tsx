@@ -12,9 +12,9 @@ import {
   type ImageMeta,
 } from "../store/canvasStore";
 import { anchorActions } from "../store/anchorStore";
+import { commandActions, commandState } from "../store/commandStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot, type Snapshot } from "valtio";
-import { type CanvasViewport } from "../service";
 import { API_BASE_URL } from "../config";
 import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
@@ -32,6 +32,9 @@ import { createTempMetasFromFiles, scanDroppedItems } from "../utils/import";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { getCssFilters } from "../utils/imageFilters";
 import { ImagePlus, Upload, MousePointer2 } from "lucide-react";
+import { getCommandContext, getCommands } from "../commands";
+import { getCommandDescription, getCommandTitle } from "../commands/display";
+import type { CommandDefinition } from "../commands/types";
 
 const createDroppedImageMeta = (file: {
   path?: string;
@@ -175,6 +178,7 @@ const CanvasItemsLayer = React.memo(
 export const Canvas: React.FC = () => {
   const appSnap = useSnapshot(globalState);
   const canvasSnap = useSnapshot(canvasState);
+  const commandSnap = useSnapshot(commandState);
   const {
     primaryId,
     isClearModalOpen,
@@ -188,13 +192,12 @@ export const Canvas: React.FC = () => {
     canvasFilters,
     showMinimap,
     isCanvasToolbarExpanded,
+    contextMenu,
   } = canvasSnap;
 
   const { t } = useT();
   const shouldEnableMouseThrough = appSnap.pinMode && appSnap.mouseThrough;
 
-  const zoomStackRef = useRef<CanvasViewport[]>([]);
-  const preZoomViewportRef = useRef<CanvasViewport | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -259,6 +262,22 @@ export const Canvas: React.FC = () => {
     canvasState.isClearModalOpen = open;
   });
 
+  const closeContextMenu = useMemoizedFn(() => {
+    canvasState.contextMenu.visible = false;
+  });
+
+  const openContextMenu = useMemoizedFn((x: number, y: number) => {
+    canvasState.contextMenu = {
+      visible: true,
+      x,
+      y,
+    };
+  });
+
+  void commandSnap.externalCommands;
+  const commands = getCommands();
+  const commandContext = useMemo(() => getCommandContext(), []);
+
   const setIsSpaceDown = useMemoizedFn((value: boolean) => {
     canvasState.isSpaceDown = value;
   });
@@ -298,6 +317,10 @@ export const Canvas: React.FC = () => {
   useEffect(() => {
     canvasActions.initCanvas();
   }, [setIsSpaceDown]);
+
+  useEffect(() => {
+    void commandActions.loadExternalCommands();
+  }, []);
 
   const computeMultiSelectUnion = useMemoizedFn((ids: Set<string>) => {
     if (ids.size <= 1) return null;
@@ -397,7 +420,6 @@ export const Canvas: React.FC = () => {
   }, [appSnap.pinMode]);
 
   const handleContainItem = useMemoizedFn((id: string) => {
-    zoomStackRef.current.push({ ...canvasViewport });
     canvasActions.containCanvasItem(id);
   });
 
@@ -412,13 +434,14 @@ export const Canvas: React.FC = () => {
 
   useEffect(() => {
     const handleWindowBlur = () => {
-      clearSelection();
+      // 切换窗口时保留当前选中态，避免回到应用后 focus 丢失。
+      closeContextMenu();
     };
     window.addEventListener("blur", handleWindowBlur);
     return () => {
       window.removeEventListener("blur", handleWindowBlur);
     };
-  }, [clearSelection]);
+  }, [closeContextMenu]);
 
   const handleDrop = useMemoizedFn(
     async (e: React.DragEvent<HTMLDivElement>) => {
@@ -555,6 +578,7 @@ export const Canvas: React.FC = () => {
 
   const handleWheel = useMemoizedFn((e: React.WheelEvent<SVGSVGElement>) => {
     e.preventDefault();
+    closeContextMenu();
     const svg = svgRef.current;
     if (!svg) return;
 
@@ -751,6 +775,12 @@ export const Canvas: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && canvasState.contextMenu.visible) {
+        e.preventDefault();
+        closeContextMenu();
+        return;
+      }
+
       const target = e.target as HTMLElement;
       if (
         target.tagName === "INPUT" ||
@@ -806,7 +836,13 @@ export const Canvas: React.FC = () => {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [handleContainItem, handleZoomToFit, primaryId, setIsSpaceDown]);
+  }, [
+    closeContextMenu,
+    handleContainItem,
+    handleZoomToFit,
+    primaryId,
+    setIsSpaceDown,
+  ]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -818,8 +854,23 @@ export const Canvas: React.FC = () => {
     return () => window.removeEventListener(CANVAS_ZOOM_TO_FIT, handler);
   }, [handleZoomToFit]);
 
+  const handleRunContextMenuCommand = useMemoizedFn(
+    async (command: CommandDefinition) => {
+      closeContextMenu();
+      if (command.ui) {
+        commandActions.open();
+        commandActions.setActiveCommand(command.id);
+        return;
+      }
+      if (command.run) {
+        await command.run(commandContext);
+      }
+    },
+  );
+
   const handleMouseDown = useMemoizedFn(
     (e: React.MouseEvent<SVGSVGElement>) => {
+      closeContextMenu();
       if (isSpaceDown && (e.button === 0 || e.button === 1 || e.button === 2)) {
         isSpaceContainBlockedRef.current = true;
       }
@@ -839,9 +890,6 @@ export const Canvas: React.FC = () => {
         e.preventDefault();
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
-
-        // Save current viewport before zoom operation
-        preZoomViewportRef.current = { ...canvasViewport };
 
         const pos = localToWorldPoint(local);
         canvasState.selectionMode = "zoom";
@@ -947,7 +995,7 @@ export const Canvas: React.FC = () => {
     },
   );
 
-  const handleMouseUp = useMemoizedFn(() => {
+  const handleMouseUp = useMemoizedFn((e: React.MouseEvent<SVGSVGElement>) => {
     if (multiScaleRef.current.active) {
       const current = multiScaleRef.current;
       const scale = current.scale || 1;
@@ -1008,14 +1056,12 @@ export const Canvas: React.FC = () => {
 
       if (canvasState.selectionMode === "zoom") {
         if (shouldZoom) {
-          if (preZoomViewportRef.current) {
-            zoomStackRef.current.push(preZoomViewportRef.current);
-          }
           zoomToBounds({ x: x1, y: y1, width, height }, 0);
-        } else {
-          const prev = zoomStackRef.current.pop();
-          if (prev) {
-            canvasActions.setCanvasViewport(prev);
+        } else if (!shouldEnableMouseThrough) {
+          const local = getLocalPointFromClient(e.clientX, e.clientY);
+          if (local) {
+            openContextMenu(local.x, local.y);
+            void commandActions.loadExternalCommands();
           }
         }
         canvasState.selectionBox = { start: null, current: null };
@@ -1272,6 +1318,7 @@ export const Canvas: React.FC = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     clearSelection,
+    closeContextMenu,
     getSelectedCount,
     getSelectedIds,
     setMultiSelectUnion,
@@ -1576,6 +1623,23 @@ export const Canvas: React.FC = () => {
   }, [canvasFilters]);
 
   const globalSnap = useSnapshot(globalState);
+  const contextMenuPosition = useMemo(() => {
+    const menuWidth = 320;
+    const menuHeight = 360;
+    const padding = 8;
+    const maxX = Math.max(
+      padding,
+      (dimensions.width || 0) - menuWidth - padding,
+    );
+    const maxY = Math.max(
+      padding,
+      (dimensions.height || 0) - menuHeight - padding,
+    );
+    return {
+      left: Math.min(contextMenu.x, maxX),
+      top: Math.min(contextMenu.y, maxY),
+    };
+  }, [contextMenu.x, contextMenu.y, dimensions.height, dimensions.width]);
 
   return (
     <div
@@ -1596,36 +1660,79 @@ export const Canvas: React.FC = () => {
         onRequestClear={() => setIsClearModalOpen(true)}
       />
 
+      {contextMenu.visible && !shouldEnableMouseThrough && (
+        <>
+          <button
+            type="button"
+            className="absolute inset-0 z-40 cursor-default"
+            onMouseDown={closeContextMenu}
+            aria-label={t("common.close")}
+          />
+          <div
+            className="absolute z-50 w-80 rounded-lg border border-neutral-700 bg-neutral-900/95 shadow-2xl backdrop-blur-sm no-drag text-xs"
+            style={contextMenuPosition}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div className="max-h-[280px] overflow-y-auto p-2">
+              {commands.length === 0 && (
+                <div className="px-2 py-4 text-xs text-neutral-500">
+                  {t("commandPalette.empty")}
+                </div>
+              )}
+              {commands.map((command) => {
+                const title = getCommandTitle(command, t);
+                const description = getCommandDescription(command, t);
+                return (
+                  <button
+                    key={command.id}
+                    type="button"
+                    className="w-full px-2 py-2 rounded text-left hover:bg-neutral-800/80 transition-colors"
+                    onClick={() => void handleRunContextMenuCommand(command)}
+                  >
+                    <div className="text-xs text-neutral-100">{title}</div>
+                    {description && (
+                      <div className="mt-0.5 text-[11px] text-neutral-500">
+                        {description}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
       {canvasItems.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
           <div className="flex flex-col items-center gap-6 p-8">
             <div className="relative">
               <div className="absolute inset-0 bg-primary/20 rounded-full blur-xl transform scale-150" />
-              <div className="relative w-24 h-24 rounded-2xl bg-neutral-100 dark:bg-neutral-800 border-2 border-dashed border-neutral-300 dark:border-neutral-600 flex items-center justify-center transform rotate-3 transition-transform duration-500 hover:rotate-6 hover:scale-105">
-                <ImagePlus className="w-10 h-10 text-neutral-400 dark:text-neutral-500" />
+              <div className="relative w-24 h-24 rounded-2xl bg-neutral-800/90 border-2 border-dashed border-neutral-600 flex items-center justify-center transform rotate-3 transition-transform duration-500 hover:rotate-6 hover:scale-105">
+                <ImagePlus className="w-10 h-10 text-neutral-400" />
               </div>
-              <div className="absolute -right-4 -bottom-2 w-16 h-16 rounded-xl bg-neutral-50 dark:bg-neutral-900 border-2 border-dashed border-neutral-300 dark:border-neutral-600 flex items-center justify-center transform -rotate-6 shadow-lg">
+              <div className="absolute -right-4 -bottom-2 w-16 h-16 rounded-xl bg-neutral-900 border-2 border-dashed border-neutral-600 flex items-center justify-center transform -rotate-6 shadow-lg">
                 <Upload className="w-6 h-6 text-primary/60" />
               </div>
             </div>
 
             <div className="text-center space-y-2 max-w-sm">
-              <h3 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
+              <h3 className="text-xl font-semibold text-neutral-100">
                 {t("canvas.empty.title")}
               </h3>
-              <p className="text-sm text-neutral-500 dark:text-neutral-400 leading-relaxed">
+              <p className="text-sm text-neutral-400 leading-relaxed">
                 {t("canvas.empty.dragHint")}
               </p>
             </div>
 
             {/* 装饰性元素：快捷键提示 */}
-            <div className="flex items-center gap-4 text-xs text-neutral-400 dark:text-neutral-600 font-mono mt-4">
-              <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-800">
+            <div className="flex items-center gap-4 text-xs text-neutral-400 font-mono mt-4">
+              <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-800/50 border border-neutral-700">
                 <MousePointer2 className="w-3 h-3" />
                 <span>{t("canvas.empty.panHint")}</span>
               </span>
-              <span className="w-1 h-1 rounded-full bg-neutral-300 dark:bg-neutral-700" />
-              <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-800">
+              <span className="w-1 h-1 rounded-full bg-neutral-700" />
+              <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-800/50 border border-neutral-700">
                 <span>{t("canvas.empty.zoomHint")}</span>
               </span>
             </div>

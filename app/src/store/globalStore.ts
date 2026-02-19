@@ -36,6 +36,7 @@ export interface GlobalState {
   toasts: Toast[];
   uploadProgress: UploadProgress;
   pinMode: boolean;
+  pinTargetApp: string;
   pinTransparent: boolean;
   toggleWindowShortcut: string;
   canvasOpacity: number;
@@ -106,7 +107,8 @@ export const globalState = proxy<GlobalState>({
     startedAt: 0,
     updatedAt: 0,
   },
-  pinMode: true,
+  pinMode: false,
+  pinTargetApp: '',
   pinTransparent: true,
   toggleWindowShortcut: DEFAULT_TOGGLE_WINDOW_SHORTCUT,
   canvasOpacity: 1,
@@ -137,6 +139,9 @@ export const globalActions = {
         'toggleWindowShortcut',
         DEFAULT_TOGGLE_WINDOW_SHORTCUT,
       );
+      const rawPinMode = readSetting<unknown>(settings, 'pinMode', false);
+      const rawPinTargetApp = readSetting<unknown>(settings, 'pinTargetApp', '');
+      const rawPinTransparent = readSetting<unknown>(settings, 'pinTransparent', true);
       const rawCanvasOpacity = readSetting<unknown>(settings, 'canvasOpacity', 1);
       const rawMouseThrough = readSetting<unknown>(settings, 'mouseThrough', false);
       const rawCanvasOpacityUpShortcut = readSetting<unknown>(
@@ -189,10 +194,21 @@ export const globalActions = {
       }
       globalState.colorSwatches = swatches.slice(0, DEFAULT_COLOR_SWATCHES.length);
 
-      globalState.pinTransparent = true;
-      globalState.pinMode = true;
-      void settingStorage.set('pinTransparent', true);
-      void settingStorage.set('pinMode', true);
+      if (typeof rawPinMode === 'boolean') {
+        globalState.pinMode = rawPinMode;
+      }
+
+      if (typeof rawPinTargetApp === 'string') {
+        globalState.pinTargetApp = rawPinTargetApp.trim();
+      }
+
+      if (!globalState.pinMode) {
+        globalState.pinTargetApp = '';
+      }
+
+      if (typeof rawPinTransparent === 'boolean') {
+        globalState.pinTransparent = rawPinTransparent;
+      }
 
       if (typeof rawToggleWindowShortcut === 'string' && rawToggleWindowShortcut.trim()) {
         globalState.toggleWindowShortcut = rawToggleWindowShortcut.trim();
@@ -341,12 +357,26 @@ export const globalActions = {
   },
 
   togglePinMode: () => {
-    globalState.pinMode = !globalState.pinMode;
+    const nextEnabled = !globalState.pinMode;
+    globalState.pinMode = nextEnabled;
+    globalState.pinTargetApp = '';
+    void settingStorage.set('pinMode', nextEnabled);
+    void settingStorage.set('pinTargetApp', globalState.pinTargetApp);
   },
 
   setPinMode: (enabled: boolean) => {
     globalState.pinMode = enabled;
+    globalState.pinTargetApp = '';
     void settingStorage.set('pinMode', enabled);
+    void settingStorage.set('pinTargetApp', globalState.pinTargetApp);
+  },
+
+  setPinTargetApp: (appName: string) => {
+    const next = appName.trim();
+    globalState.pinMode = true;
+    globalState.pinTargetApp = next;
+    void settingStorage.set('pinMode', true);
+    void settingStorage.set('pinTargetApp', next);
   },
 
   setPinTransparent: (enabled: boolean) => {

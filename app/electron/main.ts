@@ -11,6 +11,7 @@ import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
+import { execFile } from "node:child_process";
 import { lockedFs, withFileLock } from "../backend/fileLock";
 
 // Ensure app name is correct for log paths
@@ -47,7 +48,6 @@ import { debounce } from "radash";
 
 let mainWindow: BrowserWindow | null = null;
 let isAppHidden = false;
-let lastGalleryDockDelta = 0;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
   process.platform === "darwin" ? "Command+L" : "Ctrl+L";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
@@ -57,8 +57,180 @@ let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
 
 let isSettingsOpen = false;
-let isPinMode: boolean;
-let isPinTransparent: boolean;
+let isPinMode = false;
+let pinTargetApp = "";
+let isPinTransparent = true;
+let pinByAppTimer: NodeJS.Timeout | null = null;
+let pinByAppQuerying = false;
+let isPinByAppActive = false;
+
+function normalizeAppIdentifier(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function setWindowPinnedToDesktop(enabled: boolean) {
+  if (!mainWindow) return;
+  if (enabled) {
+    mainWindow.setAlwaysOnTop(true, "floating");
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    return;
+  }
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setVisibleOnAllWorkspaces(false);
+}
+
+function setWindowPinnedToTargetApp(active: boolean) {
+  if (!mainWindow) return;
+  if (active) {
+    mainWindow.setAlwaysOnTop(true, "floating");
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+  }
+  mainWindow.setVisibleOnAllWorkspaces(false);
+}
+
+function runAppleScript(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "osascript",
+      ["-e", script],
+      { timeout: 1500 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr?.trim() || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+function runPowerShell(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+      ],
+      { timeout: 1500 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr?.trim() || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+async function getFrontmostAppName(): Promise<string> {
+  if (process.platform === "darwin") {
+    return runAppleScript(
+      'tell application "System Events" to get name of first process whose frontmost is true',
+    );
+  }
+  if (process.platform === "win32") {
+    return runPowerShell(
+      [
+        '$sig = @"',
+        "using System;",
+        "using System.Runtime.InteropServices;",
+        "public static class User32 {",
+        '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+        "}",
+        '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
+        "$hwnd = [User32]::GetForegroundWindow();",
+        "if ($hwnd -eq [IntPtr]::Zero) { return }",
+        "$pid = 0;",
+        "[User32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null;",
+        "if ($pid -eq 0) { return }",
+        "$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue;",
+        "if ($null -eq $proc) { return }",
+        "$proc.ProcessName",
+      ].join(" "),
+    );
+  }
+  return "";
+}
+
+async function getRunningAppNames(): Promise<string[]> {
+  if (process.platform !== "darwin" && process.platform !== "win32") return [];
+  const output =
+    process.platform === "darwin"
+      ? await runAppleScript(
+          'tell application "System Events" to get name of every process whose background only is false',
+        )
+      : await runPowerShell(
+          [
+            `Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne ${process.pid} }`,
+            "| Select-Object -ExpandProperty ProcessName",
+            "| Sort-Object -Unique",
+          ].join(" "),
+        );
+  const selfName = normalizeAppIdentifier(app.getName());
+  const names = output
+    .split(/,|\n/)
+    .map((name) => name.trim())
+    .filter((name) => name && normalizeAppIdentifier(name) !== selfName);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+}
+
+function stopPinByAppWatcher() {
+  if (pinByAppTimer) {
+    clearInterval(pinByAppTimer);
+    pinByAppTimer = null;
+  }
+  pinByAppQuerying = false;
+  isPinByAppActive = false;
+}
+
+async function syncPinByAppState() {
+  if (!isPinMode) return;
+  if (!pinTargetApp) return;
+  if (process.platform !== "darwin" && process.platform !== "win32") return;
+  if (pinByAppQuerying) return;
+
+  pinByAppQuerying = true;
+  try {
+    const activeAppName = await getFrontmostAppName();
+    const shouldPin =
+      normalizeAppIdentifier(activeAppName) ===
+      normalizeAppIdentifier(pinTargetApp);
+    if (shouldPin !== isPinByAppActive) {
+      isPinByAppActive = shouldPin;
+      setWindowPinnedToTargetApp(shouldPin);
+      syncWindowShadow();
+    }
+  } catch {
+    if (isPinByAppActive) {
+      isPinByAppActive = false;
+      setWindowPinnedToTargetApp(false);
+      syncWindowShadow();
+    }
+  } finally {
+    pinByAppQuerying = false;
+  }
+}
+
+function startPinByAppWatcher() {
+  stopPinByAppWatcher();
+  if (!pinTargetApp) return;
+  if (process.platform !== "darwin" && process.platform !== "win32") return;
+  setWindowPinnedToTargetApp(false);
+  syncWindowShadow();
+  void syncPinByAppState();
+  pinByAppTimer = setInterval(() => {
+    void syncPinByAppState();
+  }, 800);
+}
 
 function syncWindowShadow() {
   if (!mainWindow) return;
@@ -69,13 +241,23 @@ function syncWindowShadow() {
 
 function applyPinStateToWindow() {
   if (!mainWindow) return;
-  if (isPinMode) {
-    mainWindow.setAlwaysOnTop(true, "floating");
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  } else {
-    mainWindow.setAlwaysOnTop(false);
-    mainWindow.setVisibleOnAllWorkspaces(false);
+  stopPinByAppWatcher();
+
+  if (!isPinMode) {
+    setWindowPinnedToDesktop(false);
+    syncWindowShadow();
+    return;
   }
+
+  if (
+    pinTargetApp &&
+    (process.platform === "darwin" || process.platform === "win32")
+  ) {
+    startPinByAppWatcher();
+    return;
+  }
+
+  setWindowPinnedToDesktop(true);
   syncWindowShadow();
 }
 
@@ -90,7 +272,6 @@ async function getLocale(): Promise<Locale> {
         ? (settings as { language?: unknown }).language
         : undefined;
     const locale = isLocale(raw) ? raw : "en";
-    localeCache = locale;
     return locale;
   } catch {
     return "en";
@@ -124,12 +305,22 @@ async function loadWindowPinState(): Promise<void> {
     const settingsPath = path.join(getStorageDir(), "settings.json");
     const settings = await lockedFs.readJson(settingsPath).catch(() => null);
     if (!settings || typeof settings !== "object") return;
-    const raw = settings as { pinMode?: unknown; pinTransparent?: unknown };
+    const raw = settings as {
+      pinMode?: unknown;
+      pinTransparent?: unknown;
+      pinTargetApp?: unknown;
+    };
     if (typeof raw.pinMode === "boolean") {
       isPinMode = raw.pinMode;
     }
+    if (typeof raw.pinTargetApp === "string") {
+      pinTargetApp = raw.pinTargetApp.trim();
+    }
     if (typeof raw.pinTransparent === "boolean") {
       isPinTransparent = raw.pinTransparent;
+    }
+    if (!isPinMode) {
+      pinTargetApp = "";
     }
   } catch {
     // ignore
@@ -329,48 +520,12 @@ async function createWindow(options?: { load?: boolean }) {
 
   ipcMain.on(
     "set-pin-mode",
-    (
-      _event,
-      { enabled, widthDelta }: { enabled: boolean; widthDelta: number },
-    ) => {
-      if (!mainWindow) return;
-
-      const requested = Math.round(widthDelta);
-      const shouldResize = Number.isFinite(requested) && requested > 0;
-
-      if (shouldResize) {
-        const [w, h] = mainWindow.getSize();
-        const [x, y] = mainWindow.getPosition();
-        const right = x + w;
-
-        if (enabled) {
-          const [minW] = mainWindow.getMinimumSize();
-          const nextWidth = Math.max(minW, w - requested);
-          const applied = Math.max(0, w - nextWidth);
-          lastGalleryDockDelta = applied;
-
-          mainWindow.setBounds({
-            x: right - nextWidth,
-            y,
-            width: nextWidth,
-            height: h,
-          });
-        } else {
-          const applied =
-            lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
-          lastGalleryDockDelta = 0;
-          const nextWidth = w + applied;
-
-          mainWindow.setBounds({
-            x: right - nextWidth,
-            y,
-            width: nextWidth,
-            height: h,
-          });
-        }
-      }
-
+    (_event, payload: { enabled: boolean; targetApp?: string }) => {
+      const enabled = payload?.enabled === true;
+      const targetApp =
+        typeof payload?.targetApp === "string" ? payload.targetApp.trim() : "";
       isPinMode = enabled;
+      pinTargetApp = enabled ? targetApp : "";
       applyPinStateToWindow();
     },
   );
@@ -460,6 +615,22 @@ async function createWindow(options?: { load?: boolean }) {
     } catch (error) {
       return {
         success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle("list-running-apps", async () => {
+    try {
+      if (process.platform !== "darwin" && process.platform !== "win32") {
+        return { success: true, apps: [] as string[] };
+      }
+      const apps = await getRunningAppNames();
+      return { success: true, apps };
+    } catch (error) {
+      return {
+        success: false,
+        apps: [] as string[],
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -773,6 +944,7 @@ ipcMain.on("settings-open-changed", (_event, open: boolean) => {
 });
 
 app.on("will-quit", () => {
+  stopPinByAppWatcher();
   globalShortcut.unregisterAll();
 });
 

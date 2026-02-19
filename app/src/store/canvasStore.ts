@@ -173,6 +173,11 @@ interface CanvasStoreState {
   multiSelectUnion: CanvasSelectionRect | null;
   selectionBox: CanvasSelectionBoxState;
   selectionMode: "select" | "zoom";
+  contextMenu: {
+    visible: boolean;
+    x: number;
+    y: number;
+  };
   currentCanvasName: string;
 }
 
@@ -204,6 +209,11 @@ export const canvasState = proxy<CanvasStoreState>({
     current: null,
   },
   selectionMode: "select",
+  contextMenu: {
+    visible: false,
+    x: 0,
+    y: 0,
+  },
   currentCanvasName: "Default",
 });
 

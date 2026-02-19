@@ -12,12 +12,13 @@ import {
   type CanvasText,
 } from "../store/canvasStore";
 import { getCommandContext, getCommands } from "../commands";
+import { getCommandDescription, getCommandTitle } from "../commands/display";
+import { importExternalCommand } from "../commands/importExternalCommand";
 import type { CommandContext, CommandDefinition } from "../commands/types";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { ConfirmModal } from "./ConfirmModal";
 import { deleteExternalCommand } from "../service";
 import { clsx } from "clsx";
-import type { I18nKey } from "../../shared/i18n/types";
 
 type CommandResult = {
   kind: "command";
@@ -38,23 +39,6 @@ type ImageResult = {
 type SearchResult = CommandResult | TextResult | ImageResult;
 
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
-const getCommandTitle = (
-  command: CommandDefinition,
-  t: (key: I18nKey) => string,
-) => {
-  if (command.titleKey) return t(command.titleKey);
-  if (command.title) return command.title;
-  return command.id;
-};
-
-const getCommandDescription = (
-  command: CommandDefinition,
-  t: (key: I18nKey) => string,
-) => {
-  if (command.descriptionKey) return t(command.descriptionKey);
-  if (command.description) return command.description;
-  return "";
-};
 
 const isUiComponent = (
   ui: CommandDefinition["ui"],
@@ -77,40 +61,7 @@ export const CommandPalette: React.FC = () => {
   });
 
   const handleImportCommand = async () => {
-    try {
-      if (!window.electron?.importCommand) {
-        globalActions.pushToast(
-          {
-            key: "toast.importFailed",
-            params: { error: t("commandPalette.importUnavailable") },
-          },
-          "error",
-        );
-        return;
-      }
-      const result = await window.electron.importCommand();
-      if (result.success) {
-        globalActions.pushToast({ key: "toast.importSuccess" }, "success");
-        void commandActions.loadExternalCommands();
-      } else if (result.error) {
-        if (result.partialSuccess) {
-          void commandActions.loadExternalCommands();
-        }
-        globalActions.pushToast(
-          { key: "toast.importFailed", params: { error: result.error } },
-          "error",
-        );
-      }
-    } catch (e) {
-      console.error(e);
-      globalActions.pushToast(
-        {
-          key: "toast.importFailed",
-          params: { error: e instanceof Error ? e.message : String(e) },
-        },
-        "error",
-      );
-    }
+    await importExternalCommand(t);
   };
 
   const handleRequestDelete = (command: CommandDefinition) => {

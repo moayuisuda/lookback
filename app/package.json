@@ -10,6 +10,9 @@
     "productName": "LookBack",
     "compression": "maximum",
     "icon": "resources/icon.png",
+    "mac": {
+      "icon": "resources/icon.icns"
+    },
     "files": [
       "dist-electron",
       "dist-renderer",

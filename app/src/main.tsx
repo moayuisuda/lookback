@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
-import { globalActions } from "./store/globalStore.ts";
+import { globalActions, globalState } from "./store/globalStore.ts";
 import { i18nActions } from "./store/i18nStore.ts";
 import { canvasActions } from "./store/canvasStore.ts";
 import { commandActions } from "./store/commandStore.ts";
@@ -63,7 +63,10 @@ const bootstrap = async () => {
     commandActions.hydrateSettings(),
   ]);
 
-  window.electron?.setPinMode?.(true, 0);
+  window.electron?.setPinMode?.(
+    globalState.pinMode,
+    globalState.pinTargetApp || undefined,
+  );
 };
 
 void bootstrap()

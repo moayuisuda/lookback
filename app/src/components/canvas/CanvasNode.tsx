@@ -51,6 +51,16 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   } | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent<SVGGElement>) => {
+    if (e.button === 2) {
+      if (onSelect) {
+        onSelect(e);
+      }
+      if (onMouseDown) {
+        onMouseDown(e);
+      }
+      return;
+    }
+
     if (e.button !== 0) return;
     if (canvasState.isSpaceDown) return;
 

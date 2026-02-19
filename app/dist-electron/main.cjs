@@ -27,6 +27,7 @@ var import_path7 = __toESM(require("path"), 1);
 var import_fs_extra7 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
 var import_electron_updater = require("electron-updater");
+var import_node_child_process = require("child_process");
 
 // backend/fileLock.ts
 var import_fs_extra = __toESM(require("fs-extra"), 1);
@@ -862,6 +863,7 @@ var ensureStorageDirs = async (root) => {
 };
 var DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
+  "imageGene.jsx",
   "imageSearch.jsx",
   "stitchExport.jsx"
 ];
@@ -993,54 +995,87 @@ var cleanupCanvasAssets = async () => {
   }
 };
 function downloadImage(url, dest) {
-  return withFileLock(dest, () => new Promise((resolve, reject) => {
-    if (url.startsWith("file://") || url.startsWith("/")) {
-      let srcPath = url;
-      if (url.startsWith("file://")) {
-        srcPath = new URL(url).pathname;
-        if (process.platform === "win32" && srcPath.startsWith("/") && srcPath.includes(":")) {
-          srcPath = srcPath.substring(1);
-        }
+  const REQUEST_TIMEOUT_MS = 15e3;
+  const MAX_REDIRECTS = 5;
+  const copyFromLocalPath = async (targetUrl) => {
+    let srcPath = targetUrl;
+    if (targetUrl.startsWith("file://")) {
+      srcPath = new URL(targetUrl).pathname;
+      if (process.platform === "win32" && srcPath.startsWith("/") && srcPath.includes(":")) {
+        srcPath = srcPath.substring(1);
       }
-      srcPath = decodeURIComponent(srcPath);
-      import_fs_extra6.default.copy(srcPath, dest).then(() => resolve()).catch((err) => {
-        import_fs_extra6.default.unlink(dest, () => {
-        });
-        reject(err);
-      });
-      return;
     }
-    const file = import_fs_extra6.default.createWriteStream(dest);
-    const client = url.startsWith("https") ? import_https.default : import_http.default;
-    const request = client.get(url, (response) => {
-      if (response.statusCode === 200) {
-        response.pipe(file);
-        file.on("finish", () => {
-          file.close();
-          resolve();
-        });
-      } else {
-        file.close();
+    await import_fs_extra6.default.copy(decodeURIComponent(srcPath), dest);
+  };
+  const requestRemote = async (targetUrl, redirectCount = 0) => {
+    await new Promise((resolve, reject) => {
+      const client = targetUrl.startsWith("https") ? import_https.default : import_http.default;
+      const file = import_fs_extra6.default.createWriteStream(dest);
+      const cleanup = () => {
         import_fs_extra6.default.unlink(dest, () => {
         });
-        reject(
-          new Error(
-            `Server responded with ${response.statusCode}: ${response.statusMessage}`
-          )
-        );
-      }
-    });
-    request.on("error", (err) => {
-      import_fs_extra6.default.unlink(dest, () => {
+      };
+      const fail = (error) => {
+        file.destroy();
+        cleanup();
+        reject(error);
+      };
+      const request = client.get(
+        targetUrl,
+        {
+          timeout: REQUEST_TIMEOUT_MS,
+          headers: {
+            // 某些站点（例如 twitter 图片 CDN）会基于 UA 做拦截
+            "User-Agent": "Mozilla/5.0 LookBack/1.0"
+          }
+        },
+        (response) => {
+          const statusCode = response.statusCode ?? 0;
+          const locationHeader = response.headers.location;
+          if (statusCode >= 300 && statusCode < 400 && typeof locationHeader === "string") {
+            file.close();
+            cleanup();
+            response.resume();
+            if (redirectCount >= MAX_REDIRECTS) {
+              reject(new Error("Too many redirects"));
+              return;
+            }
+            const nextUrl = new URL(locationHeader, targetUrl).toString();
+            void requestRemote(nextUrl, redirectCount + 1).then(resolve).catch(reject);
+            return;
+          }
+          if (statusCode !== 200) {
+            file.close();
+            cleanup();
+            response.resume();
+            reject(
+              new Error(`Server responded with ${statusCode}: ${response.statusMessage}`)
+            );
+            return;
+          }
+          response.pipe(file);
+          file.on("finish", () => {
+            file.close();
+            resolve();
+          });
+        }
+      );
+      request.on("timeout", () => {
+        request.destroy(new Error("Download timeout"));
       });
-      reject(err);
-    });
-    file.on("error", (err) => {
-      import_fs_extra6.default.unlink(dest, () => {
+      request.on("error", (err) => {
+        fail(err);
       });
-      reject(err);
+      file.on("error", (err) => {
+        request.destroy(err);
+        fail(err);
+      });
     });
-  }));
+  };
+  if (url.startsWith("file://") || url.startsWith("/")) {
+    return copyFromLocalPath(url);
+  }
+  return requestRemote(url, 0);
 }
 async function startServer() {
   await initializeStorage();
@@ -1288,8 +1323,48 @@ var en = {
   "command.stitchExport.description": "Stitch selected images and export",
   "command.imageSearch.title": "Image Search",
   "command.imageSearch.description": "Search images by tone and color",
+  "command.imageGene.title": "Image Gene",
+  "command.imageGene.description": "Analyze palette, lightness and chroma distributions",
+  "command.imageGene.empty": "Select one or more images first",
+  "command.imageGene.loading": "Analyzing image gene...",
+  "command.imageGene.failed": "Image gene analysis failed. Check image accessibility.",
+  "command.imageGene.sourceCount": "Images: {{count}}",
+  "command.imageGene.samples": "Sampled pixels: {{count}}",
+  "command.imageGene.failedCount": "{{count}} images failed to load and were skipped",
+  "command.imageGene.removeBackground": "Auto remove background",
+  "command.imageGene.palette": "Palette",
+  "command.imageGene.lightness": "Lightness Distribution",
+  "command.imageGene.saturation": "Saturation Distribution",
+  "command.imageGene.chroma": "Chroma Distribution",
+  "command.imageGene.low": "Low",
+  "command.imageGene.mid": "Mid",
+  "command.imageGene.high": "High",
+  "command.imageGene.copy": "Click to copy color",
+  "command.imageGene.copied": "Copied",
+  "command.imageGene.mean": "Mean",
+  "command.imageGene.std": "Std Dev",
+  "command.imageGene.p10": "P10",
+  "command.imageGene.p50": "P50",
+  "command.imageGene.p90": "P90",
+  "command.imageGene.shadowClip": "Shadow Clip",
+  "command.imageGene.highlightClip": "Highlight Clip",
+  "command.imageHistogram.title": "Image Histogram",
+  "command.imageHistogram.description": "Inspect saturation and luminance histograms of selected images",
+  "command.imageHistogram.empty": "Select one or more images first",
+  "command.imageHistogram.loading": "Computing histograms...",
+  "command.imageHistogram.failed": "Failed to compute histograms. Check image accessibility.",
+  "command.imageHistogram.sourceCount": "Images: {{count}}",
+  "command.imageHistogram.samples": "Sampled pixels: {{count}}",
+  "command.imageHistogram.failedCount": "{{count}} images failed to load and were skipped",
+  "command.imageHistogram.saturation": "Saturation",
+  "command.imageHistogram.luminance": "Luminance",
+  "command.imageHistogram.average": "Avg {{value}}%",
   "titleBar.settings": "Setting",
   "titleBar.alwaysOnTop": "Always on Top",
+  "titleBar.pinOff": "Unpin",
+  "titleBar.pinToApp": "Pin to App",
+  "titleBar.pinLoadingApps": "Loading apps...",
+  "titleBar.pinNoApps": "No available apps",
   "titleBar.dataFolder": "Data Folder",
   "titleBar.dataFolder.default": "Not configured, using default directory",
   "titleBar.change": "Change",
@@ -1346,6 +1421,7 @@ var en = {
   "toast.importFailed": "Failed to import command: {{error}}",
   "toast.commandDeleted": "Command deleted",
   "toast.commandDeleteFailed": "Failed to delete command: {{error}}",
+  "toast.loadRunningAppsFailed": "Failed to load app list: {{error}}",
   "indexing.starting": "Starting...",
   "indexing.progress": "Indexing {{current}}/{{total}}...",
   "indexing.completed": "Completed",
@@ -1495,8 +1571,48 @@ var zh = {
   "command.stitchExport.description": "\u62FC\u63A5\u9009\u4E2D\u7684\u56FE\u7247\u5E76\u5BFC\u51FA",
   "command.imageSearch.title": "\u4EE5\u56FE\u641C\u56FE",
   "command.imageSearch.description": "\u6309\u8272\u8C03\u548C\u989C\u8272\u641C\u7D22\u56FE\u7247",
+  "command.imageGene.title": "\u56FE\u7247\u57FA\u56E0",
+  "command.imageGene.description": "\u5206\u6790\u8272\u677F\u3001\u660E\u5EA6\u4E0E\u8272\u5EA6\u5206\u5E03",
+  "command.imageGene.empty": "\u8BF7\u5148\u9009\u4E2D\u4E00\u5F20\u6216\u591A\u5F20\u56FE\u7247",
+  "command.imageGene.loading": "\u6B63\u5728\u5206\u6790\u56FE\u7247\u57FA\u56E0\u2026",
+  "command.imageGene.failed": "\u56FE\u7247\u57FA\u56E0\u5206\u6790\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u56FE\u7247\u662F\u5426\u53EF\u8BBF\u95EE",
+  "command.imageGene.sourceCount": "\u56FE\u7247\u6570\uFF1A{{count}}",
+  "command.imageGene.samples": "\u91C7\u6837\u50CF\u7D20\uFF1A{{count}}",
+  "command.imageGene.failedCount": "{{count}} \u5F20\u56FE\u7247\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7",
+  "command.imageGene.removeBackground": "\u81EA\u52A8\u53BB\u9664\u80CC\u666F\u8272",
+  "command.imageGene.palette": "\u4E3B\u8272\u677F",
+  "command.imageGene.lightness": "\u660E\u5EA6\u5206\u5E03",
+  "command.imageGene.saturation": "\u9971\u548C\u5EA6\u5206\u5E03",
+  "command.imageGene.chroma": "\u8272\u5EA6\u5206\u5E03",
+  "command.imageGene.low": "\u4F4E",
+  "command.imageGene.mid": "\u4E2D",
+  "command.imageGene.high": "\u9AD8",
+  "command.imageGene.copy": "\u70B9\u51FB\u590D\u5236\u8272\u503C",
+  "command.imageGene.copied": "\u5DF2\u590D\u5236",
+  "command.imageGene.mean": "\u5747\u503C",
+  "command.imageGene.std": "\u6807\u51C6\u5DEE",
+  "command.imageGene.p10": "P10",
+  "command.imageGene.p50": "P50",
+  "command.imageGene.p90": "P90",
+  "command.imageGene.shadowClip": "\u6697\u90E8\u88C1\u526A",
+  "command.imageGene.highlightClip": "\u9AD8\u5149\u88C1\u526A",
+  "command.imageHistogram.title": "\u56FE\u50CF\u76F4\u65B9\u56FE",
+  "command.imageHistogram.description": "\u67E5\u770B\u9009\u4E2D\u56FE\u7247\u7684\u9971\u548C\u5EA6\u4E0E\u660E\u5EA6\u76F4\u65B9\u56FE",
+  "command.imageHistogram.empty": "\u8BF7\u5148\u9009\u4E2D\u4E00\u5F20\u6216\u591A\u5F20\u56FE\u7247",
+  "command.imageHistogram.loading": "\u6B63\u5728\u8BA1\u7B97\u76F4\u65B9\u56FE\u2026",
+  "command.imageHistogram.failed": "\u76F4\u65B9\u56FE\u8BA1\u7B97\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u56FE\u7247\u662F\u5426\u53EF\u8BBF\u95EE",
+  "command.imageHistogram.sourceCount": "\u56FE\u7247\u6570\uFF1A{{count}}",
+  "command.imageHistogram.samples": "\u91C7\u6837\u50CF\u7D20\uFF1A{{count}}",
+  "command.imageHistogram.failedCount": "{{count}} \u5F20\u56FE\u7247\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7",
+  "command.imageHistogram.saturation": "\u9971\u548C\u5EA6",
+  "command.imageHistogram.luminance": "\u660E\u5EA6",
+  "command.imageHistogram.average": "\u5E73\u5747 {{value}}%",
   "titleBar.settings": "\u8BBE\u7F6E",
   "titleBar.alwaysOnTop": "\u7F6E\u9876",
+  "titleBar.pinOff": "\u53D6\u6D88\u7F6E\u9876",
+  "titleBar.pinToApp": "\u7F6E\u9876\u5230\u5E94\u7528",
+  "titleBar.pinLoadingApps": "\u6B63\u5728\u52A0\u8F7D\u5E94\u7528\u2026",
+  "titleBar.pinNoApps": "\u6682\u65E0\u53EF\u9009\u5E94\u7528",
   "titleBar.dataFolder": "\u6570\u636E\u6587\u4EF6\u5939",
   "titleBar.dataFolder.default": "\u672A\u914D\u7F6E\uFF0C\u5C06\u4F7F\u7528\u9ED8\u8BA4\u76EE\u5F55",
   "titleBar.change": "\u66F4\u6539",
@@ -1553,6 +1669,7 @@ var zh = {
   "toast.importFailed": "\u547D\u4EE4\u5BFC\u5165\u5931\u8D25: {{error}}",
   "toast.commandDeleted": "\u547D\u4EE4\u5DF2\u5220\u9664",
   "toast.commandDeleteFailed": "\u5220\u9664\u547D\u4EE4\u5931\u8D25: {{error}}",
+  "toast.loadRunningAppsFailed": "\u52A0\u8F7D\u5E94\u7528\u5217\u8868\u5931\u8D25\uFF1A{{error}}",
   "envInit.brandTitle": "Oh, Captain!",
   "envInit.heading": "\u6B63\u5728\u914D\u7F6E Python \u73AF\u5883\u2026",
   "envInit.subheading": "\u9996\u6B21\u8FD0\u884C\u53EF\u80FD\u4F1A\u4E0B\u8F7D\u5DE5\u5177\u5E76\u5B89\u88C5\u4F9D\u8D56\uFF0C\u8FD9\u662F\u4E00\u6B21\u6027\u6B65\u9AA4\u3002",
@@ -1713,14 +1830,166 @@ import_electron_log.default.transports.file.archiveLog = (file) => {
 };
 var mainWindow = null;
 var isAppHidden = false;
-var lastGalleryDockDelta = 0;
 var DEFAULT_TOGGLE_WINDOW_SHORTCUT = process.platform === "darwin" ? "Command+L" : "Ctrl+L";
 var DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = process.platform === "darwin" ? "Command+T" : "Ctrl+T";
 var toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 var toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
 var isSettingsOpen = false;
-var isPinMode;
-var isPinTransparent;
+var isPinMode = false;
+var pinTargetApp = "";
+var isPinTransparent = true;
+var pinByAppTimer = null;
+var pinByAppQuerying = false;
+var isPinByAppActive = false;
+function normalizeAppIdentifier(name) {
+  return name.trim().toLowerCase();
+}
+function setWindowPinnedToDesktop(enabled) {
+  if (!mainWindow) return;
+  if (enabled) {
+    mainWindow.setAlwaysOnTop(true, "floating");
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    return;
+  }
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setVisibleOnAllWorkspaces(false);
+}
+function setWindowPinnedToTargetApp(active) {
+  if (!mainWindow) return;
+  if (active) {
+    mainWindow.setAlwaysOnTop(true, "floating");
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+  }
+  mainWindow.setVisibleOnAllWorkspaces(false);
+}
+function runAppleScript(script) {
+  return new Promise((resolve, reject) => {
+    (0, import_node_child_process.execFile)(
+      "osascript",
+      ["-e", script],
+      { timeout: 1500 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error((stderr == null ? void 0 : stderr.trim()) || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      }
+    );
+  });
+}
+function runPowerShell(script) {
+  return new Promise((resolve, reject) => {
+    (0, import_node_child_process.execFile)(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script
+      ],
+      { timeout: 1500 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error((stderr == null ? void 0 : stderr.trim()) || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      }
+    );
+  });
+}
+async function getFrontmostAppName() {
+  if (process.platform === "darwin") {
+    return runAppleScript(
+      'tell application "System Events" to get name of first process whose frontmost is true'
+    );
+  }
+  if (process.platform === "win32") {
+    return runPowerShell(
+      [
+        '$sig = @"',
+        "using System;",
+        "using System.Runtime.InteropServices;",
+        "public static class User32 {",
+        '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+        "}",
+        '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
+        "$hwnd = [User32]::GetForegroundWindow();",
+        "if ($hwnd -eq [IntPtr]::Zero) { return }",
+        "$pid = 0;",
+        "[User32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null;",
+        "if ($pid -eq 0) { return }",
+        "$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue;",
+        "if ($null -eq $proc) { return }",
+        "$proc.ProcessName"
+      ].join(" ")
+    );
+  }
+  return "";
+}
+async function getRunningAppNames() {
+  if (process.platform !== "darwin" && process.platform !== "win32") return [];
+  const output = process.platform === "darwin" ? await runAppleScript(
+    'tell application "System Events" to get name of every process whose background only is false'
+  ) : await runPowerShell(
+    [
+      `Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne ${process.pid} }`,
+      "| Select-Object -ExpandProperty ProcessName",
+      "| Sort-Object -Unique"
+    ].join(" ")
+  );
+  const selfName = normalizeAppIdentifier(import_electron2.app.getName());
+  const names = output.split(/,|\n/).map((name) => name.trim()).filter((name) => name && normalizeAppIdentifier(name) !== selfName);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+}
+function stopPinByAppWatcher() {
+  if (pinByAppTimer) {
+    clearInterval(pinByAppTimer);
+    pinByAppTimer = null;
+  }
+  pinByAppQuerying = false;
+  isPinByAppActive = false;
+}
+async function syncPinByAppState() {
+  if (!isPinMode) return;
+  if (!pinTargetApp) return;
+  if (process.platform !== "darwin" && process.platform !== "win32") return;
+  if (pinByAppQuerying) return;
+  pinByAppQuerying = true;
+  try {
+    const activeAppName = await getFrontmostAppName();
+    const shouldPin = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(pinTargetApp);
+    if (shouldPin !== isPinByAppActive) {
+      isPinByAppActive = shouldPin;
+      setWindowPinnedToTargetApp(shouldPin);
+      syncWindowShadow();
+    }
+  } catch {
+    if (isPinByAppActive) {
+      isPinByAppActive = false;
+      setWindowPinnedToTargetApp(false);
+      syncWindowShadow();
+    }
+  } finally {
+    pinByAppQuerying = false;
+  }
+}
+function startPinByAppWatcher() {
+  stopPinByAppWatcher();
+  if (!pinTargetApp) return;
+  if (process.platform !== "darwin" && process.platform !== "win32") return;
+  setWindowPinnedToTargetApp(false);
+  syncWindowShadow();
+  void syncPinByAppState();
+  pinByAppTimer = setInterval(() => {
+    void syncPinByAppState();
+  }, 800);
+}
 function syncWindowShadow() {
   if (!mainWindow) return;
   if (process.platform !== "darwin") return;
@@ -1729,13 +1998,17 @@ function syncWindowShadow() {
 }
 function applyPinStateToWindow() {
   if (!mainWindow) return;
-  if (isPinMode) {
-    mainWindow.setAlwaysOnTop(true, "floating");
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  } else {
-    mainWindow.setAlwaysOnTop(false);
-    mainWindow.setVisibleOnAllWorkspaces(false);
+  stopPinByAppWatcher();
+  if (!isPinMode) {
+    setWindowPinnedToDesktop(false);
+    syncWindowShadow();
+    return;
   }
+  if (pinTargetApp && (process.platform === "darwin" || process.platform === "win32")) {
+    startPinByAppWatcher();
+    return;
+  }
+  setWindowPinnedToDesktop(true);
   syncWindowShadow();
 }
 var isLocale = (value) => value === "en" || value === "zh";
@@ -1744,7 +2017,6 @@ async function getLocale() {
     const settings = await readSettings();
     const raw = settings && typeof settings === "object" ? settings.language : void 0;
     const locale = isLocale(raw) ? raw : "en";
-    localeCache = locale;
     return locale;
   } catch {
     return "en";
@@ -1775,8 +2047,14 @@ async function loadWindowPinState() {
     if (typeof raw.pinMode === "boolean") {
       isPinMode = raw.pinMode;
     }
+    if (typeof raw.pinTargetApp === "string") {
+      pinTargetApp = raw.pinTargetApp.trim();
+    }
     if (typeof raw.pinTransparent === "boolean") {
       isPinTransparent = raw.pinTransparent;
+    }
+    if (!isPinMode) {
+      pinTargetApp = "";
     }
   } catch {
   }
@@ -1930,38 +2208,11 @@ async function createWindow(options) {
   });
   import_electron2.ipcMain.on(
     "set-pin-mode",
-    (_event, { enabled, widthDelta }) => {
-      if (!mainWindow) return;
-      const requested = Math.round(widthDelta);
-      const shouldResize = Number.isFinite(requested) && requested > 0;
-      if (shouldResize) {
-        const [w, h] = mainWindow.getSize();
-        const [x, y] = mainWindow.getPosition();
-        const right = x + w;
-        if (enabled) {
-          const [minW] = mainWindow.getMinimumSize();
-          const nextWidth = Math.max(minW, w - requested);
-          const applied = Math.max(0, w - nextWidth);
-          lastGalleryDockDelta = applied;
-          mainWindow.setBounds({
-            x: right - nextWidth,
-            y,
-            width: nextWidth,
-            height: h
-          });
-        } else {
-          const applied = lastGalleryDockDelta > 0 ? lastGalleryDockDelta : requested;
-          lastGalleryDockDelta = 0;
-          const nextWidth = w + applied;
-          mainWindow.setBounds({
-            x: right - nextWidth,
-            y,
-            width: nextWidth,
-            height: h
-          });
-        }
-      }
+    (_event, payload) => {
+      const enabled = (payload == null ? void 0 : payload.enabled) === true;
+      const targetApp = typeof (payload == null ? void 0 : payload.targetApp) === "string" ? payload.targetApp.trim() : "";
       isPinMode = enabled;
+      pinTargetApp = enabled ? targetApp : "";
       applyPinStateToWindow();
     }
   );
@@ -2042,6 +2293,21 @@ async function createWindow(options) {
     } catch (error) {
       return {
         success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  });
+  import_electron2.ipcMain.handle("list-running-apps", async () => {
+    try {
+      if (process.platform !== "darwin" && process.platform !== "win32") {
+        return { success: true, apps: [] };
+      }
+      const apps = await getRunningAppNames();
+      return { success: true, apps };
+    } catch (error) {
+      return {
+        success: false,
+        apps: [],
         error: error instanceof Error ? error.message : String(error)
       };
     }
@@ -2293,6 +2559,7 @@ import_electron2.ipcMain.on("settings-open-changed", (_event, open) => {
   isSettingsOpen = Boolean(open);
 });
 import_electron2.app.on("will-quit", () => {
+  stopPinByAppWatcher();
   import_electron2.globalShortcut.unregisterAll();
 });
 import_electron2.app.on("window-all-closed", () => {

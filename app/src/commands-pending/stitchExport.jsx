@@ -104,6 +104,74 @@ const buildExportBounds = (items) => {
   };
 };
 
+const trimTransparentEdges = (canvasEl) => {
+  const ctx = canvasEl.getContext("2d");
+  if (!ctx) return canvasEl;
+
+  try {
+    const { width, height } = canvasEl;
+    const imageData = ctx.getImageData(0, 0, width, height).data;
+
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+
+    // 扫描非透明像素，计算最小包围盒，消除导出空边
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const alpha = imageData[(y * width + x) * 4 + 3];
+        if (alpha === 0) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+
+    if (maxX < minX || maxY < minY) return canvasEl;
+
+    const trimWidth = maxX - minX + 1;
+    const trimHeight = maxY - minY + 1;
+    if (trimWidth === width && trimHeight === height && minX === 0 && minY === 0) {
+      return canvasEl;
+    }
+
+    const trimmed = document.createElement("canvas");
+    trimmed.width = trimWidth;
+    trimmed.height = trimHeight;
+    const trimmedCtx = trimmed.getContext("2d");
+    if (!trimmedCtx) return canvasEl;
+    trimmedCtx.drawImage(
+      canvasEl,
+      minX,
+      minY,
+      trimWidth,
+      trimHeight,
+      0,
+      0,
+      trimWidth,
+      trimHeight,
+    );
+    return trimmed;
+  } catch {
+    // 跨域图像会导致画布污染，此时保留原始画布避免流程中断
+    return canvasEl;
+  }
+};
+
+const applyBackground = (canvasEl, background) => {
+  const output = document.createElement("canvas");
+  output.width = canvasEl.width;
+  output.height = canvasEl.height;
+  const ctx = output.getContext("2d");
+  if (!ctx) return canvasEl;
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, output.width, output.height);
+  ctx.drawImage(canvasEl, 0, 0);
+  return output;
+};
+
 const generateStitchPreview = async (context, canvasState, options = {}) => {
   const {
     config: { API_BASE_URL },
@@ -127,19 +195,14 @@ const generateStitchPreview = async (context, canvasState, options = {}) => {
     MAX_PREVIEW_SIZE / Math.max(bounds.width, bounds.height),
   );
 
-  const exportWidth = Math.ceil(bounds.width * scale);
-  const exportHeight = Math.ceil(bounds.height * scale);
+  const exportWidth = Math.max(1, Math.ceil(bounds.width * scale));
+  const exportHeight = Math.max(1, Math.ceil(bounds.height * scale));
 
   const canvasEl = document.createElement("canvas");
   canvasEl.width = exportWidth;
   canvasEl.height = exportHeight;
   const ctx = canvasEl.getContext("2d");
   if (!ctx) return null;
-
-  if (!transparent) {
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, exportWidth, exportHeight);
-  }
 
   ctx.scale(scale, scale);
 
@@ -183,7 +246,11 @@ const generateStitchPreview = async (context, canvasState, options = {}) => {
     ctx.restore();
   });
 
-  return canvasEl.toDataURL("image/png");
+  const trimmedCanvas = trimTransparentEdges(canvasEl);
+  const outputCanvas = transparent
+    ? trimmedCanvas
+    : applyBackground(trimmedCanvas, background);
+  return outputCanvas.toDataURL("image/png");
 };
 
 const exportStitchedImage = async (context, canvasState, options = {}) => {
@@ -214,8 +281,8 @@ const exportStitchedImage = async (context, canvasState, options = {}) => {
       return;
     }
 
-    const exportWidth = Math.ceil(bounds.width);
-    const exportHeight = Math.ceil(bounds.height);
+    const exportWidth = Math.max(1, Math.ceil(bounds.width));
+    const exportHeight = Math.max(1, Math.ceil(bounds.height));
     const canvasEl = document.createElement("canvas");
     canvasEl.width = exportWidth;
     canvasEl.height = exportHeight;
@@ -223,11 +290,6 @@ const exportStitchedImage = async (context, canvasState, options = {}) => {
     if (!ctx) {
       globalActions.pushToast({ key: "toast.command.exportFailed" }, "error");
       return;
-    }
-
-    if (!transparent) {
-      ctx.fillStyle = background;
-      ctx.fillRect(0, 0, exportWidth, exportHeight);
     }
 
     const orderedItems = selectedItems;
@@ -246,14 +308,14 @@ const exportStitchedImage = async (context, canvasState, options = {}) => {
 
     loadedImages.forEach(({ item, img }) => {
       const scale = item.scale ?? 1;
-    const flipX = item.flipX === true;
+      const flipX = item.flipX === true;
       const rotation = (item.rotation ?? 0) * (Math.PI / 180);
       const drawX = item.x - bounds.x;
       const drawY = item.y - bounds.y;
       ctx.save();
       ctx.translate(drawX, drawY);
       ctx.rotate(rotation);
-    ctx.scale(scale * (flipX ? -1 : 1), scale);
+      ctx.scale(scale * (flipX ? -1 : 1), scale);
       ctx.drawImage(
         img,
         -item.width / 2,
@@ -264,7 +326,11 @@ const exportStitchedImage = async (context, canvasState, options = {}) => {
       ctx.restore();
     });
 
-    const imageBase64 = canvasEl.toDataURL("image/png");
+    const trimmedCanvas = trimTransparentEdges(canvasEl);
+    const outputCanvas = transparent
+      ? trimmedCanvas
+      : applyBackground(trimmedCanvas, background);
+    const imageBase64 = outputCanvas.toDataURL("image/png");
     const filename = `stitched_${Date.now()}.png`;
 
     if (electron?.saveImageFile) {

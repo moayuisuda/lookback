@@ -3,8 +3,6 @@ import { useEffect, useRef } from 'react';
 export const useVisualRenderCheck = (componentName: string, enabled = true) => {
   const ref = useRef<SVGElement | HTMLElement | null>(null);
 
-  return;
-
   useEffect(() => {
     if (!enabled) return;
     void componentName;
@@ -40,7 +38,7 @@ export const useVisualRenderCheck = (componentName: string, enabled = true) => {
     
     // 可以在控制台也输出一下
     // console.log(`[${componentName}] Rendered at`, new Date().toLocaleTimeString());
-  });
+  }, [componentName, enabled]);
 
   return ref;
 };

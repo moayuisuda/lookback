@@ -60,8 +60,10 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   const handleSelect = (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
   ) => {
-    e.stopPropagation();
-    if ("button" in e && e.button === 2) return;
+    const isRightClick = "button" in e && e.button === 2;
+    if (!isRightClick) {
+      e.stopPropagation();
+    }
     onSelect(e);
     canvasActions.bringToFront(imageSnap.itemId);
   };

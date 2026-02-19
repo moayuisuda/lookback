@@ -1,0 +1,882 @@
+// This file is intended to be dynamically loaded.
+// Imports are not allowed. Dependencies are passed via context.
+
+// 热力图固定 3×3 分箱，总计 9 格
+const HISTOGRAM_BINS = 3;
+const MAX_EDGE = 512;
+const MAX_SAMPLES_PER_IMAGE = 70000;
+const PALETTE_SIZE = 8;
+const PALETTE_KMEANS_ITERATIONS = 16;
+const PALETTE_MIN_LAB_DISTANCE = 12;
+const HEATMAP_LEVELS = 8;
+const HEATMAP_UPPER_QUANTILE = 0.96;
+const HEATMAP_GAMMA = 0.72;
+const BACKGROUND_MIN_BORDER_SAMPLES = 24;
+const BACKGROUND_DOMINANCE_THRESHOLD = 0.6;
+const BACKGROUND_DISTANCE_LOW_CHROMA = 18;
+const BACKGROUND_DISTANCE_HIGH_CHROMA = 12;
+
+const createBins = () => Array.from({ length: HISTOGRAM_BINS }, () => 0);
+
+const createAccumulator = () => ({
+  lightnessBins: createBins(),
+  saturationBins: createBins(),
+  heatmapBins: Array.from({ length: HISTOGRAM_BINS * HISTOGRAM_BINS }, () => 0),
+  pixelCount: 0,
+  paletteMap: new Map(),
+});
+
+const resolveImageUrl = (imagePath, canvasName, apiBaseUrl) => {
+  let normalized = imagePath.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) {
+    normalized = normalized.slice(1);
+  }
+  if (normalized.startsWith("assets/")) {
+    const filename = normalized.split("/").pop() || normalized;
+    const safeCanvasName = encodeURIComponent(canvasName || "Default");
+    const safeFilename = encodeURIComponent(filename);
+    return `${apiBaseUrl}/api/assets/${safeCanvasName}/${safeFilename}`;
+  }
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
+  }
+  return `${apiBaseUrl}/${normalized}`;
+};
+
+const getImageDisplayName = (imagePath, itemId) => {
+  const normalized = `${imagePath || ""}`.replace(/\\/g, "/");
+  const filename = normalized.split("/").pop();
+  if (filename && filename.trim().length > 0) return filename;
+  return `${itemId}`;
+};
+
+const loadImage = (url) =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Image load failed"));
+    image.src = url;
+  });
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const srgbToLinear = (value) =>
+  value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+
+const labF = (value) => {
+  const epsilon = 216 / 24389;
+  const kappa = 24389 / 27;
+  return value > epsilon ? Math.cbrt(value) : (kappa * value + 16) / 116;
+};
+
+const rgbToLab = (r, g, b) => {
+  const rl = srgbToLinear(r);
+  const gl = srgbToLinear(g);
+  const bl = srgbToLinear(b);
+
+  const x = 0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl;
+  const y = 0.2126729 * rl + 0.7151522 * gl + 0.072175 * bl;
+  const z = 0.0193339 * rl + 0.119192 * gl + 0.9503041 * bl;
+
+  const xn = 0.95047;
+  const yn = 1;
+  const zn = 1.08883;
+  const fx = labF(x / xn);
+  const fy = labF(y / yn);
+  const fz = labF(z / zn);
+
+  return {
+    l: clamp(116 * fy - 16, 0, 100),
+    a: 500 * (fx - fy),
+    labB: 200 * (fy - fz),
+  };
+};
+
+const toBinIndex = (value) => {
+  const ratio = clamp(value / 100, 0, 1);
+  return Math.min(HISTOGRAM_BINS - 1, Math.floor(ratio * HISTOGRAM_BINS));
+};
+
+const quantizeColorKey = (r8, g8, b8) =>
+  ((r8 >> 3) << 10) | ((g8 >> 3) << 5) | (b8 >> 3);
+
+const toHex = (value) => value.toString(16).padStart(2, "0");
+
+const getSaturation = (r, g, b) => {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max <= 0 ? 0 : ((max - min) / max) * 100;
+};
+
+const squaredLabDistance = (x1, y1, z1, x2, y2, z2) => {
+  const dl = x1 - x2;
+  const da = y1 - y2;
+  const db = z1 - z2;
+  return dl * dl + da * da + db * db;
+};
+
+const estimateBackgroundFromBorder = (imageData, width, height) => {
+  const borderMap = new Map();
+  let borderCount = 0;
+
+  const collect = (x, y) => {
+    const offset = (y * width + x) * 4;
+    const alpha = imageData[offset + 3];
+    if (alpha <= 16) return;
+    const alphaWeight = alpha / 255;
+    const r8 = imageData[offset];
+    const g8 = imageData[offset + 1];
+    const b8 = imageData[offset + 2];
+    const colorKey = quantizeColorKey(r8, g8, b8);
+    const bucket = borderMap.get(colorKey);
+    if (!bucket) {
+      borderMap.set(colorKey, {
+        weight: alphaWeight,
+        rSum: r8 * alphaWeight,
+        gSum: g8 * alphaWeight,
+        bSum: b8 * alphaWeight,
+      });
+    } else {
+      bucket.weight += alphaWeight;
+      bucket.rSum += r8 * alphaWeight;
+      bucket.gSum += g8 * alphaWeight;
+      bucket.bSum += b8 * alphaWeight;
+    }
+    borderCount += alphaWeight;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    collect(x, 0);
+    if (height > 1) collect(x, height - 1);
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    collect(0, y);
+    if (width > 1) collect(width - 1, y);
+  }
+
+  if (borderCount < BACKGROUND_MIN_BORDER_SAMPLES) return null;
+
+  let dominant = null;
+  borderMap.forEach((bucket) => {
+    if (!dominant || bucket.weight > dominant.weight) {
+      dominant = bucket;
+    }
+  });
+  if (!dominant) return null;
+
+  const dominance = dominant.weight / borderCount;
+  if (dominance < BACKGROUND_DOMINANCE_THRESHOLD) return null;
+
+  const r = clamp(dominant.rSum / dominant.weight / 255, 0, 1);
+  const g = clamp(dominant.gSum / dominant.weight / 255, 0, 1);
+  const b = clamp(dominant.bSum / dominant.weight / 255, 0, 1);
+  const lab = rgbToLab(r, g, b);
+  const chroma = Math.sqrt(lab.a * lab.a + lab.labB * lab.labB);
+  const distance =
+    chroma < 16 ? BACKGROUND_DISTANCE_LOW_CHROMA : BACKGROUND_DISTANCE_HIGH_CHROMA;
+
+  return {
+    l: lab.l,
+    a: lab.a,
+    labB: lab.labB,
+    threshold2: distance * distance,
+  };
+};
+
+const buildPalettePoints = (paletteMap) =>
+  Array.from(paletteMap.values())
+    .filter((bucket) => bucket.count > 0)
+    .map((bucket) => {
+      const weight = bucket.count;
+      const r = clamp(bucket.rSum / weight / 255, 0, 1);
+      const g = clamp(bucket.gSum / weight / 255, 0, 1);
+      const b = clamp(bucket.bSum / weight / 255, 0, 1);
+      const lab = rgbToLab(r, g, b);
+      return {
+        weight,
+        r,
+        g,
+        b,
+        l: lab.l,
+        a: lab.a,
+        labB: lab.labB,
+        saturation: getSaturation(r, g, b),
+      };
+    });
+
+const seedPaletteCenters = (points, clusterCount) => {
+  const selected = [];
+  if (clusterCount <= 0 || points.length === 0) return selected;
+
+  const first = points.reduce((best, point) => {
+    const pointScore = point.weight * (0.6 + 0.4 * (point.saturation / 100));
+    if (!best || pointScore > best.score) {
+      return { score: pointScore, point };
+    }
+    return best;
+  }, null);
+
+  if (!first) return selected;
+  selected.push({ l: first.point.l, a: first.point.a, labB: first.point.labB });
+
+  while (selected.length < clusterCount) {
+    let bestPoint = null;
+    let bestScore = -1;
+    for (const point of points) {
+      let minDist2 = Number.POSITIVE_INFINITY;
+      for (const center of selected) {
+        const dist2 = squaredLabDistance(
+          point.l,
+          point.a,
+          point.labB,
+          center.l,
+          center.a,
+          center.labB,
+        );
+        if (dist2 < minDist2) minDist2 = dist2;
+      }
+      const score = minDist2 * point.weight * (0.5 + 0.5 * (point.saturation / 100));
+      if (score > bestScore) {
+        bestScore = score;
+        bestPoint = point;
+      }
+    }
+    if (!bestPoint) break;
+    selected.push({ l: bestPoint.l, a: bestPoint.a, labB: bestPoint.labB });
+  }
+
+  return selected;
+};
+
+const buildPaletteClusters = (points, centerCount) => {
+  if (points.length === 0 || centerCount <= 0) return [];
+
+  const centers = seedPaletteCenters(points, centerCount);
+  const effectiveCount = centers.length;
+  if (effectiveCount === 0) return [];
+
+  const assignments = Array.from({ length: points.length }, () => -1);
+
+  for (let iter = 0; iter < PALETTE_KMEANS_ITERATIONS; iter += 1) {
+    const sums = Array.from({ length: effectiveCount }, () => ({
+      weight: 0,
+      r: 0,
+      g: 0,
+      b: 0,
+      l: 0,
+      a: 0,
+      labB: 0,
+      saturation: 0,
+    }));
+
+    let hasChange = false;
+
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      let bestCenter = 0;
+      let bestDist2 = Number.POSITIVE_INFINITY;
+      for (let c = 0; c < effectiveCount; c += 1) {
+        const center = centers[c];
+        const dist2 = squaredLabDistance(
+          point.l,
+          point.a,
+          point.labB,
+          center.l,
+          center.a,
+          center.labB,
+        );
+        if (dist2 < bestDist2) {
+          bestDist2 = dist2;
+          bestCenter = c;
+        }
+      }
+
+      if (assignments[i] !== bestCenter) {
+        assignments[i] = bestCenter;
+        hasChange = true;
+      }
+
+      const acc = sums[bestCenter];
+      const w = point.weight;
+      acc.weight += w;
+      acc.r += point.r * w;
+      acc.g += point.g * w;
+      acc.b += point.b * w;
+      acc.l += point.l * w;
+      acc.a += point.a * w;
+      acc.labB += point.labB * w;
+      acc.saturation += point.saturation * w;
+    }
+
+    for (let c = 0; c < effectiveCount; c += 1) {
+      const acc = sums[c];
+      if (acc.weight <= 0) continue;
+      centers[c] = {
+        l: acc.l / acc.weight,
+        a: acc.a / acc.weight,
+        labB: acc.labB / acc.weight,
+      };
+    }
+
+    if (!hasChange) break;
+  }
+
+  const clusterSums = Array.from({ length: effectiveCount }, () => ({
+    weight: 0,
+    r: 0,
+    g: 0,
+    b: 0,
+    l: 0,
+    a: 0,
+    labB: 0,
+    saturation: 0,
+  }));
+
+  for (let i = 0; i < points.length; i += 1) {
+    const point = points[i];
+    const centerIndex = assignments[i];
+    if (centerIndex < 0) continue;
+    const acc = clusterSums[centerIndex];
+    const w = point.weight;
+    acc.weight += w;
+    acc.r += point.r * w;
+    acc.g += point.g * w;
+    acc.b += point.b * w;
+    acc.l += point.l * w;
+    acc.a += point.a * w;
+    acc.labB += point.labB * w;
+    acc.saturation += point.saturation * w;
+  }
+
+  return clusterSums
+    .filter((acc) => acc.weight > 0)
+    .map((acc) => ({
+      weight: acc.weight,
+      r: acc.r / acc.weight,
+      g: acc.g / acc.weight,
+      b: acc.b / acc.weight,
+      l: acc.l / acc.weight,
+      a: acc.a / acc.weight,
+      labB: acc.labB / acc.weight,
+      saturation: acc.saturation / acc.weight,
+    }));
+};
+
+const finalizePalette = (paletteMap, pixelCount) => {
+  if (pixelCount <= 0) return [];
+
+  const points = buildPalettePoints(paletteMap);
+  if (points.length === 0) return [];
+
+  const clusters = buildPaletteClusters(points, Math.min(PALETTE_SIZE, points.length));
+  if (clusters.length === 0) return [];
+
+  const totalWeight = clusters.reduce((sum, item) => sum + item.weight, 0) || 1;
+  const ranked = [...clusters].sort((left, right) => {
+    const leftWeight = left.weight / totalWeight;
+    const rightWeight = right.weight / totalWeight;
+    const leftScore = leftWeight * (0.7 + 0.3 * (left.saturation / 100));
+    const rightScore = rightWeight * (0.7 + 0.3 * (right.saturation / 100));
+    return rightScore - leftScore;
+  });
+
+  const selected = [];
+  const threshold2 = PALETTE_MIN_LAB_DISTANCE * PALETTE_MIN_LAB_DISTANCE;
+  for (const candidate of ranked) {
+    const isNear = selected.some((item) => {
+      const dist2 = squaredLabDistance(
+        candidate.l,
+        candidate.a,
+        candidate.labB,
+        item.l,
+        item.a,
+        item.labB,
+      );
+      return dist2 < threshold2;
+    });
+    if (!isNear) {
+      selected.push(candidate);
+    }
+    if (selected.length >= PALETTE_SIZE) break;
+  }
+
+  if (selected.length < PALETTE_SIZE) {
+    for (const candidate of ranked) {
+      if (selected.includes(candidate)) continue;
+      selected.push(candidate);
+      if (selected.length >= PALETTE_SIZE) break;
+    }
+  }
+
+  return selected.slice(0, PALETTE_SIZE).map((cluster) => {
+    const r = Math.round(clamp(cluster.r * 255, 0, 255));
+    const g = Math.round(clamp(cluster.g * 255, 0, 255));
+    const b = Math.round(clamp(cluster.b * 255, 0, 255));
+    return {
+      hex: `#${toHex(r)}${toHex(g)}${toHex(b)}`,
+      ratio: cluster.weight / pixelCount,
+    };
+  });
+};
+
+const sampleImageGene = async (url, removeBackground) => {
+  const image = await loadImage(url);
+  const width = image.naturalWidth || image.width || 1;
+  const height = image.naturalHeight || image.height || 1;
+  const ratio = Math.min(1, MAX_EDGE / Math.max(width, height));
+  const sampleWidth = Math.max(1, Math.round(width * ratio));
+  const sampleHeight = Math.max(1, Math.round(height * ratio));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = sampleWidth;
+  canvas.height = sampleHeight;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    throw new Error("Canvas context unavailable");
+  }
+
+  ctx.drawImage(image, 0, 0, sampleWidth, sampleHeight);
+  const imageData = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+  const totalPixels = sampleWidth * sampleHeight;
+  const stride = Math.max(1, Math.floor(totalPixels / MAX_SAMPLES_PER_IMAGE));
+  const background = removeBackground
+    ? estimateBackgroundFromBorder(imageData, sampleWidth, sampleHeight)
+    : null;
+
+  const acc = createAccumulator();
+
+  // 单次采样同时统计明度、饱和度二维分布与色板；自动剔除边缘背景主色
+  for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex += stride) {
+    const offset = pixelIndex * 4;
+    const alpha = imageData[offset + 3];
+    if (alpha <= 16) continue;
+    const alphaWeight = alpha / 255;
+
+    const r8 = imageData[offset];
+    const g8 = imageData[offset + 1];
+    const b8 = imageData[offset + 2];
+
+    const r = r8 / 255;
+    const g = g8 / 255;
+    const b = b8 / 255;
+
+    const lab = rgbToLab(r, g, b);
+    if (background) {
+      const dist2 = squaredLabDistance(
+        lab.l,
+        lab.a,
+        lab.labB,
+        background.l,
+        background.a,
+        background.labB,
+      );
+      if (dist2 <= background.threshold2) continue;
+    }
+    const lStar = lab.l;
+    // 使用 CIELAB 色度 C* 作为饱和轴，更接近视觉感知
+    const saturation = clamp(Math.sqrt(lab.a * lab.a + lab.labB * lab.labB), 0, 100);
+
+    const lightnessBin = toBinIndex(lStar);
+    const saturationBin = toBinIndex(saturation);
+    acc.lightnessBins[lightnessBin] += alphaWeight;
+    acc.saturationBins[saturationBin] += alphaWeight;
+    acc.heatmapBins[saturationBin * HISTOGRAM_BINS + lightnessBin] += alphaWeight;
+    acc.pixelCount += alphaWeight;
+
+    const colorKey = quantizeColorKey(r8, g8, b8);
+    const bucket = acc.paletteMap.get(colorKey);
+    if (!bucket) {
+      acc.paletteMap.set(colorKey, {
+        count: alphaWeight,
+        rSum: r8 * alphaWeight,
+        gSum: g8 * alphaWeight,
+        bSum: b8 * alphaWeight,
+      });
+      continue;
+    }
+    bucket.count += alphaWeight;
+    bucket.rSum += r8 * alphaWeight;
+    bucket.gSum += g8 * alphaWeight;
+    bucket.bSum += b8 * alphaWeight;
+  }
+
+  return acc;
+};
+
+const copyText = async (value) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+};
+
+const createHeatmapDataUrl = (bins, pixelCount) => {
+  const expectedSize = HISTOGRAM_BINS * HISTOGRAM_BINS;
+  if (bins.length !== expectedSize) return "";
+  if (pixelCount <= 0) return "";
+
+  // 使用密度而非绝对像素数，保证不同尺寸图片可横向比较
+  const normalizedBins = bins.map((value) => value / pixelCount);
+
+  const nonZeroBins = normalizedBins.filter((value) => value > 0).sort((a, b) => a - b);
+  if (nonZeroBins.length === 0) return "";
+  const maxCount = nonZeroBins[nonZeroBins.length - 1];
+  if (maxCount <= 0) return "";
+  const quantileIndex = Math.min(
+    nonZeroBins.length - 1,
+    Math.floor(nonZeroBins.length * HEATMAP_UPPER_QUANTILE),
+  );
+  const quantileCap = nonZeroBins[quantileIndex];
+  const normalizedCap = Math.max(quantileCap, maxCount / HEATMAP_LEVELS);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = HISTOGRAM_BINS;
+  canvas.height = HISTOGRAM_BINS;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+
+  const imageData = ctx.createImageData(HISTOGRAM_BINS, HISTOGRAM_BINS);
+
+  for (let satIndex = 0; satIndex < HISTOGRAM_BINS; satIndex += 1) {
+    for (let lightIndex = 0; lightIndex < HISTOGRAM_BINS; lightIndex += 1) {
+      const sourceIndex = satIndex * HISTOGRAM_BINS + lightIndex;
+      const count = normalizedBins[sourceIndex];
+      if (count <= 0) continue;
+
+      const normalized = clamp(count / normalizedCap, 0, 1);
+      const perceptual = normalized ** HEATMAP_GAMMA;
+      // 离散分级让热力阶梯稳定可见
+      const stepIndex = Math.ceil(perceptual * (HEATMAP_LEVELS - 1));
+      const intensity = stepIndex / (HEATMAP_LEVELS - 1);
+
+      // y 轴翻转：顶部=高饱和，底部=低饱和
+      const drawY = HISTOGRAM_BINS - 1 - satIndex;
+      const pixelOffset = (drawY * HISTOGRAM_BINS + lightIndex) * 4;
+
+      const lowR = 56;
+      const lowG = 96;
+      const lowB = 160;
+      const highR = 255;
+      const highG = 156;
+      const highB = 72;
+
+      imageData.data[pixelOffset] = Math.round(lowR + (highR - lowR) * intensity);
+      imageData.data[pixelOffset + 1] = Math.round(lowG + (highG - lowG) * intensity);
+      imageData.data[pixelOffset + 2] = Math.round(lowB + (highB - lowB) * intensity);
+      imageData.data[pixelOffset + 3] = Math.round(56 + 199 * intensity);
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
+export const config = {
+  id: "imageGene",
+  titleKey: "command.imageGene.title",
+  title: "Image Gene",
+  descriptionKey: "command.imageGene.description",
+  description: "Analyze palette, lightness and chroma distributions",
+  keywords: ["image", "gene", "palette", "lightness", "chroma", "histogram"],
+};
+
+export const ui = ({ context }) => {
+  const { React, hooks, config } = context;
+  const { useState, useEffect, useMemo, useRef } = React;
+  const { useEnvState, useT } = hooks;
+  const { canvas: canvasSnap } = useEnvState();
+  const { t } = useT();
+
+  const [loading, setLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [failedCount, setFailedCount] = useState(0);
+  const [results, setResults] = useState(null);
+  const [copiedSwatchKey, setCopiedSwatchKey] = useState("");
+  const [removeBackground, setRemoveBackground] = useState(false);
+  const copyTimerRef = useRef(null);
+
+  const targetImages = useMemo(() => {
+    const images = canvasSnap.canvasItems.filter((item) => item.type === "image");
+    const selected = images.filter((item) => item.isSelected);
+    if (selected.length > 0) {
+      return selected;
+    }
+    if (canvasSnap.primaryId) {
+      const primary = images.find((item) => item.itemId === canvasSnap.primaryId);
+      if (primary) {
+        return [primary];
+      }
+    }
+    if (images.length === 1) {
+      return images;
+    }
+    return [];
+  }, [canvasSnap.canvasItems, canvasSnap.primaryId]);
+
+  const targetImagePayload = useMemo(
+    () =>
+      JSON.stringify(
+        targetImages.map((item) => ({
+          itemId: item.itemId,
+          imagePath: item.imagePath,
+        })),
+      ),
+    [targetImages],
+  );
+
+  const analysisTargets = useMemo(
+    () => JSON.parse(targetImagePayload),
+    [targetImagePayload],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (analysisTargets.length === 0) {
+        setResults(null);
+        setHasError(false);
+        setLoading(false);
+        setFailedCount(0);
+        return;
+      }
+
+      setLoading(true);
+      setHasError(false);
+      setFailedCount(0);
+
+      const nextResults = [];
+      let failures = 0;
+
+      for (const image of analysisTargets) {
+        try {
+          const url = resolveImageUrl(
+            image.imagePath,
+            canvasSnap.currentCanvasName,
+            config.API_BASE_URL,
+          );
+          const sample = await sampleImageGene(url, removeBackground);
+          if (cancelled) return;
+          if (sample.pixelCount <= 0) {
+            failures += 1;
+            continue;
+          }
+          nextResults.push({
+            itemId: image.itemId,
+            imagePath: image.imagePath,
+            heatmapBins: sample.heatmapBins,
+            pixelCount: sample.pixelCount,
+            palette: finalizePalette(sample.paletteMap, sample.pixelCount),
+          });
+        } catch {
+          failures += 1;
+        }
+      }
+
+      if (cancelled) return;
+
+      if (nextResults.length <= 0) {
+        setResults(null);
+        setFailedCount(failures);
+        setHasError(true);
+        setLoading(false);
+        return;
+      }
+
+      setResults(nextResults);
+      setFailedCount(failures);
+      setHasError(false);
+      setLoading(false);
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    analysisTargets,
+    canvasSnap.currentCanvasName,
+    config.API_BASE_URL,
+    removeBackground,
+    targetImagePayload,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
+  const renderResults = useMemo(() => {
+    if (!results) return [];
+    return results.map((item) => ({
+      ...item,
+      heatmapDataUrl: createHeatmapDataUrl(item.heatmapBins, item.pixelCount),
+      displayName: getImageDisplayName(item.imagePath, item.itemId),
+    }));
+  }, [results]);
+
+  const handleCopySwatch = async (itemId, hex) => {
+    const swatchKey = `${itemId}_${hex}`;
+    try {
+      await copyText(hex);
+      setCopiedSwatchKey(swatchKey);
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = window.setTimeout(() => {
+        setCopiedSwatchKey("");
+      }, 1200);
+    } catch {
+      // ignore
+    }
+  };
+
+  if (analysisTargets.length === 0) {
+    return (
+      <div className="px-4 py-6 text-xs text-neutral-500">
+        {t("command.imageGene.empty")}
+      </div>
+    );
+  }
+
+  if (!loading && (hasError || !renderResults.length)) {
+    return (
+      <div className="px-4 py-6 text-xs text-red-300">
+        {t("command.imageGene.failed")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 py-3 text-xs text-neutral-200">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-[11px] text-neutral-500">
+          {loading ? t("command.imageGene.loading") : ""}
+        </div>
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-neutral-800 px-2 py-1 text-[11px] text-neutral-300">
+          <input
+            type="checkbox"
+            checked={removeBackground}
+            onChange={(event) => {
+              setRemoveBackground(event.target.checked);
+            }}
+            className="h-3.5 w-3.5 accent-neutral-200"
+          />
+          <span>{t("command.imageGene.removeBackground")}</span>
+        </label>
+      </div>
+
+      {failedCount > 0 && (
+        <div className="mb-3 rounded border border-amber-700/60 px-2 py-1 text-[11px] text-amber-200">
+          {t("command.imageGene.failedCount", { count: failedCount })}
+        </div>
+      )}
+
+      <div
+        className={
+          renderResults.length > 1
+            ? "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+            : "grid grid-cols-1 gap-3"
+        }
+      >
+        {renderResults.map((item) => (
+          <div
+            key={item.itemId}
+            className="rounded-md border border-neutral-800/80 bg-neutral-900/30 p-3"
+          >
+            <div className="mb-2 truncate font-mono text-[10px] text-neutral-400">
+              {item.displayName}
+            </div>
+
+            <div className="mb-3">
+              <div className="mb-2 text-[12px] font-medium text-neutral-200">
+                {t("command.imageGene.palette")}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {item.palette.map((swatch) => {
+                  const swatchKey = `${item.itemId}_${swatch.hex}`;
+                  const isCopied = copiedSwatchKey === swatchKey;
+                  return (
+                    <button
+                      type="button"
+                      key={`${swatch.hex}_${swatch.ratio}`}
+                      className={`rounded border px-1.5 py-1 text-left transition-colors ${
+                        isCopied
+                          ? "border-neutral-500"
+                          : "border-neutral-800/70 hover:border-neutral-600"
+                      }`}
+                      onClick={() => void handleCopySwatch(item.itemId, swatch.hex)}
+                      title={t("command.imageGene.copy")}
+                    >
+                      <div className="flex items-center gap-1.5 whitespace-nowrap">
+                        <div
+                          className="h-4 w-6 shrink-0 rounded border border-neutral-700"
+                          style={{ backgroundColor: swatch.hex }}
+                        />
+                        <div className="font-mono text-[10px] text-neutral-100">{swatch.hex}</div>
+                        {isCopied && (
+                          <div className="text-[9px] text-neutral-500">
+                            {t("command.imageGene.copied")}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="border-t border-neutral-800/70 pt-3">
+              <div className="mb-2 text-[12px] font-medium text-neutral-200">
+                {`${t("command.imageGene.saturation")} × ${t("command.imageGene.lightness")}`}
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-2">
+                <div className="flex flex-col items-center justify-between py-1 text-[10px] text-neutral-400">
+                  <span>{t("command.imageGene.high")}</span>
+                  <span
+                    className="text-neutral-500"
+                    style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+                  >
+                    {t("command.imageGene.saturation")}
+                  </span>
+                  <span>{t("command.imageGene.low")}</span>
+                </div>
+                <div>
+                  <div className="rounded bg-neutral-900/60 p-1">
+                    {item.heatmapDataUrl ? (
+                      <img
+                        src={item.heatmapDataUrl}
+                        className="h-64 w-full rounded object-fill [image-rendering:pixelated]"
+                      />
+                    ) : (
+                      <div className="h-64 w-full rounded bg-neutral-900" />
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px] text-neutral-400">
+                    <span>{t("command.imageGene.low")}</span>
+                    <span className="text-neutral-500">{t("command.imageGene.lightness")}</span>
+                    <span>{t("command.imageGene.high")}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};

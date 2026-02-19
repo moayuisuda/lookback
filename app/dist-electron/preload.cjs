@@ -6,7 +6,7 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   close: () => import_electron.ipcRenderer.send("window-close"),
   focus: () => import_electron.ipcRenderer.send("window-focus"),
   toggleAlwaysOnTop: (flag) => import_electron.ipcRenderer.send("toggle-always-on-top", flag),
-  setPinMode: (enabled, widthDelta) => import_electron.ipcRenderer.send("set-pin-mode", { enabled, widthDelta }),
+  setPinMode: (enabled, targetApp) => import_electron.ipcRenderer.send("set-pin-mode", { enabled, targetApp }),
   setPinTransparent: (enabled) => import_electron.ipcRenderer.send("set-pin-transparent", enabled),
   resizeWindowBy: (delta) => import_electron.ipcRenderer.send("resize-window-by", delta),
   setWindowBounds: (bounds) => import_electron.ipcRenderer.send("set-window-bounds", bounds),
@@ -19,6 +19,7 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
     return () => import_electron.ipcRenderer.off("renderer-event", handler);
   },
   setSettingsOpen: (open) => import_electron.ipcRenderer.send("settings-open-changed", open),
+  listRunningApps: () => import_electron.ipcRenderer.invoke("list-running-apps"),
   getStorageDir: () => import_electron.ipcRenderer.invoke("get-storage-dir"),
   chooseStorageDir: () => import_electron.ipcRenderer.invoke("choose-storage-dir"),
   saveImageFile: (dataUrl, defaultName) => import_electron.ipcRenderer.invoke("save-image-file", { dataUrl, defaultName }),
