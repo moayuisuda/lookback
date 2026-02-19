@@ -3,6 +3,10 @@
   "productName": "LookBack",
   "private": true,
   "version": "0.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anhaohui/RroRef.git"
+  },
   "type": "module",
   "main": "dist-electron/main.cjs",
   "build": {
@@ -31,8 +35,10 @@
     ],
     "publish": [
       {
-        "provider": "generic",
-        "url": "https://mirror.ghproxy.com/https://github.com/anhaohui/RroRef/releases/latest/download/"
+        "provider": "github",
+        "owner": "anhaohui",
+        "repo": "RroRef",
+        "releaseType": "release"
       }
     ],
     "nsis": {

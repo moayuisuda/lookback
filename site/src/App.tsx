@@ -2,10 +2,12 @@ import { useSnapshot } from 'valtio';
 import { FEATURE_LIST } from './data/features';
 import { useT } from './i18n/useT';
 import { siteActions, siteState } from './store/siteStore';
+import sitePackage from '../package.json';
 
 function App() {
   const { locale, setLocale, t } = useT();
   const snap = useSnapshot(siteState);
+  const activeFeature = FEATURE_LIST[snap.activeFeatureId];
 
   function jumpToFeatures() {
     document.getElementById('features')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -23,7 +25,7 @@ function App() {
 
       <header className="topbar">
         <div className="brand">
-          <span className="brand-dot" />
+          <img className="brand-icon" src="/icon.png" alt="" aria-hidden="true" />
           <span className="brand-name">{t('nav.brand')}</span>
         </div>
         <div className="topbar-actions">
@@ -43,9 +45,6 @@ function App() {
               {t('nav.language.en')}
             </button>
           </div>
-          <button type="button" className="nav-cta">
-            {t('nav.cta')}
-          </button>
         </div>
       </header>
 
@@ -58,34 +57,34 @@ function App() {
             <p className="hero-desc">{t('hero.desc')}</p>
             <div className="hero-actions">
               <button type="button" className="hero-btn primary">
-                {t('hero.primary')}
+                {`${t('hero.primary')} ${t('hero.version', { version: sitePackage.version })}`}
               </button>
               <button type="button" className="hero-btn secondary" onClick={jumpToFeatures}>
                 {t('hero.secondary')}
               </button>
             </div>
-            <ul className="hero-meta">
-              <li>{t('hero.meta.one')}</li>
-              <li>{t('hero.meta.two')}</li>
-              <li>{t('hero.meta.three')}</li>
-            </ul>
           </div>
 
-          <div className="hero-visual">
-            <div className="hero-visual-card hero-visual-main">
+          <div className="hero-stage">
+            <div className="stage-orbit stage-orbit-a" />
+            <div className="stage-orbit stage-orbit-b" />
+            <div className="stage-card stage-main">
+              <img src="/autoLayout.jpg" alt={t('features.imageAlt', { index: 1 })} />
+            </div>
+            <div className="stage-card stage-secondary">
               <img src="/stitch-export.jpg" alt={t('hero.previewAlt')} />
             </div>
-            <div className="hero-visual-card hero-visual-float">
+            <div className="stage-card stage-tertiary">
               <img src="/image-search.jpg" alt={t('hero.searchAlt')} />
             </div>
           </div>
         </section>
 
-        <section className="feature-head" id="features">
-          <h2>{t('features.title')}</h2>
-          <p>{t('features.desc')}</p>
-          <div className="feature-jump">
-            <span>{t('features.jump')}</span>
+        <section className="feature-stage" id="features">
+          <aside className="feature-sidebar">
+            <p className="feature-sidebar-label">{t('features.jump')}</p>
+            <h2>{t('features.title')}</h2>
+            <p>{t('features.desc')}</p>
             <div className="feature-jump-list">
               {FEATURE_LIST.map((feature) => (
                 <button
@@ -94,31 +93,49 @@ function App() {
                   className={snap.activeFeatureId === feature.id ? 'jump-btn active' : 'jump-btn'}
                   onClick={() => jumpToFeature(feature.id)}
                 >
-                  {feature.id}
+                  <span>{feature.id.toString().padStart(2, '0')}</span>
+                  <strong>{t(feature.titleKey)}</strong>
                 </button>
               ))}
             </div>
-          </div>
-        </section>
+            <div className="feature-focus">
+              <div className="feature-focus-media">
+                <img
+                  src={activeFeature.image}
+                  alt={t('features.imageAlt', { index: activeFeature.id + 1 })}
+                />
+              </div>
+              <p>{activeFeature.id.toString().padStart(2, '0')}</p>
+              <h3>{t(activeFeature.titleKey)}</h3>
+              <p>{t(activeFeature.descKey)}</p>
+            </div>
+          </aside>
 
-        <section className="feature-list">
-          {FEATURE_LIST.map((feature) => (
-            <article
-              key={feature.id}
-              id={`feature-${feature.id}`}
-              className={snap.activeFeatureId === feature.id ? 'feature-card active' : 'feature-card'}
-              onMouseEnter={() => siteActions.setActiveFeature(feature.id)}
-            >
-              <div className="feature-media">
-                <img src={feature.image} alt={t('features.imageAlt', { index: feature.id + 1 })} />
-              </div>
-              <div className="feature-body">
-                <p className="feature-index">{feature.id.toString().padStart(2, '0')}</p>
-                <h3>{t(feature.titleKey)}</h3>
-                <p>{t(feature.descKey)}</p>
-              </div>
-            </article>
-          ))}
+          <div className="feature-canvas">
+            {FEATURE_LIST.map((feature) => (
+              <article
+                key={feature.id}
+                id={`feature-${feature.id}`}
+                className={
+                  snap.activeFeatureId === feature.id
+                    ? `feature-card layout-${feature.layout} active`
+                    : `feature-card layout-${feature.layout}`
+                }
+                onMouseEnter={() => siteActions.setActiveFeature(feature.id)}
+                onFocus={() => siteActions.setActiveFeature(feature.id)}
+                tabIndex={0}
+              >
+                <div className="feature-card-top">
+                  <p>{feature.id.toString().padStart(2, '0')}</p>
+                  <h3>{t(feature.titleKey)}</h3>
+                </div>
+                <div className="feature-media">
+                  <img src={feature.image} alt={t('features.imageAlt', { index: feature.id + 1 })} />
+                </div>
+                <p className="feature-desc">{t(feature.descKey)}</p>
+              </article>
+            ))}
+          </div>
         </section>
       </main>
 
