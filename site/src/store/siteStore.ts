@@ -2,7 +2,9 @@ import { proxy } from 'valtio';
 import type { Locale } from '../i18n/types';
 
 export const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback-release/releases/latest';
-export const LATEST_RELEASE_PAGE = 'https://ghfast.top/https://github.com/moayuisuda/lookback-release/releases/latest';
+export const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback-release/releases/latest';
+const GITHUB_RELEASE_DOWNLOAD_PREFIX = 'https://github.com/moayuisuda/lookback-release/releases/download/';
+const MIRROR_RELEASE_DOWNLOAD_PREFIX = 'https://xget.xi-xu.me/gh/moayuisuda/lookback-release/releases/download/';
 
 export type Platform = 'mac' | 'win' | 'other';
 
@@ -39,6 +41,12 @@ export const siteState = proxy<SiteState>({
 
 function normalizeVersion(tagName: string) {
   return tagName.replace(/^v/i, '');
+}
+
+function resolveMirrorDownloadUrl(downloadUrl: string) {
+  // 统一将 GitHub release 直链替换为镜像加速链路。
+  if (!downloadUrl.startsWith(GITHUB_RELEASE_DOWNLOAD_PREFIX)) return downloadUrl;
+  return downloadUrl.replace(GITHUB_RELEASE_DOWNLOAD_PREFIX, MIRROR_RELEASE_DOWNLOAD_PREFIX);
 }
 
 export const siteActions = {
@@ -84,6 +92,7 @@ export const siteActions = {
     const release = siteState.release ?? (await siteActions.loadLatestRelease());
     if (!release) return LATEST_RELEASE_PAGE;
     const asset = siteActions.pickPlatformAsset(release.assets, platform);
-    return asset?.browser_download_url ?? release.htmlUrl;
+    if (!asset) return release.htmlUrl;
+    return resolveMirrorDownloadUrl(asset.browser_download_url);
   },
 };
