@@ -2,7 +2,7 @@ import { proxy } from 'valtio';
 import type { Locale } from '../i18n/types';
 
 export const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback-release/releases/latest';
-export const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback-release/releases/latest';
+export const LATEST_RELEASE_PAGE = 'https://ghfast.top/https://github.com/moayuisuda/lookback-release/releases/latest';
 
 export type Platform = 'mac' | 'win' | 'other';
 

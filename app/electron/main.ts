@@ -76,24 +76,41 @@ function normalizeAppIdentifier(name: string): string {
   return name.trim().toLowerCase();
 }
 
-function setWindowPinnedToDesktop(enabled: boolean) {
+type AlwaysOnTopLevel = Parameters<BrowserWindow["setAlwaysOnTop"]>[1];
+
+function getPinAlwaysOnTopLevel(): AlwaysOnTopLevel {
+  // Windows 的透明无边框窗口在 floating 层级下容易被普通窗口覆盖。
+  if (process.platform === "win32") return "screen-saver";
+  return "floating";
+}
+
+function setWindowAlwaysOnTop(enabled: boolean) {
   if (!mainWindow) return;
   if (enabled) {
-    mainWindow.setAlwaysOnTop(true, "floating");
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
+    if (process.platform === "win32") {
+      // 切换目标应用后主动抬到最顶层，避免置顶状态存在但层级未刷新。
+      mainWindow.moveTop();
+    }
     return;
   }
   mainWindow.setAlwaysOnTop(false);
+}
+
+function setWindowPinnedToDesktop(enabled: boolean) {
+  if (!mainWindow) return;
+  if (enabled) {
+    setWindowAlwaysOnTop(true);
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    return;
+  }
+  setWindowAlwaysOnTop(false);
   mainWindow.setVisibleOnAllWorkspaces(false);
 }
 
 function setWindowPinnedToTargetApp(active: boolean) {
   if (!mainWindow) return;
-  if (active) {
-    mainWindow.setAlwaysOnTop(true, "floating");
-  } else {
-    mainWindow.setAlwaysOnTop(false);
-  }
+  setWindowAlwaysOnTop(active);
   mainWindow.setVisibleOnAllWorkspaces(false);
 }
 
@@ -468,12 +485,12 @@ async function createWindow(options?: { load?: boolean }) {
 
   ipcMain.on("toggle-always-on-top", (_event, flag) => {
     if (flag) {
-      mainWindow?.setAlwaysOnTop(true, "screen-saver");
+      setWindowAlwaysOnTop(true);
       mainWindow?.setVisibleOnAllWorkspaces(true, {
         visibleOnFullScreen: true,
       });
     } else {
-      mainWindow?.setAlwaysOnTop(false);
+      setWindowAlwaysOnTop(false);
       mainWindow?.setVisibleOnAllWorkspaces(false);
     }
   });
