@@ -1,43 +1,27 @@
+import { useEffect } from 'react';
 import { useSnapshot } from 'valtio';
 import { FEATURE_LIST } from './data/features';
 import { useT } from './i18n/useT';
-import { siteActions, siteState } from './store/siteStore';
+import { LATEST_RELEASE_PAGE, siteActions, siteState, type Platform } from './store/siteStore';
 import sitePackage from '../package.json';
 
-const LATEST_RELEASE_API = 'https://api.github.com/repos/moayuisuda/lookback-release/releases/latest';
-const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback-release/releases/latest';
-
-type ReleaseAsset = {
-  name: string;
-  browser_download_url: string;
-};
-
-type LatestRelease = {
-  html_url: string;
-  assets: ReleaseAsset[];
-};
-
-function detectPlatform() {
+function detectPlatform(): Platform {
   const ua = navigator.userAgent.toLowerCase();
   if (ua.includes('mac')) return 'mac';
   if (ua.includes('win')) return 'win';
   return 'other';
 }
 
-function pickPlatformAsset(assets: ReleaseAsset[], platform: ReturnType<typeof detectPlatform>) {
-  if (platform === 'mac') {
-    return assets.find((asset) => asset.name.toLowerCase().endsWith('.dmg')) ?? null;
-  }
-  if (platform === 'win') {
-    return assets.find((asset) => asset.name.toLowerCase().endsWith('.exe')) ?? null;
-  }
-  return null;
-}
-
 function App() {
   const { locale, setLocale, t } = useT();
   const snap = useSnapshot(siteState);
-  const activeFeature = FEATURE_LIST[snap.activeFeatureId];
+  const activeFeature = FEATURE_LIST.find((feature) => feature.id === snap.activeFeatureId)!;
+
+  useEffect(() => {
+    // 先显示本地版本，随后异步刷新为最新 release 版本。
+    siteActions.setLocalVersion(sitePackage.version);
+    void siteActions.loadLatestRelease();
+  }, []);
 
   function jumpToFeatures() {
     document.getElementById('features')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -50,19 +34,8 @@ function App() {
 
   async function downloadByPlatform() {
     const platform = detectPlatform();
-    try {
-      const resp = await fetch(LATEST_RELEASE_API);
-      if (!resp.ok) {
-        window.location.assign(LATEST_RELEASE_PAGE);
-        return;
-      }
-
-      const release = (await resp.json()) as LatestRelease;
-      const asset = pickPlatformAsset(release.assets, platform);
-      window.location.assign(asset?.browser_download_url ?? release.html_url ?? LATEST_RELEASE_PAGE);
-    } catch {
-      window.location.assign(LATEST_RELEASE_PAGE);
-    }
+    const downloadUrl = await siteActions.resolveDownloadUrl(platform);
+    window.location.assign(downloadUrl);
   }
 
   return (
@@ -104,7 +77,7 @@ function App() {
             <p className="hero-desc">{t('hero.desc')}</p>
             <div className="hero-actions">
               <button type="button" className="hero-btn primary" onClick={downloadByPlatform}>
-                {`${t('hero.primary')} ${t('hero.version', { version: sitePackage.version })}`}
+                {`${t('hero.primary')} ${t('hero.version', { version: snap.releaseVersion })}`}
               </button>
               <button type="button" className="hero-btn secondary" onClick={jumpToFeatures}>
                 {t('hero.secondary')}
@@ -184,9 +157,52 @@ function App() {
             ))}
           </div>
         </section>
+
+        <section className="download-guide" aria-labelledby="download-guide-title">
+          <div className="download-guide-head">
+            <p className="download-guide-badge">{t('download.badge')}</p>
+            <h2 id="download-guide-title">{t('download.title')}</h2>
+            <p>{t('download.desc')}</p>
+            <div className="download-guide-actions">
+              <button type="button" className="hero-btn primary" onClick={downloadByPlatform}>
+                {`${t('hero.primary')} ${t('hero.version', { version: snap.releaseVersion })}`}
+              </button>
+              <a
+                className="download-guide-release"
+                href={LATEST_RELEASE_PAGE}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t('download.release')}
+              </a>
+            </div>
+          </div>
+          <ol className="download-guide-list">
+            <li>
+              <h3>{t('download.step.1.title')}</h3>
+              <p>{t('download.step.1.desc')}</p>
+            </li>
+            <li>
+              <h3>{t('download.step.2.title')}</h3>
+              <p>{t('download.step.2.desc')}</p>
+            </li>
+            <li>
+              <h3>{t('download.step.3.title')}</h3>
+              <p>{t('download.step.3.desc')}</p>
+            </li>
+          </ol>
+        </section>
       </main>
 
-      <footer className="footer">{t('footer.line')}</footer>
+      <footer className="footer">
+        <p className="footer-line">{t('footer.line')}</p>
+        <div className="footer-meta">
+          <a className="footer-link" href="mailto:ahhcr68@gmail.com">
+            {t('footer.contact')}
+          </a>
+          <p>{t('footer.copyright')}</p>
+        </div>
+      </footer>
     </div>
   );
 }

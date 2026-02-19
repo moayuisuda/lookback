@@ -23,6 +23,12 @@ body,
   min-height: 100%;
 }
 
+html,
+body {
+  background-color: var(--bg-main);
+  overscroll-behavior-y: none;
+}
+
 body {
   font-family: 'Manrope', 'PingFang SC', 'Microsoft Yahei', sans-serif;
   color: var(--text-main);
@@ -497,6 +503,93 @@ body {
   min-height: 150px;
 }
 
+.download-guide {
+  margin-top: 40px;
+  padding: 24px;
+  border-radius: 18px;
+  border: 1px solid var(--line-soft);
+  background:
+    linear-gradient(140deg, rgba(57, 197, 187, 0.12), rgba(44, 119, 255, 0.08)),
+    rgba(8, 14, 24, 0.9);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.download-guide-head {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.download-guide-badge {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+.download-guide-head h2 {
+  margin: 0;
+  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-size: clamp(28px, 3.2vw, 40px);
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+}
+
+.download-guide-head > p {
+  margin: 0;
+  color: var(--text-sub);
+  line-height: 1.75;
+}
+
+.download-guide-actions {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.download-guide-release {
+  border-radius: 12px;
+  padding: 11px 16px;
+  border: 1px solid rgba(57, 197, 187, 0.36);
+  color: #c8e6ff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+  background: rgba(57, 197, 187, 0.08);
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.download-guide-release:hover {
+  border-color: rgba(57, 197, 187, 0.6);
+  color: #eff8ff;
+}
+
+.download-guide-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.download-guide-list li h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #d9e9fa;
+}
+
+.download-guide-list li p {
+  margin: 6px 0 0;
+  color: var(--text-sub);
+  line-height: 1.65;
+}
+
 .footer {
   max-width: 1220px;
   margin: 44px auto 10px;
@@ -504,6 +597,33 @@ body {
   padding-top: 20px;
   color: #8097b4;
   font-size: 13px;
+  display: grid;
+  gap: 8px;
+}
+
+.footer-line {
+  margin: 0;
+}
+
+.footer-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.footer-meta p {
+  margin: 0;
+}
+
+.footer-link {
+  color: #9bc5f4;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+  color: #c9e4ff;
 }
 
 @keyframes fade-up {
@@ -553,6 +673,10 @@ body {
 
   .feature-sidebar {
     position: static;
+  }
+
+  .download-guide {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -604,5 +728,15 @@ body {
 
   .jump-btn strong {
     font-size: 12px;
+  }
+
+  .download-guide {
+    padding: 18px;
+  }
+
+  .footer-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
   }
 }

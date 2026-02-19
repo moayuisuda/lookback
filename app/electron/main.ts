@@ -50,10 +50,16 @@ let mainWindow: BrowserWindow | null = null;
 let isAppHidden = false;
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT =
   process.platform === "darwin" ? "Command+L" : "Ctrl+L";
+const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT =
+  process.platform === "darwin" ? "Command+Up" : "Ctrl+Up";
+const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT =
+  process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
   process.platform === "darwin" ? "Command+T" : "Ctrl+T";
 
 let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
+let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
+let canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
 
 let isSettingsOpen = false;
@@ -91,12 +97,12 @@ function setWindowPinnedToTargetApp(active: boolean) {
   mainWindow.setVisibleOnAllWorkspaces(false);
 }
 
-function runAppleScript(script: string): Promise<string> {
+function runAppleScript(script: string, timeoutMs = 1500): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "osascript",
       ["-e", script],
-      { timeout: 1500 },
+      { timeout: timeoutMs },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr?.trim() || error.message));
@@ -169,6 +175,8 @@ async function getRunningAppNames(): Promise<string[]> {
     process.platform === "darwin"
       ? await runAppleScript(
           'tell application "System Events" to get name of every process whose background only is false',
+          // First-time automation permission prompt on macOS can take several seconds.
+          15000,
         )
       : await runPowerShell(
           [
@@ -296,6 +304,18 @@ async function loadShortcuts(): Promise<void> {
       .toggleMouseThroughShortcut;
     if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
+    }
+
+    const rawOpacityUp = (settings as Record<string, unknown>)
+      .canvasOpacityUpShortcut;
+    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
+      canvasOpacityUpShortcut = rawOpacityUp.trim();
+    }
+
+    const rawOpacityDown = (settings as Record<string, unknown>)
+      .canvasOpacityDownShortcut;
+    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
+      canvasOpacityDownShortcut = rawOpacityDown.trim();
     }
   } catch {
     // ignore
@@ -686,6 +706,34 @@ function registerToggleMouseThroughShortcut(accelerator: string) {
   );
 }
 
+function registerCanvasOpacityUpShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityUpShortcut,
+    (v) => {
+      canvasOpacityUpShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "adjust-canvas-opacity", 0.05);
+    },
+    true,
+  );
+}
+
+function registerCanvasOpacityDownShortcut(accelerator: string) {
+  return registerShortcut(
+    accelerator,
+    canvasOpacityDownShortcut,
+    (v) => {
+      canvasOpacityDownShortcut = v;
+    },
+    () => {
+      mainWindow?.webContents.send("renderer-event", "adjust-canvas-opacity", -0.05);
+    },
+    true,
+  );
+}
+
 function registerAnchorShortcuts() {
   const anchors = ["1", "2", "3"];
   anchors.forEach((key) => {
@@ -807,6 +855,8 @@ app.whenReady().then(async () => {
   applyPinStateToWindow();
 
   registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
   registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
   registerAnchorShortcuts();
 
@@ -834,6 +884,20 @@ ipcMain.handle(
   "set-toggle-window-shortcut",
   async (_event, accelerator: string) => {
     return registerToggleWindowShortcut(accelerator);
+  },
+);
+
+ipcMain.handle(
+  "set-canvas-opacity-up-shortcut",
+  async (_event, accelerator: string) => {
+    return registerCanvasOpacityUpShortcut(accelerator);
+  },
+);
+
+ipcMain.handle(
+  "set-canvas-opacity-down-shortcut",
+  async (_event, accelerator: string) => {
+    return registerCanvasOpacityDownShortcut(accelerator);
   },
 );
 

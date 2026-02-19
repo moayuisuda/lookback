@@ -14,6 +14,12 @@ interface Window {
     setToggleWindowShortcut: (
       accelerator: string,
     ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
+    setCanvasOpacityUpShortcut: (
+      accelerator: string,
+    ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
+    setCanvasOpacityDownShortcut: (
+      accelerator: string,
+    ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
     setToggleMouseThroughShortcut: (
       accelerator: string,
     ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;

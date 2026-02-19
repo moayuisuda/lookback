@@ -35,7 +35,20 @@ export const zh = {
   'feature.6.title': '穿透模式与置顶模式',
   'feature.6.desc': '在不同场景间自由切换窗口行为，保证工具始终在你需要的位置。',
 
-  'footer.line': 'LookBack · 更顺手的视觉工作流工具。',
+  'download.badge': '下载指引',
+  'download.title': '3 步完成安装，立即开始使用',
+  'download.desc': '点击下载后会按系统自动匹配安装包；若网络拦截，可直接访问 release 页面手动下载。',
+  'download.release': '打开 Release 页面',
+  'download.step.1.title': '01 · 下载',
+  'download.step.1.desc': '点击按钮，macOS 获取 .dmg，Windows 获取 .exe。',
+  'download.step.2.title': '02 · 安装',
+  'download.step.2.desc': 'macOS 将应用拖到 Applications；Windows 双击安装程序并完成向导。',
+  'download.step.3.title': '03 · 启动',
+  'download.step.3.desc': '首次启动后即可导入素材，开始布局、分析与导出。',
+
+  'footer.line': 'LookBack · 图片素材工作站',
+  'footer.contact': '联系邮箱：ahhcr68@gmail.com',
+  'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } as const;
 
 export const en = {
@@ -76,5 +89,20 @@ export const en = {
   'feature.6.title': 'Pass-Through and Always-on-Top Modes',
   'feature.6.desc': 'Switch window behavior by context so your tool stays exactly where your attention needs it.',
 
-  'footer.line': 'LookBack · A practical tool for visual workflows.',
+  'download.badge': 'Download Guide',
+  'download.title': 'Install in 3 steps and start now',
+  'download.desc':
+    'The download button auto-matches your OS package; if blocked by network policy, use the release page for manual download.',
+  'download.release': 'Open Release Page',
+  'download.step.1.title': '01 · Download',
+  'download.step.1.desc': 'Click button above to get .dmg on macOS or .exe on Windows.',
+  'download.step.2.title': '02 · Install',
+  'download.step.2.desc':
+    'On macOS, drag the app into Applications. On Windows, run the installer and finish the setup.',
+  'download.step.3.title': '03 · Launch',
+  'download.step.3.desc': 'After first launch, import assets and start layout, analysis, and export.',
+
+  'footer.line': 'LookBack · Your Visual Asset Workstation',
+  'footer.contact': 'Contact: ahhcr68@gmail.com',
+  'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } satisfies Record<keyof typeof zh, string>;

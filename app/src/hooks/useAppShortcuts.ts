@@ -10,53 +10,9 @@ import { commandActions } from "../store/commandStore";
 export const useAppShortcuts = () => {
   const snap = useSnapshot(globalState);
 
-  const opacityUpHotkey = acceleratorToHotkey(snap.canvasOpacityUpShortcut);
-  const opacityDownHotkey = acceleratorToHotkey(snap.canvasOpacityDownShortcut);
   const canvasGroupHotkey = acceleratorToHotkey(snap.canvasGroupShortcut);
   const zoomToFitHotkey = acceleratorToHotkey(snap.zoomToFitShortcut);
   const commandPaletteShortcut = snap.commandPaletteShortcut;
-
-  console.log({
-    opacityUpHotkey,
-    opacityDownHotkey,
-    canvasGroupHotkey,
-    zoomToFitHotkey,
-    commandPaletteShortcut,
-  });
-
-  useHotkeys(
-    opacityUpHotkey ?? "",
-    (e) => {
-      e.preventDefault();
-      const current = globalState.canvasOpacity;
-      if (current < 1) {
-        globalActions.setCanvasOpacity(Math.min(1, current + 0.05));
-      }
-    },
-    {
-      preventDefault: true,
-      enableOnFormTags: false,
-      enabled: Boolean(opacityUpHotkey),
-    },
-    [opacityUpHotkey],
-  );
-
-  useHotkeys(
-    opacityDownHotkey ?? "",
-    (e) => {
-      e.preventDefault();
-      const current = globalState.canvasOpacity;
-      if (current > 0.1) {
-        globalActions.setCanvasOpacity(Math.max(0.1, current - 0.05));
-      }
-    },
-    {
-      preventDefault: true,
-      enableOnFormTags: false,
-      enabled: Boolean(opacityDownHotkey),
-    },
-    [opacityDownHotkey],
-  );
 
   useHotkeys(
     canvasGroupHotkey ?? "",
@@ -77,6 +33,18 @@ export const useAppShortcuts = () => {
     { preventDefault: true, enabled: Boolean(zoomToFitHotkey) },
     [zoomToFitHotkey],
   );
+
+  useEffect(() => {
+    const cleanup = window.electron?.onRendererEvent?.(
+      (event: string, ...args: unknown[]) => {
+        if (event !== "adjust-canvas-opacity") return;
+        const delta = args[0];
+        if (typeof delta !== "number" || !Number.isFinite(delta)) return;
+        globalActions.setCanvasOpacity(globalState.canvasOpacity + delta);
+      },
+    );
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     if (!commandPaletteShortcut) return;

@@ -18,18 +18,18 @@ export const FEATURE_LIST: FeatureItem[] = [
     descKey: 'feature.0.desc',
   },
   {
-    id: 1,
-    image: '/plugins.jpg',
-    layout: 'compact',
-    titleKey: 'feature.1.title',
-    descKey: 'feature.1.desc',
-  },
-  {
     id: 2,
     image: '/anchor.gif',
     layout: 'tall',
     titleKey: 'feature.2.title',
     descKey: 'feature.2.desc',
+  },
+  {
+    id: 1,
+    image: '/plugins.jpg',
+    layout: 'compact',
+    titleKey: 'feature.1.title',
+    descKey: 'feature.1.desc',
   },
   {
     id: 3,
@@ -39,11 +39,11 @@ export const FEATURE_LIST: FeatureItem[] = [
     descKey: 'feature.3.desc',
   },
   {
-    id: 4,
-    image: '/moreway-import.jpg',
+    id: 6,
+    image: '/on-top.jpg',
     layout: 'compact',
-    titleKey: 'feature.4.title',
-    descKey: 'feature.4.desc',
+    titleKey: 'feature.6.title',
+    descKey: 'feature.6.desc',
   },
   {
     id: 5,
@@ -53,10 +53,10 @@ export const FEATURE_LIST: FeatureItem[] = [
     descKey: 'feature.5.desc',
   },
   {
-    id: 6,
-    image: '/on-top.jpg',
+    id: 4,
+    image: '/moreway-import.jpg',
     layout: 'compact',
-    titleKey: 'feature.6.title',
-    descKey: 'feature.6.desc',
+    titleKey: 'feature.4.title',
+    descKey: 'feature.4.desc',
   },
 ];

@@ -419,16 +419,40 @@ export const globalActions = {
   setCanvasOpacityUpShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
+    const prev = globalState.canvasOpacityUpShortcut;
     globalState.canvasOpacityUpShortcut = next;
     await settingStorage.set('canvasOpacityUpShortcut', next);
+
+    const res = await window.electron?.setCanvasOpacityUpShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.canvasOpacityUpShortcut = prev;
+      await settingStorage.set('canvasOpacityUpShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
     return true;
   },
 
   setCanvasOpacityDownShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
     if (!next) return false;
+    const prev = globalState.canvasOpacityDownShortcut;
     globalState.canvasOpacityDownShortcut = next;
     await settingStorage.set('canvasOpacityDownShortcut', next);
+
+    const res = await window.electron?.setCanvasOpacityDownShortcut?.(next);
+    if (res && res.success !== true) {
+      globalState.canvasOpacityDownShortcut = prev;
+      await settingStorage.set('canvasOpacityDownShortcut', prev);
+      globalActions.pushToast(
+        { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
+        'error',
+      );
+      return false;
+    }
     return true;
   },
 
