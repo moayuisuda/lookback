@@ -33,14 +33,6 @@
       "!**/docs/**",
       "!**/*.md"
     ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "anhaohui",
-        "repo": "RroRef",
-        "releaseType": "release"
-      }
-    ],
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
@@ -66,7 +58,6 @@
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
     "electron-log": "^5.4.3",
-    "electron-updater": "^6.7.3",
     "express": "^5.2.1",
     "fs-extra": "^11.3.3",
     "konva": "^10.2.0",

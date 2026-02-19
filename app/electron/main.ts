@@ -10,7 +10,6 @@ import {
 import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
-import { autoUpdater } from "electron-updater";
 import { execFile } from "node:child_process";
 import { lockedFs, withFileLock } from "../backend/fileLock";
 
@@ -342,65 +341,6 @@ function loadMainWindow() {
   }
 }
 
-function setupAutoUpdater() {
-  autoUpdater.logger = log;
-  // autoUpdater.logger.transports.file.level = 'info';
-
-  // 自动下载更新
-  autoUpdater.autoDownload = true;
-
-  autoUpdater.on("checking-for-update", () => {
-    log.info("Checking for update...");
-  });
-
-  autoUpdater.on("update-available", (info) => {
-    log.info("Update available.", info);
-    // 可以在这里通知渲染进程显示更新提示
-    if (mainWindow) {
-      mainWindow.webContents.send("update-available", info);
-    }
-  });
-
-  autoUpdater.on("update-not-available", (info) => {
-    log.info("Update not available.", info);
-  });
-
-  autoUpdater.on("error", (err) => {
-    log.error("Error in auto-updater.", err);
-  });
-
-  autoUpdater.on("download-progress", (progressObj) => {
-    let log_message = "Download speed: " + progressObj.bytesPerSecond;
-    log_message = log_message + " - Downloaded " + progressObj.percent + "%";
-    log_message =
-      log_message +
-      " (" +
-      progressObj.transferred +
-      "/" +
-      progressObj.total +
-      ")";
-    log.info(log_message);
-    if (mainWindow) {
-      mainWindow.webContents.send("download-progress", progressObj);
-    }
-  });
-
-  autoUpdater.on("update-downloaded", (info) => {
-    log.info("Update downloaded", info);
-    // 可以在这里通知渲染进程提示用户重启
-    if (mainWindow) {
-      mainWindow.webContents.send("update-downloaded", info);
-    }
-    // 自动安装（可选，或者等待用户触发）
-    // autoUpdater.quitAndInstall();
-  });
-
-  // 在打包环境下才检查更新
-  if (app.isPackaged) {
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-}
-
 async function saveWindowBounds() {
   if (!mainWindow) return;
   if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
@@ -494,9 +434,6 @@ async function createWindow(options?: { load?: boolean }) {
   if (options?.load !== false) {
     loadMainWindow();
   }
-
-  // 初始化自动更新
-  setupAutoUpdater();
 
   ipcMain.on("window-min", () => mainWindow?.minimize());
   ipcMain.on("window-max", () => {
