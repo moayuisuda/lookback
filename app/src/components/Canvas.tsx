@@ -64,6 +64,7 @@ const createDroppedImageMeta = (file: {
 };
 
 type CanvasItemsLayerProps = {
+  items: readonly Snapshot<CanvasItem>[];
   onDragStart: (
     id: string,
     client: { clientX: number; clientY: number },
@@ -144,6 +145,7 @@ const CanvasItemRenderer = React.memo(
 
 const CanvasItemsLayer = React.memo(
   ({
+    items,
     onDragStart,
     onDragMove,
     onDragEnd,
@@ -152,8 +154,7 @@ const CanvasItemsLayer = React.memo(
     onCommitItem,
     onCommitEnter,
   }: CanvasItemsLayerProps) => {
-    const canvasSnap = useSnapshot(canvasState);
-    const items = canvasSnap.canvasItems || [];
+    console.log('itemsLayer', items)
 
     return (
       <g>
@@ -185,7 +186,6 @@ export const Canvas: React.FC = () => {
     dimensions,
     isSpaceDown,
     canvasViewport,
-    multiSelectUnion,
     selectionBox,
     selectionMode,
     canvasItems,
@@ -424,12 +424,7 @@ export const Canvas: React.FC = () => {
   });
 
   const clearSelection = useMemoizedFn(() => {
-    canvasState.canvasItems.forEach((item) => {
-      item.isSelected = false;
-    });
-    canvasState.primaryId = null;
-    canvasState.multiSelectUnion = null;
-    canvasState.selectionBox = { start: null, current: null };
+    canvasActions.clearSelectionState();
   });
 
   useEffect(() => {
@@ -553,13 +548,13 @@ export const Canvas: React.FC = () => {
           metas.length > 1
             ? canvasActions.addManyImagesToCanvasCentered(metas, basePoint)
             : (() => {
-                const id = canvasActions.addToCanvas(
-                  metas[0],
-                  basePoint.x,
-                  basePoint.y,
-                );
-                return id ? [id] : [];
-              })();
+              const id = canvasActions.addToCanvas(
+                metas[0],
+                basePoint.x,
+                basePoint.y,
+              );
+              return id ? [id] : [];
+            })();
 
         if (newIds.length > 0) {
           const newSet = new Set(newIds);
@@ -773,6 +768,43 @@ export const Canvas: React.FC = () => {
     );
   });
 
+  const getItemsBoundingBox = useMemoizedFn((items: typeof canvasItems) => {
+    if (!items || items.length === 0) return null;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    items.forEach((item) => {
+      const scale = item.scale || 1;
+      const rawW = (item.width || 0) * scale;
+      const rawH = (item.height || 0) * scale;
+      const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+      minX = Math.min(minX, item.x + bbox.offsetX);
+      minY = Math.min(minY, item.y + bbox.offsetY);
+      maxX = Math.max(maxX, item.x + bbox.offsetX + bbox.width);
+      maxY = Math.max(maxY, item.y + bbox.offsetY + bbox.height);
+    });
+
+    if (
+      !Number.isFinite(minX) ||
+      !Number.isFinite(minY) ||
+      !Number.isFinite(maxX) ||
+      !Number.isFinite(maxY)
+    ) {
+      return null;
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && canvasState.contextMenu.visible) {
@@ -808,7 +840,11 @@ export const Canvas: React.FC = () => {
         setIsSpaceDown(false);
         isSpaceContainBlockedRef.current = false;
         if (shouldContain) {
-          if (primaryId) {
+          const selectedItems = getSelectedItems();
+          if (selectedItems.length > 1) {
+            const bbox = getItemsBoundingBox(selectedItems);
+            if (bbox) zoomToBounds(bbox, 0);
+          } else if (primaryId) {
             handleContainItem(primaryId);
           } else {
             handleZoomToFit();
@@ -838,10 +874,13 @@ export const Canvas: React.FC = () => {
     };
   }, [
     closeContextMenu,
+    getItemsBoundingBox,
+    getSelectedItems,
     handleContainItem,
     handleZoomToFit,
     primaryId,
     setIsSpaceDown,
+    zoomToBounds,
   ]);
 
   useEffect(() => {
@@ -1159,43 +1198,6 @@ export const Canvas: React.FC = () => {
     };
   }, [computeMultiSelectUnion, getSelectedIds, setMultiSelectUnion]);
 
-  const getItemsBoundingBox = useMemoizedFn((items: typeof canvasItems) => {
-    if (!items || items.length === 0) return null;
-
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-
-    items.forEach((item) => {
-      const scale = item.scale || 1;
-      const rawW = (item.width || 0) * scale;
-      const rawH = (item.height || 0) * scale;
-      const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
-
-      minX = Math.min(minX, item.x + bbox.offsetX);
-      minY = Math.min(minY, item.y + bbox.offsetY);
-      maxX = Math.max(maxX, item.x + bbox.offsetX + bbox.width);
-      maxY = Math.max(maxY, item.y + bbox.offsetY + bbox.height);
-    });
-
-    if (
-      !Number.isFinite(minX) ||
-      !Number.isFinite(minY) ||
-      !Number.isFinite(maxX) ||
-      !Number.isFinite(maxY)
-    ) {
-      return null;
-    }
-
-    return {
-      x: minX,
-      y: minY,
-      width: maxX - minX,
-      height: maxY - minY,
-    };
-  });
-
   const handleAutoLayout = useMemoizedFn(() => {
     const selectedItems = getSelectedItems();
     if (selectedItems.length > 0) {
@@ -1420,10 +1422,11 @@ export const Canvas: React.FC = () => {
 
   const handleGroupScaleStart = useMemoizedFn(
     (client: { x: number; y: number }) => {
-      const union = multiSelectUnion;
-      const currentSelected = getSelectedIds();
+      const selectedItems = getSelectedItems();
+      if (selectedItems.length <= 1) return;
+      const union = getItemsBoundingBox(selectedItems);
       if (!union) return;
-      if (currentSelected.size <= 1) return;
+      const currentSelected = new Set(selectedItems.map((item) => item.itemId));
       const startPoint = getWorldPointFromClient(client);
       startScaleSession(currentSelected, union, startPoint);
     },
@@ -1769,6 +1772,7 @@ export const Canvas: React.FC = () => {
           }}
         >
           <CanvasItemsLayer
+            items={canvasItems}
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
@@ -1778,8 +1782,6 @@ export const Canvas: React.FC = () => {
             onCommitEnter={handleCommitEnter}
           />
           <SelectOverlay
-            items={canvasItems || []}
-            union={selectionBox.start === null ? multiSelectUnion : null}
             stageScale={stageScale}
             isSelectionBoxActive={selectionBox.start !== null}
             onDeleteSelection={handleDeleteSelection}

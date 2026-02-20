@@ -1,13 +1,15 @@
 import React from "react";
-import { type CanvasItem, getRenderBbox } from "../../store/canvasStore";
+import {
+  canvasState,
+  type CanvasItem,
+  getRenderBbox,
+} from "../../store/canvasStore";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";
 import { CANVAS_ICONS } from "./CanvasIcons";
-import type { Snapshot } from "valtio";
+import { useSnapshot, type Snapshot } from "valtio";
 
 interface SelectOverlayProps {
-  items: Snapshot<CanvasItem[]>;
-  union: { x: number; y: number; width: number; height: number } | null;
   stageScale: number;
   isSelectionBoxActive: boolean;
   onDeleteSelection: () => void;
@@ -34,9 +36,41 @@ const getItemUnion = (item: Snapshot<CanvasItem>) => {
   };
 };
 
+const getItemsUnion = (items: Snapshot<CanvasItem[]>) => {
+  if (items.length === 0) return null;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  items.forEach((item) => {
+    const union = getItemUnion(item);
+    if (!union) return;
+    minX = Math.min(minX, union.x);
+    minY = Math.min(minY, union.y);
+    maxX = Math.max(maxX, union.x + union.width);
+    maxY = Math.max(maxY, union.y + union.height);
+  });
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
 export const SelectOverlay: React.FC<SelectOverlayProps> = ({
-  items,
-  union,
   stageScale,
   isSelectionBoxActive,
   onDeleteSelection,
@@ -48,9 +82,10 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   onScaleStartItem,
   onCommitItem,
 }) => {
+  const canvasSnap = useSnapshot(canvasState);
   if (isSelectionBoxActive) return null;
 
-  const selectedItems = items.filter((item) => item.isSelected);
+  const selectedItems = canvasSnap.canvasItems.filter((item) => item.isSelected);
   if (selectedItems.length === 0) return null;
 
   const btnScale = 1 / stageScale;
@@ -149,6 +184,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
     );
   }
 
+  const union = getItemsUnion(selectedItems);
   if (!union) return null;
 
   return (

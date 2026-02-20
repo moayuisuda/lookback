@@ -244,7 +244,6 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
         ? "temp"
         : "ref";
 
-      console.log({ img });
       if (kind === "temp") {
         return {
           type: "image",
@@ -543,6 +542,8 @@ export const canvasActions = {
       canvasState.canvasItems = JSON.parse(
         JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
       ) as CanvasItem[];
+      console.log('undo', canvasState.canvasItems)
+      canvasActions.clearSelectionState();
       void persistCanvasItems(canvasState.canvasItems);
     }
   },
@@ -551,11 +552,24 @@ export const canvasActions = {
     if (canvasState.canvasHistoryIndex < canvasState.canvasHistory.length - 1) {
       canvasState.canvasHistoryIndex++;
       const snap = snapshot(canvasState);
-      canvasState.canvasItems = snap.canvasHistory[
-        canvasState.canvasHistoryIndex
-      ] as CanvasItem[];
+      canvasState.canvasItems = JSON.parse(
+        JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
+      ) as CanvasItem[];
+      canvasActions.clearSelectionState();
       void persistCanvasItems(canvasState.canvasItems);
     }
+  },
+
+  clearSelectionState: () => {
+    canvasState.canvasItems.forEach((item) => {
+      item.isSelected = false;
+    });
+    canvasState.primaryId = null;
+    canvasState.multiSelectUnion = null;
+    canvasState.selectionBox = {
+      start: null,
+      current: null,
+    };
   },
 
   addTextToCanvas: (x: number, y: number, fontSize?: number) => {
