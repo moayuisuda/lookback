@@ -2,14 +2,12 @@ import type { I18nKey } from '../../shared/i18n/types';
 import type { canvasActions } from '../store/canvasStore';
 import type { globalActions } from '../store/globalStore';
 import type { commandActions } from '../store/commandStore';
-import type { useSnapshot } from 'valtio';
 import type { useEnvState } from '../hooks/useEnvState';
 import type { useT } from '../i18n/useT';
 
 export type CommandContext = {
   React: typeof import('react');
   hooks: {
-    useSnapshot: typeof useSnapshot;
     useEnvState: typeof useEnvState;
     useT: typeof useT;
   };

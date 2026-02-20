@@ -10,7 +10,8 @@ import {
 import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
-import { execFile } from "node:child_process";
+import { execFile, spawn, ChildProcess } from "node:child_process";
+import * as readline from "node:readline";
 import { lockedFs, withFileLock } from "../backend/fileLock";
 
 // Ensure app name is correct for log paths
@@ -33,6 +34,10 @@ log.transports.file.archiveLog = (file) => {
   lockedFs.rename(filePath, dest).catch((e) => {
     console.warn("Could not rotate log", e);
   });
+};
+
+const logPinDebug = (...args: unknown[]) => {
+  log.info("[pin-debug]", ...args);
 };
 
 import {
@@ -66,8 +71,7 @@ let isSettingsOpen = false;
 let isPinMode = false;
 let pinTargetApp = "";
 let isPinTransparent = true;
-let pinByAppTimer: NodeJS.Timeout | null = null;
-let pinByAppQuerying = false;
+let activeAppWatcherProcess: ChildProcess | null = null;
 let isPinByAppActive = false;
 let localServerPort = DEFAULT_SERVER_PORT;
 let localServerStartTask: Promise<number> | null = null;
@@ -79,8 +83,8 @@ function normalizeAppIdentifier(name: string): string {
 type AlwaysOnTopLevel = Parameters<BrowserWindow["setAlwaysOnTop"]>[1];
 
 function getPinAlwaysOnTopLevel(): AlwaysOnTopLevel {
-  // Windows 的透明无边框窗口在 floating 层级下容易被普通窗口覆盖。
-  if (process.platform === "win32") return "screen-saver";
+  // Windows / macOS 统一使用 floating，对应 Win32 的 HWND_TOPMOST。
+  // 之前使用 screen-saver 导致取消置顶后 Z-order 无法及时刷新。
   return "floating";
 }
 
@@ -88,13 +92,16 @@ function setWindowAlwaysOnTop(enabled: boolean) {
   if (!mainWindow) return;
   if (enabled) {
     mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
-    if (process.platform === "win32") {
-      // 切换目标应用后主动抬到最顶层，避免置顶状态存在但层级未刷新。
-      mainWindow.moveTop();
-    }
     return;
   }
   mainWindow.setAlwaysOnTop(false);
+}
+
+// 获取当前窗口的 HWND 整数值，供 PowerShell 脚本使用。
+function getOurHwndInt(): number {
+  if (!mainWindow) return 0;
+  const buf = mainWindow.getNativeWindowHandle();
+  return buf.readUInt32LE(0);
 }
 
 function setWindowPinnedToDesktop(enabled: boolean) {
@@ -110,6 +117,7 @@ function setWindowPinnedToDesktop(enabled: boolean) {
 
 function setWindowPinnedToTargetApp(active: boolean) {
   if (!mainWindow) return;
+  logPinDebug("setWindowPinnedToTargetApp", { active });
   setWindowAlwaysOnTop(active);
   mainWindow.setVisibleOnAllWorkspaces(false);
 }
@@ -131,7 +139,7 @@ function runAppleScript(script: string, timeoutMs = 1500): Promise<string> {
   });
 }
 
-function runPowerShell(script: string): Promise<string> {
+function runPowerShell(script: string, timeoutMs = 8000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "powershell.exe",
@@ -143,7 +151,7 @@ function runPowerShell(script: string): Promise<string> {
         "-Command",
         script,
       ],
-      { timeout: 1500 },
+      { timeout: timeoutMs, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr?.trim() || error.message));
@@ -155,96 +163,200 @@ function runPowerShell(script: string): Promise<string> {
   });
 }
 
-async function getFrontmostAppName(): Promise<string> {
-  if (process.platform === "darwin") {
-    return runAppleScript(
-      'tell application "System Events" to get name of first process whose frontmost is true',
-    );
-  }
-  if (process.platform === "win32") {
-    return runPowerShell(
-      [
-        '$sig = @"',
-        "using System;",
-        "using System.Runtime.InteropServices;",
-        "public static class User32 {",
-        '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
-        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
-        "}",
-        '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
-        "$hwnd = [User32]::GetForegroundWindow();",
-        "if ($hwnd -eq [IntPtr]::Zero) { return }",
-        "$pid = 0;",
-        "[User32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null;",
-        "if ($pid -eq 0) { return }",
-        "$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue;",
-        "if ($null -eq $proc) { return }",
-        "$proc.ProcessName",
-      ].join(" "),
-    );
-  }
-  return "";
-}
+
 
 async function getRunningAppNames(): Promise<string[]> {
   if (process.platform !== "darwin" && process.platform !== "win32") return [];
-  const output =
-    process.platform === "darwin"
-      ? await runAppleScript(
-          'tell application "System Events" to get name of every process whose background only is false',
-          // First-time automation permission prompt on macOS can take several seconds.
-          15000,
-        )
-      : await runPowerShell(
-          [
-            `Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne ${process.pid} }`,
-            "| Select-Object -ExpandProperty ProcessName",
-            "| Sort-Object -Unique",
-          ].join(" "),
-        );
+  let output = "";
+  try {
+    if (process.platform === "darwin") {
+      output = await runAppleScript(
+        'tell application "System Events" to get name of every process whose background only is false',
+        15000,
+      );
+      logPinDebug("running apps raw (darwin)", output);
+    } else {
+      output = await runPowerShell(
+        [
+          `Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne ${process.pid} }`,
+          "| Select-Object -ExpandProperty ProcessName",
+          "| Sort-Object -Unique",
+        ].join(" "),
+        8000,
+      );
+      logPinDebug("running apps raw (win32)", output);
+    }
+  } catch (error) {
+    logPinDebug("getRunningAppNames failed", error);
+    throw error;
+  }
   const selfName = normalizeAppIdentifier(app.getName());
   const names = output
     .split(/,|\n/)
     .map((name) => name.trim())
     .filter((name) => name && normalizeAppIdentifier(name) !== selfName);
-  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  logPinDebug("running apps parsed", unique);
+  return unique;
 }
 
 function stopPinByAppWatcher() {
-  if (pinByAppTimer) {
-    clearInterval(pinByAppTimer);
-    pinByAppTimer = null;
+  if (activeAppWatcherProcess) {
+    activeAppWatcherProcess.kill();
+    activeAppWatcherProcess = null;
   }
-  pinByAppQuerying = false;
   isPinByAppActive = false;
 }
 
-async function syncPinByAppState() {
-  if (!isPinMode) return;
-  if (!pinTargetApp) return;
-  if (process.platform !== "darwin" && process.platform !== "win32") return;
-  if (pinByAppQuerying) return;
+function startPinByAppWatcherWin32() {
+  const ourHwnd = getOurHwndInt();
+  if (!ourHwnd) return;
 
-  pinByAppQuerying = true;
-  try {
-    const activeAppName = await getFrontmostAppName();
+  logPinDebug("startPinByAppWatcherWin32 start", { pinTargetApp });
+
+  const script = [
+    '$sig = @"',
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class WinZOrder {",
+    '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+    '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+    '  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
+    "}",
+    '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
+    `$ourHwnd = [IntPtr]${ourHwnd};`,
+    `$target = "${pinTargetApp}";`,
+    "$TOPMOST = [IntPtr](-1);",
+    "$NOTOPMOST = [IntPtr](-2);",
+    "$SWP = 0x0013;",
+    "while ($true) {",
+    "  $fgHwnd = [WinZOrder]::GetForegroundWindow();",
+    "  if ($fgHwnd -ne [IntPtr]::Zero) {",
+    "    [uint32]$procId = 0;",
+    "    [WinZOrder]::GetWindowThreadProcessId($fgHwnd, [ref]$procId) | Out-Null;",
+    "    if ($procId -ne 0) {",
+    "      $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue;",
+    "      if ($null -ne $proc) {",
+    "        $name = $proc.ProcessName;",
+    "        if ($name.ToLower() -eq $target.ToLower()) {",
+    "          [WinZOrder]::SetWindowPos($ourHwnd, $TOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
+    "          [Console]::WriteLine($name);",
+    "        } else {",
+    "          [WinZOrder]::SetWindowPos($ourHwnd, $NOTOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
+    "          [WinZOrder]::SetWindowPos($ourHwnd, $fgHwnd, 0, 0, 0, 0, $SWP) | Out-Null;",
+    "          [Console]::WriteLine($name);",
+    "        }",
+    "      }",
+    "    }",
+    "  }",
+    "  Start-Sleep -Milliseconds 80",
+    "}"
+  ].join("\n");
+
+  activeAppWatcherProcess = spawn("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    script,
+  ], { windowsHide: true });
+
+  const rl = readline.createInterface({
+    input: activeAppWatcherProcess.stdout!,
+    terminal: false,
+  });
+
+  rl.on("line", (line) => {
+    const activeAppName = line.trim();
+    if (!activeAppName || !mainWindow) return;
+
     const shouldPin =
       normalizeAppIdentifier(activeAppName) ===
       normalizeAppIdentifier(pinTargetApp);
+
+    if (shouldPin !== isPinByAppActive) {
+      isPinByAppActive = shouldPin;
+      mainWindow.setAlwaysOnTop(shouldPin, shouldPin ? getPinAlwaysOnTopLevel() : undefined);
+      mainWindow.setVisibleOnAllWorkspaces(false);
+      syncWindowShadow();
+    }
+  });
+
+  const resetState = () => {
+    if (isPinByAppActive) {
+      isPinByAppActive = false;
+      if (mainWindow) {
+        mainWindow.setAlwaysOnTop(false);
+        mainWindow.setVisibleOnAllWorkspaces(false);
+      }
+      syncWindowShadow();
+    }
+  };
+
+  activeAppWatcherProcess.on("error", (error) => {
+    logPinDebug("Win32 watcher error", error);
+    resetState();
+  });
+
+  activeAppWatcherProcess.on("exit", (code) => {
+    logPinDebug("Win32 watcher exited", code);
+    resetState();
+  });
+}
+
+function startPinByAppWatcherDarwin() {
+  logPinDebug("startPinByAppWatcherDarwin start", { pinTargetApp });
+
+  const script = [
+    "repeat",
+    "  try",
+    '    tell application "System Events" to set frontApp to name of first process whose frontmost is true',
+    "    log frontApp",
+    "  end try",
+    "  delay 0.08",
+    "end repeat"
+  ].join("\n");
+
+  activeAppWatcherProcess = spawn("osascript", ["-e", script]);
+
+  const rl = readline.createInterface({
+    input: activeAppWatcherProcess.stderr!,
+    terminal: false,
+  });
+
+  rl.on("line", (line) => {
+    const activeAppName = line.trim();
+    if (!activeAppName || !mainWindow) return;
+
+    const shouldPin =
+      normalizeAppIdentifier(activeAppName) ===
+      normalizeAppIdentifier(pinTargetApp);
+
     if (shouldPin !== isPinByAppActive) {
       isPinByAppActive = shouldPin;
       setWindowPinnedToTargetApp(shouldPin);
       syncWindowShadow();
     }
-  } catch {
+  });
+
+  const resetState = () => {
     if (isPinByAppActive) {
       isPinByAppActive = false;
       setWindowPinnedToTargetApp(false);
       syncWindowShadow();
     }
-  } finally {
-    pinByAppQuerying = false;
-  }
+  };
+
+  activeAppWatcherProcess.on("error", (error) => {
+    logPinDebug("Darwin watcher error", error);
+    resetState();
+  });
+
+  activeAppWatcherProcess.on("exit", (code) => {
+    logPinDebug("Darwin watcher exited", code);
+    resetState();
+  });
 }
 
 function startPinByAppWatcher() {
@@ -253,10 +365,12 @@ function startPinByAppWatcher() {
   if (process.platform !== "darwin" && process.platform !== "win32") return;
   setWindowPinnedToTargetApp(false);
   syncWindowShadow();
-  void syncPinByAppState();
-  pinByAppTimer = setInterval(() => {
-    void syncPinByAppState();
-  }, 800);
+
+  if (process.platform === "win32") {
+    startPinByAppWatcherWin32();
+  } else if (process.platform === "darwin") {
+    startPinByAppWatcherDarwin();
+  }
 }
 
 function syncWindowShadow() {
@@ -267,8 +381,16 @@ function syncWindowShadow() {
 }
 
 function applyPinStateToWindow() {
-  if (!mainWindow) return;
+  if (!mainWindow) {
+    logPinDebug("applyPinStateToWindow skipped: no mainWindow");
+    return;
+  }
   stopPinByAppWatcher();
+  logPinDebug("applyPinStateToWindow state", {
+    isPinMode,
+    pinTargetApp,
+    platform: process.platform,
+  });
 
   if (!isPinMode) {
     setWindowPinnedToDesktop(false);
@@ -280,10 +402,14 @@ function applyPinStateToWindow() {
     pinTargetApp &&
     (process.platform === "darwin" || process.platform === "win32")
   ) {
+    logPinDebug("applyPinStateToWindow start watcher", {
+      pinTargetApp,
+    });
     startPinByAppWatcher();
     return;
   }
 
+  logPinDebug("applyPinStateToWindow desktop mode");
   setWindowPinnedToDesktop(true);
   syncWindowShadow();
 }
@@ -498,11 +624,17 @@ async function createWindow(options?: { load?: boolean }) {
   ipcMain.on(
     "set-pin-mode",
     (_event, payload: { enabled: boolean; targetApp?: string }) => {
+      logPinDebug("ipc set-pin-mode", payload);
       const enabled = payload?.enabled === true;
       const targetApp =
         typeof payload?.targetApp === "string" ? payload.targetApp.trim() : "";
       isPinMode = enabled;
       pinTargetApp = enabled ? targetApp : "";
+      logPinDebug("ipc set-pin-mode resolved", {
+        isPinMode,
+        pinTargetApp,
+        platform: process.platform,
+      });
       applyPinStateToWindow();
     },
   );
@@ -954,8 +1086,8 @@ ipcMain.handle("import-command", async () => {
 
   const failures = results.filter(r => !r.success);
   if (failures.length > 0) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: `Failed to import ${failures.length} files. First error: ${failures[0].error}`,
       partialSuccess: results.length - failures.length > 0
     };

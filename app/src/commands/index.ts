@@ -1,5 +1,4 @@
 import React from "react";
-import { useSnapshot } from "valtio";
 import { canvasActions } from "../store/canvasStore";
 import { globalActions } from "../store/globalStore";
 import { commandActions, commandState } from "../store/commandStore";
@@ -11,7 +10,6 @@ import { useT } from "../i18n/useT";
 export const getCommandContext = (): CommandContext => ({
   React,
   hooks: {
-    useSnapshot,
     useEnvState,
     useT,
   },
