@@ -15,6 +15,9 @@ const BACKGROUND_MIN_BORDER_SAMPLES = 24;
 const BACKGROUND_DOMINANCE_THRESHOLD = 0.6;
 const BACKGROUND_DISTANCE_LOW_CHROMA = 18;
 const BACKGROUND_DISTANCE_HIGH_CHROMA = 12;
+// sRGB 色域内 CIELAB 色度 C* 的实际上限约 120（高饱和红/绿）
+// 除以 100 会导致 C* > 100 的像素全堆到最高 bin，失真严重
+const CIELAB_CHROMA_MAX = 120;
 
 const createBins = () => Array.from({ length: HISTOGRAM_BINS }, () => 0);
 
@@ -93,8 +96,8 @@ const rgbToLab = (r, g, b) => {
   };
 };
 
-const toBinIndex = (value) => {
-  const ratio = clamp(value / 100, 0, 1);
+const toBinIndex = (value, max = 100) => {
+  const ratio = clamp(value / max, 0, 1);
   return Math.min(HISTOGRAM_BINS - 1, Math.floor(ratio * HISTOGRAM_BINS));
 };
 
@@ -474,11 +477,12 @@ const sampleImageGene = async (url, removeBackground) => {
       if (dist2 <= background.threshold2) continue;
     }
     const lStar = lab.l;
-    // 使用 CIELAB 色度 C* 作为饱和轴，更接近视觉感知
-    const saturation = clamp(Math.sqrt(lab.a * lab.a + lab.labB * lab.labB), 0, 100);
+    // 使用 CIELAB 色度 C* 作为饱和轴（感知均匀），归一化到 sRGB 实际上限 CIELAB_CHROMA_MAX
+    const chroma = Math.sqrt(lab.a * lab.a + lab.labB * lab.labB);
 
     const lightnessBin = toBinIndex(lStar);
-    const saturationBin = toBinIndex(saturation);
+    // 色度归一化须用 CIELAB_CHROMA_MAX，而非 100，否则高饱和像素全挤进最高 bin
+    const saturationBin = toBinIndex(chroma, CIELAB_CHROMA_MAX);
     acc.lightnessBins[lightnessBin] += alphaWeight;
     acc.saturationBins[saturationBin] += alphaWeight;
     acc.heatmapBins[saturationBin * HISTOGRAM_BINS + lightnessBin] += alphaWeight;
@@ -585,7 +589,7 @@ export const ui = ({ context }) => {
   const { canvas: canvasSnap } = useEnvState();
   const { t } = useT();
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [failedCount, setFailedCount] = useState(0);
   const [results, setResults] = useState(null);
@@ -629,6 +633,7 @@ export const ui = ({ context }) => {
 
   useEffect(() => {
     let cancelled = false;
+    let debounceTimer = null;
 
     const run = async () => {
       if (analysisTargets.length === 0) {
@@ -687,17 +692,20 @@ export const ui = ({ context }) => {
       setLoading(false);
     };
 
-    void run();
+    // 面板打开瞬间 valtio 状态连续变化，防抖 80ms 等依赖稳定后再启动分析
+    debounceTimer = setTimeout(() => {
+      void run();
+    }, 80);
 
     return () => {
       cancelled = true;
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
     };
   }, [
     analysisTargets,
     canvasSnap.currentCanvasName,
     config.API_BASE_URL,
     removeBackground,
-    targetImagePayload,
   ]);
 
   useEffect(() => {
