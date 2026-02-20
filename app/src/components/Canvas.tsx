@@ -1095,6 +1095,8 @@ export const Canvas: React.FC = () => {
 
       if (canvasState.selectionMode === "zoom") {
         if (shouldZoom) {
+          // 右键框选缩放，mousedown 时可能已选中节点，需清除
+          clearSelection();
           zoomToBounds({ x: x1, y: y1, width, height }, 0);
         } else if (!shouldEnableMouseThrough) {
           const local = getLocalPointFromClient(e.clientX, e.clientY);
