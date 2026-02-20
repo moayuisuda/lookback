@@ -227,14 +227,14 @@ export const ui = ({ context }) => {
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4" />
-            <div className="flex justify-between w-[112px] px-1">
-              <span className="text-[9px] text-neutral-600">
+            <div className="grid grid-cols-3 gap-x-2 w-[136px]">
+              <span className="text-[9px] text-neutral-600 text-center">
                 {t("command.imageSearch.tone.axis.short")}
               </span>
-              <span className="text-[9px] text-neutral-600">
+              <span className="text-[9px] text-neutral-600 text-center">
                 {t("command.imageSearch.tone.axis.mid")}
               </span>
-              <span className="text-[9px] text-neutral-600">
+              <span className="text-[9px] text-neutral-600 text-center">
                 {t("command.imageSearch.tone.axis.long")}
               </span>
             </div>
@@ -242,17 +242,17 @@ export const ui = ({ context }) => {
           <div className="flex gap-2">
             {/* Y-Axis Label */}
             <div className="flex flex-col gap-2 w-4">
-              <div className="h-3 flex items-center justify-center">
+              <div className="h-5 flex items-center justify-center">
                 <span className="text-[9px] text-neutral-600 leading-none">
                   {t("command.imageSearch.tone.axis.high")}
                 </span>
               </div>
-              <div className="h-3 flex items-center justify-center">
+              <div className="h-5 flex items-center justify-center">
                 <span className="text-[9px] text-neutral-600 leading-none">
                   {t("command.imageSearch.tone.axis.mid")}
                 </span>
               </div>
-              <div className="h-3 flex items-center justify-center">
+              <div className="h-5 flex items-center justify-center">
                 <span className="text-[9px] text-neutral-600 leading-none">
                   {t("command.imageSearch.tone.axis.low")}
                 </span>
@@ -270,11 +270,10 @@ export const ui = ({ context }) => {
                       key={value}
                       type="button"
                       onClick={() => handleToneClick(value)}
-                      className={`w-8 h-3 rounded-md border transition-all ${
-                        active
-                          ? "border-primary ring-1 ring-primary z-10"
-                          : "border-neutral-800 hover:border-neutral-600 opacity-80 hover:opacity-100"
-                      }`}
+                      className={`w-10 h-5 rounded-md border transition-all ${active
+                        ? "border-primary ring-1 ring-primary z-10"
+                        : "border-neutral-800 hover:border-neutral-600 opacity-80 hover:opacity-100"
+                        }`}
                       style={{ background: gradients[value] || "#333" }}
                       title={t("command.imageSearch.tone.title", {
                         tone: getToneLabel(row),
@@ -325,11 +324,10 @@ export const ui = ({ context }) => {
                 >
                   <button
                     type="button"
-                    className={`h-4 w-8 rounded-md border transition-transform ${
-                      isActive
-                        ? "border-primary ring-1 ring-primary scale-110"
-                        : "border-neutral-700 hover:scale-110"
-                    }`}
+                    className={`h-4 w-8 rounded-md border transition-transform ${isActive
+                      ? "border-primary ring-1 ring-primary scale-110"
+                      : "border-neutral-700 hover:scale-110"
+                      }`}
                     style={{ backgroundColor: color }}
                     onClick={() => handleColorClick(color)}
                   />
@@ -362,7 +360,7 @@ export const ui = ({ context }) => {
                 key={item.itemId}
                 type="button"
                 onClick={() => handleSelect(item)}
-                className="w-full px-4 py-3 text-left flex items-center gap-4 text-sm transition-colors text-neutral-200 hover:bg-neutral-800/70 group"
+                className="w-full px-4 py-1.5 text-left flex items-center gap-4 text-sm transition-colors text-neutral-200 hover:bg-neutral-800/70 group"
               >
                 <div className="h-10 w-10 rounded border border-neutral-700 overflow-hidden shrink-0 bg-neutral-900">
                   <img

@@ -50,6 +50,25 @@ body {
     scrollbar-width: none;
 }
 
+/* 暗色滚动条，与整体暗色 UI 一致 */
+.dark-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #404040 transparent;
+}
+.dark-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+.dark-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.dark-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #404040;
+    border-radius: 999px;
+}
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #525252;
+}
+
 .minimap-viewport {
 
 }

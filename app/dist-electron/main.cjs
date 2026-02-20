@@ -2272,6 +2272,9 @@ async function createWindow(options) {
   });
   mainWindow.on("resize", debouncedSaveWindowBounds);
   mainWindow.on("move", debouncedSaveWindowBounds);
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
   mainWindow.webContents.on("did-finish-load", () => {
     import_electron_log.default.info("Renderer process finished loading");
   });
@@ -2653,8 +2656,9 @@ import_electron2.app.whenReady().then(async () => {
   }
   import_electron2.app.on("activate", () => {
     if (import_electron2.BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-      applyPinStateToWindow();
+      createWindow().then(() => {
+        applyPinStateToWindow();
+      });
     }
   });
 });

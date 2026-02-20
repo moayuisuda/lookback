@@ -291,7 +291,7 @@ export const CommandPalette: React.FC = () => {
                 </button>
               </div>
               {isUiComponent(activeUi) ? (
-                <div className="max-h-[500px] overflow-y-auto">
+                <div className="max-h-[500px] overflow-y-auto dark-scrollbar">
                   {React.createElement(activeUi, {
                     context: commandContext,
                   })}
@@ -323,7 +323,7 @@ export const CommandPalette: React.FC = () => {
                 </button>
               </div>
 
-              <div className="max-h-[360px] overflow-y-auto">
+              <div className="max-h-[360px] overflow-y-auto dark-scrollbar">
                 {results.length === 0 && (
                   <div className="px-4 py-6 text-center text-xs text-neutral-500">
                     {t("commandPalette.empty")}

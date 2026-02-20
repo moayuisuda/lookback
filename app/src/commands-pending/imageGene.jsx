@@ -520,18 +520,18 @@ const copyText = async (value) => {
   document.body.removeChild(textarea);
 };
 
-const createHeatmapDataUrl = (bins, pixelCount) => {
+// 返回 HISTOGRAM_BINS*HISTOGRAM_BINS 个 cell 颜色，行=satIndex(0=低)，Y 翻转后第0行显示高饱和
+const computeHeatmapCells = (bins, pixelCount) => {
   const expectedSize = HISTOGRAM_BINS * HISTOGRAM_BINS;
-  if (bins.length !== expectedSize) return "";
-  if (pixelCount <= 0) return "";
+  if (bins.length !== expectedSize || pixelCount <= 0) return null;
 
-  // 使用密度而非绝对像素数，保证不同尺寸图片可横向比较
   const normalizedBins = bins.map((value) => value / pixelCount);
-
   const nonZeroBins = normalizedBins.filter((value) => value > 0).sort((a, b) => a - b);
-  if (nonZeroBins.length === 0) return "";
+  if (nonZeroBins.length === 0) return null;
+
   const maxCount = nonZeroBins[nonZeroBins.length - 1];
-  if (maxCount <= 0) return "";
+  if (maxCount <= 0) return null;
+
   const quantileIndex = Math.min(
     nonZeroBins.length - 1,
     Math.floor(nonZeroBins.length * HEATMAP_UPPER_QUANTILE),
@@ -539,46 +539,34 @@ const createHeatmapDataUrl = (bins, pixelCount) => {
   const quantileCap = nonZeroBins[quantileIndex];
   const normalizedCap = Math.max(quantileCap, maxCount / HEATMAP_LEVELS);
 
-  const canvas = document.createElement("canvas");
-  canvas.width = HISTOGRAM_BINS;
-  canvas.height = HISTOGRAM_BINS;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-
-  const imageData = ctx.createImageData(HISTOGRAM_BINS, HISTOGRAM_BINS);
-
-  for (let satIndex = 0; satIndex < HISTOGRAM_BINS; satIndex += 1) {
+  // cells[rowIndex][colIndex]，rowIndex=0 对应高饱和（Y 轴翻转）
+  const cells = [];
+  for (let rowIndex = 0; rowIndex < HISTOGRAM_BINS; rowIndex += 1) {
+    // 翻转 satIndex：rowIndex=0 → 高饱和
+    const satIndex = HISTOGRAM_BINS - 1 - rowIndex;
+    const row = [];
     for (let lightIndex = 0; lightIndex < HISTOGRAM_BINS; lightIndex += 1) {
-      const sourceIndex = satIndex * HISTOGRAM_BINS + lightIndex;
-      const count = normalizedBins[sourceIndex];
-      if (count <= 0) continue;
-
+      const count = normalizedBins[satIndex * HISTOGRAM_BINS + lightIndex];
+      if (count <= 0) {
+        row.push("transparent");
+        continue;
+      }
       const normalized = clamp(count / normalizedCap, 0, 1);
       const perceptual = normalized ** HEATMAP_GAMMA;
-      // 离散分级让热力阶梯稳定可见
       const stepIndex = Math.ceil(perceptual * (HEATMAP_LEVELS - 1));
       const intensity = stepIndex / (HEATMAP_LEVELS - 1);
 
-      // y 轴翻转：顶部=高饱和，底部=低饱和
-      const drawY = HISTOGRAM_BINS - 1 - satIndex;
-      const pixelOffset = (drawY * HISTOGRAM_BINS + lightIndex) * 4;
-
-      const lowR = 56;
-      const lowG = 96;
-      const lowB = 160;
-      const highR = 255;
-      const highG = 156;
-      const highB = 72;
-
-      imageData.data[pixelOffset] = Math.round(lowR + (highR - lowR) * intensity);
-      imageData.data[pixelOffset + 1] = Math.round(lowG + (highG - lowG) * intensity);
-      imageData.data[pixelOffset + 2] = Math.round(lowB + (highB - lowB) * intensity);
-      imageData.data[pixelOffset + 3] = Math.round(56 + 199 * intensity);
+      const lowR = 56, lowG = 96, lowB = 160;
+      const highR = 255, highG = 156, highB = 72;
+      const r = Math.round(lowR + (highR - lowR) * intensity);
+      const g = Math.round(lowG + (highG - lowG) * intensity);
+      const b = Math.round(lowB + (highB - lowB) * intensity);
+      const a = (56 + 199 * intensity) / 255;
+      row.push(`rgba(${r},${g},${b},${a.toFixed(2)})`);
     }
+    cells.push(row);
   }
-
-  ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
+  return cells;
 };
 
 export const config = {
@@ -724,7 +712,7 @@ export const ui = ({ context }) => {
     if (!results) return [];
     return results.map((item) => ({
       ...item,
-      heatmapDataUrl: createHeatmapDataUrl(item.heatmapBins, item.pixelCount),
+      heatmapCells: computeHeatmapCells(item.heatmapBins, item.pixelCount),
       displayName: getImageDisplayName(item.imagePath, item.itemId),
     }));
   }, [results]);
@@ -786,13 +774,7 @@ export const ui = ({ context }) => {
         </div>
       )}
 
-      <div
-        className={
-          renderResults.length > 1
-            ? "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
-            : "grid grid-cols-1 gap-3"
-        }
-      >
+      <div className="grid grid-cols-1 gap-3">
         {renderResults.map((item) => (
           <div
             key={item.itemId}
@@ -802,74 +784,91 @@ export const ui = ({ context }) => {
               {item.displayName}
             </div>
 
-            <div className="mb-3">
-              <div className="mb-2 text-[12px] font-medium text-neutral-200">
-                {t("command.imageGene.palette")}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {item.palette.map((swatch) => {
-                  const swatchKey = `${item.itemId}_${swatch.hex}`;
-                  const isCopied = copiedSwatchKey === swatchKey;
-                  return (
-                    <button
-                      type="button"
-                      key={`${swatch.hex}_${swatch.ratio}`}
-                      className={`rounded border px-1.5 py-1 text-left transition-colors ${
-                        isCopied
+            {/* 色板 + 分布图同行 */}
+            <div className="flex gap-4">
+              {/* 左：色板 */}
+              <div className="shrink-0">
+                <div className="mb-2 text-[12px] font-medium text-neutral-200">
+                  {t("command.imageGene.palette")}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {item.palette.map((swatch) => {
+                    const swatchKey = `${item.itemId}_${swatch.hex}`;
+                    const isCopied = copiedSwatchKey === swatchKey;
+                    return (
+                      <button
+                        type="button"
+                        key={`${swatch.hex}_${swatch.ratio}`}
+                        className={`rounded border px-1.5 py-1 text-left transition-colors ${isCopied
                           ? "border-neutral-500"
                           : "border-neutral-800/70 hover:border-neutral-600"
-                      }`}
-                      onClick={() => void handleCopySwatch(item.itemId, swatch.hex)}
-                      title={t("command.imageGene.copy")}
-                    >
-                      <div className="flex items-center gap-1.5 whitespace-nowrap">
-                        <div
-                          className="h-4 w-6 shrink-0 rounded border border-neutral-700"
-                          style={{ backgroundColor: swatch.hex }}
-                        />
-                        <div className="font-mono text-[10px] text-neutral-100">{swatch.hex}</div>
-                        {isCopied && (
-                          <div className="text-[9px] text-neutral-500">
-                            {t("command.imageGene.copied")}
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="border-t border-neutral-800/70 pt-3">
-              <div className="mb-2 text-[12px] font-medium text-neutral-200">
-                {`${t("command.imageGene.saturation")} × ${t("command.imageGene.lightness")}`}
-              </div>
-              <div className="grid grid-cols-[auto_1fr] gap-2">
-                <div className="flex flex-col items-center justify-between py-1 text-[10px] text-neutral-400">
-                  <span>{t("command.imageGene.high")}</span>
-                  <span
-                    className="text-neutral-500"
-                    style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-                  >
-                    {t("command.imageGene.saturation")}
-                  </span>
-                  <span>{t("command.imageGene.low")}</span>
+                          }`}
+                        onClick={() => void handleCopySwatch(item.itemId, swatch.hex)}
+                        title={t("command.imageGene.copy")}
+                      >
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                          <div
+                            className="h-4 w-6 shrink-0 rounded border border-neutral-700"
+                            style={{ backgroundColor: swatch.hex }}
+                          />
+                          <div className="font-mono text-[10px] text-neutral-100">{swatch.hex}</div>
+                          {isCopied && (
+                            <div className="text-[9px] text-neutral-500">
+                              {t("command.imageGene.copied")}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div>
-                  <div className="rounded bg-neutral-900/60 p-1">
-                    {item.heatmapDataUrl ? (
-                      <img
-                        src={item.heatmapDataUrl}
-                        className="h-64 w-full rounded object-fill [image-rendering:pixelated]"
-                      />
-                    ) : (
-                      <div className="h-64 w-full rounded bg-neutral-900" />
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[10px] text-neutral-400">
-                    <span>{t("command.imageGene.low")}</span>
-                    <span className="text-neutral-500">{t("command.imageGene.lightness")}</span>
+              </div>
+
+              {/* 右：饱和度×明度分布图 */}
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 text-[12px] font-medium text-neutral-200">
+                  {`${t("command.imageGene.saturation")} × ${t("command.imageGene.lightness")}`}
+                </div>
+                <div className="grid grid-cols-[auto_1fr] gap-2">
+                  <div className="flex flex-col items-center justify-between py-1 text-[10px] text-neutral-400">
                     <span>{t("command.imageGene.high")}</span>
+                    <span
+                      className="text-neutral-500"
+                      style={{ writingMode: "vertical-rl" }}
+                    >
+                      {t("command.imageGene.saturation")}
+                    </span>
+                    <span>{t("command.imageGene.low")}</span>
+                  </div>
+                  <div>
+                    <div className="rounded bg-neutral-900/60 p-1">
+                      {item.heatmapCells ? (
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: `repeat(${HISTOGRAM_BINS}, 1fr)`,
+                            gap: "2px",
+                            height: "10rem",
+                          }}
+                        >
+                          {item.heatmapCells.map((row, rowIndex) =>
+                            row.map((color, colIndex) => (
+                              <div
+                                key={`${rowIndex}_${colIndex}`}
+                                style={{ backgroundColor: color, borderRadius: "2px" }}
+                              />
+                            ))
+                          )}
+                        </div>
+                      ) : (
+                        <div className="h-40 w-full rounded bg-neutral-900" />
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px] text-neutral-400">
+                      <span>{t("command.imageGene.low")}</span>
+                      <span className="text-neutral-500">{t("command.imageGene.lightness")}</span>
+                      <span>{t("command.imageGene.high")}</span>
+                    </div>
                   </div>
                 </div>
               </div>

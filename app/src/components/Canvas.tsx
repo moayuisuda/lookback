@@ -1348,7 +1348,8 @@ export const Canvas: React.FC = () => {
 
       const snapshots = new Map<string, { x: number; y: number }>();
       currentSelected.forEach((selectedId) => {
-        const target = canvasItems.find((it) => it.itemId === selectedId);
+        // 从 proxy 读取最新位置，避免 snapshot 未刷新导致第二次拖拽漂移
+        const target = canvasState.canvasItems.find((it) => it.itemId === selectedId);
         if (target) snapshots.set(selectedId, { x: target.x, y: target.y });
       });
       multiDragRef.current = {
