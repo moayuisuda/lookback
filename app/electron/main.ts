@@ -568,6 +568,9 @@ async function createWindow(options?: { load?: boolean }) {
 
   mainWindow.on("resize", debouncedSaveWindowBounds);
   mainWindow.on("move", debouncedSaveWindowBounds);
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 
   mainWindow.webContents.on("did-finish-load", () => {
     log.info("Renderer process finished loading");
@@ -1023,8 +1026,9 @@ app.whenReady().then(async () => {
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-      applyPinStateToWindow();
+      createWindow().then(() => {
+        applyPinStateToWindow();
+      });
     }
   });
 });
