@@ -1,6 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 
 export const useVisualRenderCheck = (componentName: string, enabled = true) => {
+  void componentName;
+  void enabled;
   const ref = useRef<SVGElement | HTMLElement | null>(null);
 
   // useEffect(() => {
