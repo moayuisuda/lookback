@@ -2,7 +2,13 @@ import { useEffect } from 'react';
 import { useSnapshot } from 'valtio';
 import { FEATURE_LIST } from './data/features';
 import { useT } from './i18n/useT';
-import { LATEST_RELEASE_PAGE, siteActions, siteState, type Platform } from './store/siteStore';
+import {
+  LATEST_RELEASE_PAGE,
+  siteActions,
+  siteState,
+  type FaqPlatform,
+  type Platform,
+} from './store/siteStore';
 import sitePackage from '../package.json';
 
 function detectPlatform(): Platform {
@@ -19,6 +25,7 @@ function App() {
   useEffect(() => {
     // 先显示本地版本，随后异步刷新为最新 release 版本。
     siteActions.setLocalVersion(sitePackage.version);
+    siteActions.setFaqPlatform(detectPlatform() === 'win' ? 'win' : 'mac');
     void siteActions.loadLatestRelease();
   }, []);
 
@@ -35,6 +42,10 @@ function App() {
     const platform = detectPlatform();
     const downloadUrl = await siteActions.resolveDownloadUrl(platform);
     window.location.assign(downloadUrl);
+  }
+
+  function switchFaqPlatform(platform: FaqPlatform) {
+    siteActions.setFaqPlatform(platform);
   }
 
   return (
@@ -141,6 +152,16 @@ function App() {
                   <img src={feature.image} alt={t('features.imageAlt', { index: feature.id + 1 })} />
                 </div>
                 <p className="feature-desc">{t(feature.descKey)}</p>
+                {feature.shortcutKeys && feature.shortcutKeys.length > 0 && (
+                  <div className="feature-shortcuts">
+                    <p>{t('features.shortcutLabel')}</p>
+                    <ul>
+                      {feature.shortcutKeys.map((shortcutKey) => (
+                        <li key={shortcutKey}>{t(shortcutKey)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </article>
             ))}
           </div>
@@ -179,6 +200,47 @@ function App() {
               <p>{t('download.step.3.desc')}</p>
             </li>
           </ol>
+          <div className="download-faq" aria-labelledby="download-faq-title">
+            <div className="download-faq-head">
+              <h3 id="download-faq-title">{t('download.faq.title')}</h3>
+              <div className="download-faq-tabs" role="tablist" aria-label={t('download.faq.tabLabel')}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={snap.faqPlatform === 'mac'}
+                  className={snap.faqPlatform === 'mac' ? 'download-faq-tab active' : 'download-faq-tab'}
+                  onClick={() => switchFaqPlatform('mac')}
+                >
+                  {t('download.faq.tab.mac')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={snap.faqPlatform === 'win'}
+                  className={snap.faqPlatform === 'win' ? 'download-faq-tab active' : 'download-faq-tab'}
+                  onClick={() => switchFaqPlatform('win')}
+                >
+                  {t('download.faq.tab.win')}
+                </button>
+              </div>
+            </div>
+            <p className="download-faq-desc">{t('download.faq.desc')}</p>
+            <article className="download-faq-item">
+              <h4>{snap.faqPlatform === 'mac' ? t('download.faq.mac.title') : t('download.faq.win.title')}</h4>
+              <ol>
+                <li>
+                  {snap.faqPlatform === 'mac'
+                    ? t('download.faq.mac.step.1')
+                    : t('download.faq.win.step.1')}
+                </li>
+                <li>
+                  {snap.faqPlatform === 'mac'
+                    ? t('download.faq.mac.step.2')
+                    : t('download.faq.win.step.2')}
+                </li>
+              </ol>
+            </article>
+          </div>
         </section>
       </main>
 
@@ -190,6 +252,19 @@ function App() {
           </a>
           <p>{t('footer.copyright')}</p>
         </div>
+        <a
+          href="https://afdian.com/a/rinnko"
+          className="sponsor-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t('footer.sponsor')}
+        >
+          <img
+            width={200}
+            src="https://pic1.afdiancdn.com/static/img/welcome/button-sponsorme.png"
+            alt={t('footer.sponsor')}
+          />
+        </a>
       </footer>
     </div>
   );

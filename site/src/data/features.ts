@@ -6,6 +6,7 @@ export type FeatureItem = {
   layout: 'xl' | 'wide' | 'tall' | 'compact';
   titleKey: I18nKey;
   descKey: I18nKey;
+  shortcutKeys?: I18nKey[];
 };
 
 // 单一数据源：文案 key 与图片资源都在这里声明，页面仅做渲染。
@@ -16,6 +17,7 @@ export const FEATURE_LIST: FeatureItem[] = [
     layout: 'xl',
     titleKey: 'feature.0.title',
     descKey: 'feature.0.desc',
+    shortcutKeys: ['feature.0.shortcut.0'],
   },
   {
     id: 2,
@@ -23,6 +25,7 @@ export const FEATURE_LIST: FeatureItem[] = [
     layout: 'tall',
     titleKey: 'feature.2.title',
     descKey: 'feature.2.desc',
+    shortcutKeys: ['feature.2.shortcut.0', 'feature.2.shortcut.1'],
   },
   {
     id: 1,
@@ -30,6 +33,7 @@ export const FEATURE_LIST: FeatureItem[] = [
     layout: 'compact',
     titleKey: 'feature.1.title',
     descKey: 'feature.1.desc',
+    shortcutKeys: ['feature.1.shortcut.0'],
   },
   {
     id: 3,
@@ -44,6 +48,7 @@ export const FEATURE_LIST: FeatureItem[] = [
     layout: 'compact',
     titleKey: 'feature.6.title',
     descKey: 'feature.6.desc',
+    shortcutKeys: ['feature.6.shortcut.0'],
   },
   {
     id: 5,

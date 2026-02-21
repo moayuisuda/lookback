@@ -445,6 +445,36 @@ body {
   font-size: 14px;
 }
 
+.feature-shortcuts {
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(57, 197, 187, 0.3);
+  background: rgba(57, 197, 187, 0.08);
+  padding: 10px 12px;
+}
+
+.feature-shortcuts p {
+  margin: 0;
+  color: #b1f4ee;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.feature-shortcuts ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.feature-shortcuts li {
+  color: #c6ebff;
+  line-height: 1.55;
+  font-size: 13px;
+}
+
 .layout-xl .feature-media {
   min-height: 280px;
 }
@@ -548,6 +578,87 @@ body {
   line-height: 1.65;
 }
 
+.download-faq {
+  grid-column: 1 / -1;
+  border-radius: 14px;
+  border: 1px solid rgba(126, 152, 184, 0.28);
+  background: rgba(8, 14, 24, 0.72);
+  padding: 16px;
+}
+
+.download-faq h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #e6f2ff;
+}
+
+.download-faq-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.download-faq-desc {
+  margin: 8px 0 0;
+  color: var(--text-sub);
+  line-height: 1.7;
+}
+
+.download-faq-tabs {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(57, 197, 187, 0.24);
+  background: rgba(255, 255, 255, 0.03);
+  gap: 4px;
+}
+
+.download-faq-tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9db2cd;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.download-faq-tab.active {
+  color: #032725;
+  background: linear-gradient(135deg, #7bf0e7 0%, #39c5bb 100%);
+}
+
+.download-faq-item {
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(57, 197, 187, 0.2);
+  background: rgba(57, 197, 187, 0.06);
+  padding: 12px;
+}
+
+.download-faq-item h4 {
+  margin: 0;
+  color: #c9e8ff;
+  font-size: 14px;
+}
+
+.download-faq-item ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.download-faq-item li {
+  color: var(--text-sub);
+  line-height: 1.65;
+  font-size: 13px;
+}
+
 .footer {
   max-width: 1220px;
   margin: 44px auto 10px;
@@ -582,6 +693,24 @@ body {
 
 .footer-link:hover {
   color: #c9e4ff;
+}
+
+.sponsor-link {
+  display: inline-flex;
+  margin-top: 10px;
+  width: fit-content;
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.sponsor-link:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+.sponsor-link img {
+  display: block;
+  width: 200px;
+  height: auto;
 }
 
 @keyframes fade-up {
@@ -653,6 +782,11 @@ body {
   .layout-compact .feature-media {
     min-height: 180px;
   }
+
+  .download-faq-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 700px) {
@@ -696,5 +830,9 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
+  }
+
+  .sponsor-link img {
+    width: 180px;
   }
 }

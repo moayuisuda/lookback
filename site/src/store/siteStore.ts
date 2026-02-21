@@ -7,6 +7,7 @@ const GITHUB_RELEASE_DOWNLOAD_PREFIX = 'https://github.com/moayuisuda/lookback-r
 const MIRROR_RELEASE_DOWNLOAD_PREFIX = 'https://xget.xi-xu.me/gh/moayuisuda/lookback-release/releases/download/';
 
 export type Platform = 'mac' | 'win' | 'other';
+export type FaqPlatform = 'mac' | 'win';
 
 type ReleaseAsset = {
   name: string;
@@ -30,6 +31,7 @@ type SiteState = {
   activeFeatureId: number;
   release: LatestRelease | null;
   releaseVersion: string;
+  faqPlatform: FaqPlatform;
 };
 
 export const siteState = proxy<SiteState>({
@@ -37,6 +39,7 @@ export const siteState = proxy<SiteState>({
   activeFeatureId: 0,
   release: null,
   releaseVersion: '',
+  faqPlatform: 'mac',
 });
 
 function normalizeVersion(tagName: string) {
@@ -58,6 +61,9 @@ export const siteActions = {
   },
   setLocalVersion(version: string) {
     siteState.releaseVersion = version;
+  },
+  setFaqPlatform(platform: FaqPlatform) {
+    siteState.faqPlatform = platform;
   },
   setLatestRelease(release: LatestRelease) {
     siteState.release = release;
