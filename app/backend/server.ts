@@ -50,7 +50,7 @@ const loadStorageRoot = async (): Promise<string> => {
     try {
       const exeDir = path.dirname(app.getPath("exe"));
       const portableDataDir = path.join(exeDir, "data");
-      
+
       // If it already exists, use it
       if (await lockedFs.pathExists(portableDataDir)) {
         return portableDataDir;
@@ -83,6 +83,7 @@ let STORAGE_DIR = DEFAULT_STORAGE_DIR;
 let CANVASES_DIR = path.join(STORAGE_DIR, "canvases");
 let SETTINGS_FILE = path.join(STORAGE_DIR, "settings.json");
 let settingsCache: Record<string, unknown> | null = null;
+let storageInitTask: Promise<void> | null = null;
 
 const updateStoragePaths = (root: string) => {
   STORAGE_DIR = root;
@@ -98,6 +99,7 @@ const ensureStorageDirs = async (root: string) => {
 };
 
 const DEFAULT_COMMAND_FILES = [
+  "addText.jsx",
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
@@ -175,12 +177,23 @@ const writeSettings = async (settings: Record<string, unknown>): Promise<void> =
   persistSettings(settings);
 };
 
-const initializeStorage = async () => {
-  const root = await loadStorageRoot();
-  updateStoragePaths(root);
-  settingsCache = null;
-  await ensureStorageDirs(STORAGE_DIR);
-  await ensureDefaultCommands();
+export const ensureStorageInitialized = async (): Promise<void> => {
+  if (storageInitTask) {
+    return storageInitTask;
+  }
+  storageInitTask = (async () => {
+    const root = await loadStorageRoot();
+    updateStoragePaths(root);
+    settingsCache = null;
+    await ensureStorageDirs(STORAGE_DIR);
+    await ensureDefaultCommands();
+  })();
+  try {
+    await storageInitTask;
+  } catch (error) {
+    storageInitTask = null;
+    throw error;
+  }
 };
 
 const getCanvasAssetsDir = (canvasName: string): string => {
@@ -377,7 +390,7 @@ const listenOnAvailablePort = (
   });
 
 export async function startServer(): Promise<number> {
-  await initializeStorage();
+  await ensureStorageInitialized();
   await cleanupCanvasAssets();
   const server = express();
   server.use(cors());

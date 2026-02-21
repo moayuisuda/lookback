@@ -851,6 +851,7 @@ var STORAGE_DIR = DEFAULT_STORAGE_DIR;
 var CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
 var SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
 var settingsCache = null;
+var storageInitTask = null;
 var updateStoragePaths = (root) => {
   STORAGE_DIR = root;
   CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
@@ -863,6 +864,7 @@ var ensureStorageDirs = async (root) => {
   ]);
 };
 var DEFAULT_COMMAND_FILES = [
+  "addText.jsx",
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
@@ -930,12 +932,23 @@ var writeSettings = async (settings) => {
   settingsCache = settings;
   persistSettings(settings);
 };
-var initializeStorage = async () => {
-  const root = await loadStorageRoot();
-  updateStoragePaths(root);
-  settingsCache = null;
-  await ensureStorageDirs(STORAGE_DIR);
-  await ensureDefaultCommands();
+var ensureStorageInitialized = async () => {
+  if (storageInitTask) {
+    return storageInitTask;
+  }
+  storageInitTask = (async () => {
+    const root = await loadStorageRoot();
+    updateStoragePaths(root);
+    settingsCache = null;
+    await ensureStorageDirs(STORAGE_DIR);
+    await ensureDefaultCommands();
+  })();
+  try {
+    await storageInitTask;
+  } catch (error) {
+    storageInitTask = null;
+    throw error;
+  }
 };
 var getCanvasAssetsDir = (canvasName) => {
   const safeName = canvasName.replace(/[/\\:*?"<>|]/g, "_") || "Default";
@@ -1098,7 +1111,7 @@ var listenOnAvailablePort = (appServer, startPort) => new Promise((resolve, reje
   tryListen(startPort);
 });
 async function startServer() {
-  await initializeStorage();
+  await ensureStorageInitialized();
   await cleanupCanvasAssets();
   const server = (0, import_express6.default)();
   server.use((0, import_cors.default)());
@@ -2180,9 +2193,7 @@ async function getLocale() {
 }
 async function loadShortcuts() {
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== "object") return;
+    const settings = await readSettings();
     const rawToggle = settings.toggleWindowShortcut;
     if (typeof rawToggle === "string" && rawToggle.trim()) {
       toggleWindowShortcut = rawToggle.trim();
@@ -2204,10 +2215,7 @@ async function loadShortcuts() {
 }
 async function loadWindowPinState() {
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
-    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== "object") return;
-    const raw = settings;
+    const raw = await readSettings();
     if (typeof raw.pinMode === "boolean") {
       isPinMode = raw.pinMode;
     }
@@ -2576,6 +2584,16 @@ function registerAnchorShortcuts() {
     });
   });
 }
+function registerGlobalShortcuts() {
+  registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
+  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
+  registerAnchorShortcuts();
+}
+function unregisterGlobalShortcuts() {
+  import_electron2.globalShortcut.unregisterAll();
+}
 async function startServer2() {
   if (!localServerStartTask) {
     localServerStartTask = startServer().then((port) => {
@@ -2653,17 +2671,20 @@ import_electron2.app.whenReady().then(async () => {
   import_electron_log.default.info("Log file location:", import_electron_log.default.transports.file.getFile().path);
   import_electron_log.default.info("App path:", import_electron2.app.getAppPath());
   import_electron_log.default.info("User data:", import_electron2.app.getPath("userData"));
-  const taskLoadPin = loadWindowPinState();
-  const taskLoadShortcuts = loadShortcuts();
+  const taskInitStorage = ensureStorageInitialized();
   const taskCreateWindow = createWindow();
   const taskStartServer = startServer2();
+  try {
+    await taskInitStorage;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    import_electron_log.default.error("Failed to initialize storage before loading settings:", message);
+  }
+  const taskLoadPin = loadWindowPinState();
+  const taskLoadShortcuts = loadShortcuts();
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
   applyPinStateToWindow();
-  registerToggleWindowShortcut(toggleWindowShortcut);
-  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
-  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
-  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
-  registerAnchorShortcuts();
+  registerGlobalShortcuts();
   if (mainWindow) {
     try {
       await taskStartServer;
@@ -2677,6 +2698,7 @@ import_electron2.app.whenReady().then(async () => {
     if (import_electron2.BrowserWindow.getAllWindows().length === 0) {
       createWindow().then(() => {
         applyPinStateToWindow();
+        registerGlobalShortcuts();
       });
     }
   });
@@ -2751,8 +2773,10 @@ import_electron2.ipcMain.on("settings-open-changed", (_event, open) => {
 });
 import_electron2.app.on("will-quit", () => {
   stopPinByAppWatcher();
-  import_electron2.globalShortcut.unregisterAll();
+  unregisterGlobalShortcuts();
 });
 import_electron2.app.on("window-all-closed", () => {
+  stopPinByAppWatcher();
+  unregisterGlobalShortcuts();
   if (process.platform !== "darwin") import_electron2.app.quit();
 });

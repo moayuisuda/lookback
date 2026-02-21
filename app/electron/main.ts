@@ -46,6 +46,7 @@ import {
   getStorageDir,
   setStorageRoot,
   readSettings,
+  ensureStorageInitialized,
 } from "../backend/server";
 import { t as translate } from "../shared/i18n/t";
 import type { Locale } from "../shared/i18n/types";
@@ -433,9 +434,7 @@ async function getLocale(): Promise<Locale> {
 
 async function loadShortcuts(): Promise<void> {
   try {
-    const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== "object") return;
+    const settings = await readSettings();
 
     const rawToggle = (settings as Record<string, unknown>)
       .toggleWindowShortcut;
@@ -467,10 +466,7 @@ async function loadShortcuts(): Promise<void> {
 
 async function loadWindowPinState(): Promise<void> {
   try {
-    const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = await lockedFs.readJson(settingsPath).catch(() => null);
-    if (!settings || typeof settings !== "object") return;
-    const raw = settings as {
+    const raw = (await readSettings()) as {
       pinMode?: unknown;
       pinTransparent?: unknown;
       pinTargetApp?: unknown;
@@ -908,6 +904,18 @@ function registerAnchorShortcuts() {
   });
 }
 
+function registerGlobalShortcuts() {
+  registerToggleWindowShortcut(toggleWindowShortcut);
+  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
+  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
+  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
+  registerAnchorShortcuts();
+}
+
+function unregisterGlobalShortcuts() {
+  globalShortcut.unregisterAll();
+}
+
 async function startServer() {
   if (!localServerStartTask) {
     localServerStartTask = startApiServer().then((port) => {
@@ -1000,21 +1008,25 @@ app.whenReady().then(async () => {
   log.info("App path:", app.getAppPath());
   log.info("User data:", app.getPath("userData"));
 
-  const taskLoadPin = loadWindowPinState();
-  const taskLoadShortcuts = loadShortcuts();
+  const taskInitStorage = ensureStorageInitialized();
   const taskCreateWindow = createWindow();
   // Start server early, but handle errors later
   const taskStartServer = startServer();
 
+  try {
+    await taskInitStorage;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    log.error("Failed to initialize storage before loading settings:", message);
+  }
+
+  const taskLoadPin = loadWindowPinState();
+  const taskLoadShortcuts = loadShortcuts();
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
 
   applyPinStateToWindow();
 
-  registerToggleWindowShortcut(toggleWindowShortcut);
-  registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
-  registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
-  registerToggleMouseThroughShortcut(toggleMouseThroughShortcut);
-  registerAnchorShortcuts();
+  registerGlobalShortcuts();
 
   if (mainWindow) {
     try {
@@ -1032,6 +1044,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow().then(() => {
         applyPinStateToWindow();
+        registerGlobalShortcuts();
       });
     }
   });
@@ -1119,10 +1132,12 @@ ipcMain.on("settings-open-changed", (_event, open: boolean) => {
 
 app.on("will-quit", () => {
   stopPinByAppWatcher();
-  globalShortcut.unregisterAll();
+  unregisterGlobalShortcuts();
 });
 
 app.on("window-all-closed", () => {
+  stopPinByAppWatcher();
+  unregisterGlobalShortcuts();
   if (process.platform !== "darwin") app.quit();
 });
 // restart trigger 3

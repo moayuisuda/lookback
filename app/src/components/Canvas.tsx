@@ -1495,26 +1495,6 @@ export const Canvas: React.FC = () => {
     },
   );
 
-  const handleDblClick = useMemoizedFn((e: React.MouseEvent<SVGSVGElement>) => {
-    if (e.target !== e.currentTarget) return;
-    const local = getLocalPointFromClient(e.clientX, e.clientY);
-    if (!local) return;
-    const pos = localToWorldPoint(local);
-
-    const scale = canvasState.canvasViewport.scale || 1;
-    const fontSize = 24 / scale;
-
-    const id = canvasActions.addTextToCanvas(pos.x, pos.y, fontSize);
-    canvasState.canvasItems.forEach((item) => {
-      item.isSelected = item.itemId === id;
-      if (item.itemId === id && item.type === "text") {
-        item.isAutoEdit = true;
-      }
-    });
-    setPrimaryId(id);
-    setMultiSelectUnion(null);
-  });
-
   const handleCommitItem = useMemoizedFn(
     (id: string, newAttrs: Partial<CanvasItem>) => {
       canvasActions.updateCanvasImage(id, newAttrs);
@@ -1674,7 +1654,6 @@ export const Canvas: React.FC = () => {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onDoubleClick={handleDblClick}
         onWheel={handleWheel}
       >
         <defs>

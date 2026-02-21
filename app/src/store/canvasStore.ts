@@ -591,6 +591,29 @@ export const canvasActions = {
     return id;
   },
 
+  addTextAtViewportCenter: () => {
+    const { width, height } = canvasState.dimensions;
+    const viewport = canvasState.canvasViewport;
+    const scale = viewport.scale || 1;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    // 命令从当前视口中心创建文字，需要先换算到画布世界坐标。
+    const worldX = (centerX - viewport.x) / scale;
+    const worldY = (centerY - viewport.y) / scale;
+    const fontSize = 24 / scale;
+
+    const id = canvasActions.addTextToCanvas(worldX, worldY, fontSize);
+    canvasState.canvasItems.forEach((item) => {
+      item.isSelected = item.itemId === id;
+      if (item.itemId === id && item.type === "text") {
+        item.isAutoEdit = true;
+      }
+    });
+    canvasState.primaryId = id;
+    canvasState.multiSelectUnion = null;
+    return id;
+  },
+
   addToCanvas: (image: ImageMeta, x?: number, y?: number) => {
     let targetX = x;
     let targetY = y;
