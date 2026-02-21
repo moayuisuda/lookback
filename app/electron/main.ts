@@ -76,6 +76,14 @@ let activeAppWatcherProcess: ChildProcess | null = null;
 let isPinByAppActive = false;
 let localServerPort = DEFAULT_SERVER_PORT;
 let localServerStartTask: Promise<number> | null = null;
+let isQuitting = false;
+
+function requestAppQuit() {
+  // 统一退出入口，避免重复触发 app.quit 导致生命周期逻辑重复执行。
+  if (isQuitting) return;
+  isQuitting = true;
+  app.quit();
+}
 
 function normalizeAppIdentifier(name: string): string {
   return name.trim().toLowerCase();
@@ -605,7 +613,7 @@ async function createWindow(options?: { load?: boolean }) {
       mainWindow?.maximize();
     }
   });
-  ipcMain.on("window-close", () => mainWindow?.close());
+  ipcMain.on("window-close", () => requestAppQuit());
   ipcMain.on("window-focus", () => mainWindow?.focus());
 
   ipcMain.on("toggle-always-on-top", (_event, flag) => {
@@ -1138,6 +1146,6 @@ app.on("will-quit", () => {
 app.on("window-all-closed", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
-  if (process.platform !== "darwin") app.quit();
+  requestAppQuit();
 });
 // restart trigger 3

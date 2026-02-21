@@ -368,10 +368,12 @@ export const Canvas: React.FC = () => {
   );
 
   const localToWorldPoint = useMemoizedFn((point: { x: number; y: number }) => {
-    const scale = stageScale || 1;
+    // 高频交互（滚轮/拖拽）必须读取 proxy 实时视口，避免 snapshot 一帧延迟导致坐标漂移。
+    const viewport = canvasState.canvasViewport;
+    const scale = viewport.scale || 1;
     return {
-      x: (point.x - canvasViewport.x) / scale,
-      y: (point.y - canvasViewport.y) / scale,
+      x: (point.x - viewport.x) / scale,
+      y: (point.y - viewport.y) / scale,
     };
   });
 
@@ -566,20 +568,15 @@ export const Canvas: React.FC = () => {
   const handleWheel = useMemoizedFn((e: React.WheelEvent<SVGSVGElement>) => {
     e.preventDefault();
     closeContextMenu();
-    const svg = svgRef.current;
-    if (!svg) return;
-
+    const pointer = getLocalPointFromClient(e.clientX, e.clientY);
+    if (!pointer) return;
+    const viewport = canvasState.canvasViewport;
     const scaleBy = 1.1;
-    const oldScale = canvasViewport.scale;
-    const rect = svg.getBoundingClientRect();
-    const pointer = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
+    const oldScale = viewport.scale || 1;
 
     const mousePointTo = {
-      x: (pointer.x - canvasViewport.x) / oldScale,
-      y: (pointer.y - canvasViewport.y) / oldScale,
+      x: (pointer.x - viewport.x) / oldScale,
+      y: (pointer.y - viewport.y) / oldScale,
     };
 
     const newScale = e.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
@@ -592,8 +589,8 @@ export const Canvas: React.FC = () => {
     canvasActions.setCanvasViewport({
       x: newPos.x,
       y: newPos.y,
-      width: rect.width,
-      height: rect.height,
+      width: canvasState.dimensions.width,
+      height: canvasState.dimensions.height,
       scale: newScale,
     });
   });
@@ -813,15 +810,27 @@ export const Canvas: React.FC = () => {
 
   const handleRunContextMenuCommand = useMemoizedFn(
     async (command: CommandDefinition) => {
-      closeContextMenu();
       if (command.ui) {
+        closeContextMenu();
         commandActions.open();
         commandActions.setActiveCommand(command.id);
         return;
       }
       if (command.run) {
-        await command.run(commandContext);
+        const triggerPoint = localToWorldPoint({
+          x: canvasState.contextMenu.x,
+          y: canvasState.contextMenu.y,
+        });
+        canvasActions.setCommandTriggerPoint(triggerPoint);
+        closeContextMenu();
+        try {
+          await command.run(commandContext);
+        } finally {
+          canvasActions.setCommandTriggerPoint(null);
+        }
+        return;
       }
+      closeContextMenu();
     },
   );
 
@@ -926,14 +935,15 @@ export const Canvas: React.FC = () => {
         // However, for smooth dragging, we usually rely on event deltas.
         // Since we are now controlled, we should base on canvasViewport.
 
-        const nextPos = { x: canvasViewport.x + dx, y: canvasViewport.y + dy };
+        const viewport = canvasState.canvasViewport;
+        const nextPos = { x: viewport.x + dx, y: viewport.y + dy };
 
         canvasActions.setCanvasViewport({
           x: nextPos.x,
           y: nextPos.y,
           width: canvasState.dimensions.width,
           height: canvasState.dimensions.height,
-          scale: canvasViewport.scale,
+          scale: viewport.scale,
         });
         lastPanPointRef.current = currentPoint;
         return;
@@ -1424,7 +1434,7 @@ export const Canvas: React.FC = () => {
     (id: string, delta: { dx: number; dy: number }) => {
       const multi = multiDragRef.current;
       if (!multi.active || multi.draggedId !== id) return;
-      const scale = canvasViewport.scale;
+      const scale = canvasState.canvasViewport.scale || 1;
       const dx = delta.dx / scale;
       const dy = delta.dy / scale;
       multi.snapshots.forEach((start, selectedId) => {
@@ -1441,7 +1451,7 @@ export const Canvas: React.FC = () => {
     (id: string, delta: { dx: number; dy: number }) => {
       const multi = multiDragRef.current;
       if (!multi.active || multi.draggedId !== id) return;
-      const scale = canvasViewport.scale;
+      const scale = canvasState.canvasViewport.scale || 1;
       const dx = delta.dx / scale;
       const dy = delta.dy / scale;
       multi.snapshots.forEach((start, selectedId) => {

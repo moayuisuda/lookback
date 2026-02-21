@@ -178,6 +178,7 @@ interface CanvasStoreState {
     x: number;
     y: number;
   };
+  commandTriggerPoint: CanvasPoint | null;
   currentCanvasName: string;
 }
 
@@ -214,6 +215,7 @@ export const canvasState = proxy<CanvasStoreState>({
     x: 0,
     y: 0,
   },
+  commandTriggerPoint: null,
   currentCanvasName: "Default",
 });
 
@@ -592,15 +594,17 @@ export const canvasActions = {
   },
 
   addTextAtViewportCenter: () => {
-    const { width, height } = canvasState.dimensions;
     const viewport = canvasState.canvasViewport;
     const scale = viewport.scale || 1;
+    const trigger = canvasState.commandTriggerPoint;
+    const { width, height } = canvasState.dimensions;
     const centerX = width / 2;
     const centerY = height / 2;
-    // 命令从当前视口中心创建文字，需要先换算到画布世界坐标。
-    const worldX = (centerX - viewport.x) / scale;
-    const worldY = (centerY - viewport.y) / scale;
+    // 命令优先使用触发时的鼠标世界坐标，缺失时回退到视口中心。
+    const worldX = trigger ? trigger.x : (centerX - viewport.x) / scale;
+    const worldY = trigger ? trigger.y : (centerY - viewport.y) / scale;
     const fontSize = 24 / scale;
+    canvasState.commandTriggerPoint = null;
 
     const id = canvasActions.addTextToCanvas(worldX, worldY, fontSize);
     canvasState.canvasItems.forEach((item) => {
@@ -612,6 +616,10 @@ export const canvasActions = {
     canvasState.primaryId = id;
     canvasState.multiSelectUnion = null;
     return id;
+  },
+
+  setCommandTriggerPoint: (point: CanvasPoint | null) => {
+    canvasState.commandTriggerPoint = point;
   },
 
   addToCanvas: (image: ImageMeta, x?: number, y?: number) => {

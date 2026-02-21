@@ -113,13 +113,13 @@ const ensureDefaultCommands = async () => {
   await Promise.all(
     DEFAULT_COMMAND_FILES.map(async (fileName) => {
       const destPath = path.join(commandsDir, fileName);
-      if (await lockedFs.pathExists(destPath)) return;
       const srcPath = path.join(sourceDir, fileName);
       try {
         const content = await lockedFs.readFile(srcPath, "utf-8");
+        // 内置命令始终以源码为准，每次启动都覆盖同步，避免旧版本残留。
         await lockedFs.writeFile(destPath, content);
       } catch (error) {
-        console.error("Failed to seed default command", fileName, error);
+        console.error("Failed to sync default command", fileName, error);
       }
     })
   );
@@ -286,7 +286,7 @@ function downloadImage(url: string, dest: string): Promise<void> {
       const file = fs.createWriteStream(dest);
 
       const cleanup = () => {
-        fs.unlink(dest, () => {});
+        fs.unlink(dest, () => { });
       };
 
       const fail = (error: Error) => {
