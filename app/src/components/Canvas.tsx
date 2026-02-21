@@ -1300,7 +1300,10 @@ export const Canvas: React.FC = () => {
         }
       >();
       targetIds.forEach((selectedId) => {
-        const target = canvasItems.find((it) => it.itemId === selectedId);
+        // 缩放会话必须读取 proxy 的最新位置，避免拖拽后立刻缩放时命中旧快照导致回跳。
+        const target = canvasState.canvasItems.find(
+          (it) => it.itemId === selectedId,
+        );
         if (!target) return;
         if (target.type === "text") {
           snapshots.set(selectedId, {
@@ -1355,7 +1358,7 @@ export const Canvas: React.FC = () => {
 
   const handleItemScaleStart = useMemoizedFn(
     (id: string, client: { x: number; y: number }) => {
-      const target = canvasItems.find((it) => it.itemId === id);
+      const target = canvasState.canvasItems.find((it) => it.itemId === id);
       if (!target) return;
       const scale = target.scale || 1;
       const width = target.width || 0;
