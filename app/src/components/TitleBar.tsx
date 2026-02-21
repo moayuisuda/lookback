@@ -16,6 +16,7 @@ import {
 import { clsx } from "clsx";
 import { globalActions, globalState } from "../store/globalStore";
 import { canvasActions, canvasState } from "../store/canvasStore";
+import { versionActions, versionState } from "../store/versionStore";
 import { THEME } from "../theme";
 import { useSnapshot } from "valtio";
 import { useT } from "../i18n/useT";
@@ -32,6 +33,7 @@ import { ConfirmModal } from "./ConfirmModal";
 
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
+  const versionSnap = useSnapshot(versionState);
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
@@ -74,10 +76,14 @@ export const TitleBar: React.FC = () => {
   };
 
   useEffect(() => {
-    if (settingsOpen) {
-      void loadStorageDir();
-    }
+    if (!settingsOpen) return;
+    void loadStorageDir();
+    void versionActions.refreshVersionInfo();
   }, [settingsOpen]);
+
+  useEffect(() => {
+    void versionActions.refreshVersionInfo();
+  }, []);
 
   useEffect(() => {
     window.electron?.setSettingsOpen?.(settingsOpen);
@@ -245,6 +251,9 @@ export const TitleBar: React.FC = () => {
     } finally {
       setUpdatingStorageDir(false);
     }
+  };
+  const handleOpenUpdatePage = () => {
+    void window.electron?.openExternal("https://lookback.top/");
   };
 
   const handleToggleMouseThrough = () => {
@@ -420,6 +429,10 @@ export const TitleBar: React.FC = () => {
     isCreatingCanvas ||
     !!editingCanvas ||
     !!deleteConfirmCanvas;
+  const hasVersionUpdate =
+    !!versionSnap.currentVersion &&
+    !!versionSnap.latestVersion &&
+    versionSnap.currentVersion !== versionSnap.latestVersion;
 
   useEffect(() => {
     globalActions.setTitleBarVisible(shouldShow);
@@ -638,13 +651,19 @@ export const TitleBar: React.FC = () => {
             ref={settingsBtnRef}
             onClick={handleToggleSettings}
             className={clsx(
-              "p-1 hover:bg-neutral-800 rounded transition-colors",
+              "relative p-1 hover:bg-neutral-800 rounded transition-colors",
               settingsOpen && "bg-neutral-800",
             )}
             style={{ color: settingsOpen ? THEME.primary : undefined }}
             title={t("titleBar.settings")}
           >
             <Settings size={14} />
+            {hasVersionUpdate && (
+              <span
+                className="pointer-events-none absolute right-0 top-0 h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: THEME.primary }}
+              />
+            )}
           </button>
           <div className="relative flex items-center">
             <button
@@ -812,6 +831,50 @@ export const TitleBar: React.FC = () => {
                   {t("common.language.zh")}
                 </button>
               </div>
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-1.5">
+              <div className="text-[11px] text-neutral-400">
+                {t("titleBar.version")}
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[10px] text-neutral-300">
+                <span className="truncate">
+                  {t("titleBar.version.row", {
+                    current: versionSnap.currentVersion
+                      ? `v${versionSnap.currentVersion}`
+                      : t("common.notSet"),
+                    latest: versionSnap.loadingLatestVersion
+                      ? t("common.loading")
+                      : versionSnap.latestVersion
+                        ? `v${versionSnap.latestVersion}`
+                        : t("common.notSet"),
+                  })}
+                </span>
+                {hasVersionUpdate && (
+                  <button
+                    type="button"
+                    onClick={handleOpenUpdatePage}
+                    className="shrink-0 text-[10px] transition-colors hover:opacity-85"
+                    style={{ color: THEME.primary }}
+                  >
+                    {t("titleBar.version.updateNow")}
+                  </button>
+                )}
+              </div>
+              {versionSnap.latestVersionLoadFailed && (
+                <div className="text-[10px] text-amber-300">
+                  {t("titleBar.version.fetchFailed")}
+                </div>
+              )}
+              {!versionSnap.loadingLatestVersion &&
+                !versionSnap.latestVersionLoadFailed &&
+                versionSnap.currentVersion &&
+                versionSnap.latestVersion &&
+                versionSnap.currentVersion === versionSnap.latestVersion && (
+                  <div className="text-[10px] text-neutral-400">
+                    {t("titleBar.version.upToDate")}
+                  </div>
+                )}
             </div>
 
             <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">

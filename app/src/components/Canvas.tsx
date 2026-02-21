@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, useMemo } from "react";
 import { useMemoizedFn } from "ahooks";
 import { useHotkeys } from "react-hotkeys-hook";
-import { debounce } from "radash";
 import {
   canvasState,
   canvasActions,
@@ -154,7 +153,7 @@ const CanvasItemsLayer = React.memo(
     onCommitItem,
     onCommitEnter,
   }: CanvasItemsLayerProps) => {
-    console.log('itemsLayer', items)
+    // console.log('itemsLayer', items)
 
     return (
       <g>
@@ -205,13 +204,6 @@ export const Canvas: React.FC = () => {
 
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
-  const debouncedCommit = useMemo(
-    () =>
-      debounce({ delay: 500 }, () => {
-        canvasActions.commitCanvasChange();
-      }),
-    [],
-  );
   const selectionAppendRef = useRef(false);
   const multiDragRef = useRef<{
     active: boolean;

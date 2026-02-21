@@ -1387,6 +1387,14 @@ var en = {
   "titleBar.dataFolder": "Data Folder",
   "titleBar.dataFolder.default": "Not configured, using default directory",
   "titleBar.change": "Change",
+  "titleBar.version": "Version",
+  "titleBar.version.current": "Current",
+  "titleBar.version.latest": "Latest",
+  "titleBar.version.row": "Current {{current}} \xB7 Latest {{latest}}",
+  "titleBar.version.updateNow": "Update now",
+  "titleBar.version.fetchFailed": "Failed to fetch latest version",
+  "titleBar.version.upToDate": "You are on the latest version",
+  "titleBar.version.updateAvailable": "Update available: v{{version}}",
   "titleBar.window": "Window",
   "titleBar.pinTransparent": "Pin transparent",
   "titleBar.canvasOpacity": "Canvas Opacity",
@@ -1635,6 +1643,14 @@ var zh = {
   "titleBar.dataFolder": "\u6570\u636E\u6587\u4EF6\u5939",
   "titleBar.dataFolder.default": "\u672A\u914D\u7F6E\uFF0C\u5C06\u4F7F\u7528\u9ED8\u8BA4\u76EE\u5F55",
   "titleBar.change": "\u66F4\u6539",
+  "titleBar.version": "\u7248\u672C",
+  "titleBar.version.current": "\u5F53\u524D\u7248\u672C",
+  "titleBar.version.latest": "\u6700\u65B0\u7248\u672C",
+  "titleBar.version.row": "\u5F53\u524D {{current}} \xB7 \u6700\u65B0 {{latest}}",
+  "titleBar.version.updateNow": "\u7ACB\u5373\u66F4\u65B0",
+  "titleBar.version.fetchFailed": "\u6700\u65B0\u7248\u672C\u83B7\u53D6\u5931\u8D25",
+  "titleBar.version.upToDate": "\u5DF2\u662F\u6700\u65B0\u7248\u672C",
+  "titleBar.version.updateAvailable": "\u53EF\u66F4\u65B0\u81F3 v{{version}}",
   "titleBar.window": "\u7A97\u53E3",
   "titleBar.pinTransparent": "\u7F6E\u9876\u900F\u660E",
   "titleBar.canvasOpacity": "\u753B\u5E03\u900F\u660E\u5EA6",
@@ -2577,6 +2593,9 @@ import_electron2.ipcMain.handle("get-server-port", async () => {
     return localServerStartTask;
   }
   return localServerPort;
+});
+import_electron2.ipcMain.handle("get-app-version", async () => {
+  return import_electron2.app.getVersion();
 });
 import_electron2.ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();

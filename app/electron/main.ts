@@ -929,6 +929,10 @@ ipcMain.handle("get-server-port", async () => {
   return localServerPort;
 });
 
+ipcMain.handle("get-app-version", async () => {
+  return app.getVersion();
+});
+
 ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();
   const result = await dialog.showOpenDialog({

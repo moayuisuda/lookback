@@ -38,6 +38,7 @@ interface Window {
       error?: string;
     }>;
     getServerPort: () => Promise<number>;
+    getAppVersion: () => Promise<string>;
     getStorageDir: () => Promise<string>;
     chooseStorageDir: () => Promise<string | null>;
     saveImageFile: (
