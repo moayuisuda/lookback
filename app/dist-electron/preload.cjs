@@ -23,6 +23,7 @@ import_electron.contextBridge.exposeInMainWorld("electron", {
   setSettingsOpen: (open) => import_electron.ipcRenderer.send("settings-open-changed", open),
   listRunningApps: () => import_electron.ipcRenderer.invoke("list-running-apps"),
   getServerPort: () => import_electron.ipcRenderer.invoke("get-server-port"),
+  getApiAuthToken: () => import_electron.ipcRenderer.invoke("get-api-auth-token"),
   getAppVersion: () => import_electron.ipcRenderer.invoke("get-app-version"),
   getStorageDir: () => import_electron.ipcRenderer.invoke("get-storage-dir"),
   chooseStorageDir: () => import_electron.ipcRenderer.invoke("choose-storage-dir"),

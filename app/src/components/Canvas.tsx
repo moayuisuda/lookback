@@ -183,7 +183,6 @@ export const Canvas: React.FC = () => {
     primaryId,
     isClearModalOpen,
     dimensions,
-    isSpaceDown,
     canvasViewport,
     selectionBox,
     selectionMode,
@@ -755,12 +754,13 @@ export const Canvas: React.FC = () => {
         setIsSpaceDown(false);
         isSpaceContainBlockedRef.current = false;
         if (shouldContain) {
+          const currentPrimaryId = canvasState.primaryId;
           const selectedItems = getSelectedItems();
           if (selectedItems.length > 1) {
             const bbox = getItemsBoundingBox(selectedItems);
             if (bbox) zoomToBounds(bbox, 0);
-          } else if (primaryId) {
-            handleContainItem(primaryId);
+          } else if (currentPrimaryId) {
+            handleContainItem(currentPrimaryId);
           } else {
             handleZoomToFit();
           }
@@ -793,7 +793,6 @@ export const Canvas: React.FC = () => {
     getSelectedItems,
     handleContainItem,
     handleZoomToFit,
-    primaryId,
     setIsSpaceDown,
     zoomToBounds,
   ]);
@@ -837,10 +836,14 @@ export const Canvas: React.FC = () => {
   const handleMouseDown = useMemoizedFn(
     (e: React.MouseEvent<SVGSVGElement>) => {
       closeContextMenu();
-      if (isSpaceDown && (e.button === 0 || e.button === 1 || e.button === 2)) {
+      const isSpaceDownNow = canvasState.isSpaceDown;
+      if (
+        isSpaceDownNow &&
+        (e.button === 0 || e.button === 1 || e.button === 2)
+      ) {
         isSpaceContainBlockedRef.current = true;
       }
-      const isSpacePan = isSpaceDown && e.button === 0;
+      const isSpacePan = isSpaceDownNow && e.button === 0;
       const isMiddleButton = e.button === 1;
       if (isSpacePan || isMiddleButton) {
         e.preventDefault();
@@ -950,12 +953,13 @@ export const Canvas: React.FC = () => {
       }
 
       // Box Selection
-      if (selectionBox.start) {
+      const currentSelection = canvasState.selectionBox;
+      if (currentSelection.start) {
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
         const pos = localToWorldPoint(local);
         canvasState.selectionBox = {
-          ...canvasState.selectionBox,
+          ...currentSelection,
           current: pos,
         };
       }
@@ -1008,17 +1012,19 @@ export const Canvas: React.FC = () => {
     isPanningRef.current = false;
     lastPanPointRef.current = null;
 
-    if (selectionBox.start && selectionBox.current) {
-      const x1 = Math.min(selectionBox.start.x, selectionBox.current.x);
-      const x2 = Math.max(selectionBox.start.x, selectionBox.current.x);
-      const y1 = Math.min(selectionBox.start.y, selectionBox.current.y);
-      const y2 = Math.max(selectionBox.start.y, selectionBox.current.y);
+    const currentSelection = canvasState.selectionBox;
+    if (currentSelection.start && currentSelection.current) {
+      const x1 = Math.min(currentSelection.start.x, currentSelection.current.x);
+      const x2 = Math.max(currentSelection.start.x, currentSelection.current.x);
+      const y1 = Math.min(currentSelection.start.y, currentSelection.current.y);
+      const y2 = Math.max(currentSelection.start.y, currentSelection.current.y);
       const width = x2 - x1;
       const height = y2 - y1;
 
       const isClick = width <= 2 && height <= 2;
+      const viewportScale = canvasState.canvasViewport.scale || 1;
       const zoomArea =
-        width * height * canvasViewport.scale * canvasViewport.scale;
+        width * height * viewportScale * viewportScale;
       const shouldZoom = zoomArea >= MIN_ZOOM_AREA;
 
       if (canvasState.selectionMode === "zoom") {

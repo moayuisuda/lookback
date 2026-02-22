@@ -12,6 +12,7 @@ import {
   Edit2,
   Check,
   ChevronDown,
+  Info,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { globalActions, globalState } from "../store/globalStore";
@@ -30,6 +31,7 @@ import {
 } from "../service";
 import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmModal } from "./ConfirmModal";
+import { Tooltip } from "./Tooltip";
 
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
@@ -396,7 +398,7 @@ export const TitleBar: React.FC = () => {
       if (isMouseDownRef.current) return;
       setMouseY(e.clientY);
     };
-    
+
     const handleMouseDown = (e: MouseEvent) => {
       // If clicking inside titlebar, let it function.
       if (e.target instanceof Element && e.target.closest('.title-bar-container')) {
@@ -725,8 +727,8 @@ export const TitleBar: React.FC = () => {
                         className={clsx(
                           "w-full flex items-center justify-between rounded px-2 py-1 text-[10px] hover:bg-neutral-800",
                           snap.pinMode &&
-                            snap.pinTargetApp === appName &&
-                            "text-white",
+                          snap.pinTargetApp === appName &&
+                          "text-white",
                         )}
                       >
                         <span className="truncate">{appName}</span>
@@ -908,8 +910,13 @@ export const TitleBar: React.FC = () => {
             </div>
 
             <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
-              <div className="text-[11px] text-neutral-400">
+              <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                 {t("titleBar.shortcuts")}
+                <Tooltip content={t("titleBar.shortcuts.hint" as any)} delay={150}>
+                  <span className="flex items-center">
+                    <Info size={12} className="text-neutral-500 hover:text-neutral-300 transition-colors" />
+                  </span>
+                </Tooltip>
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">

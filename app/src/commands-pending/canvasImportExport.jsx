@@ -25,6 +25,7 @@ export const config = {
         "Imported {{current}}/{{total}}",
       "command.canvasImportExport.status.listFailed": "Failed to load canvases",
       "command.canvasImportExport.action.export": "Export ({{count}})",
+      "toast.command.canvasExportSaved": "Canvases exported",
       "toast.command.exportPartial": "Some canvases failed to export",
       "toast.command.importSaved": "Imported {{count}} canvases",
     },
@@ -49,6 +50,7 @@ export const config = {
         "已导入 {{current}}/{{total}}",
       "command.canvasImportExport.status.listFailed": "获取画布列表失败",
       "command.canvasImportExport.action.export": "导出 ({{count}})",
+      "toast.command.canvasExportSaved": "画布导出成功",
       "toast.command.exportPartial": "部分画布导出失败",
       "toast.command.importSaved": "已导入 {{count}} 个画布",
     },
@@ -211,7 +213,7 @@ export const ui = ({ context }) => {
 
     if (successCount === selectedCanvases.size) {
       actions.globalActions.pushToast(
-        { key: "toast.command.exportSaved" },
+        { key: "toast.command.canvasExportSaved" },
         "success",
       );
     } else {
@@ -261,11 +263,10 @@ export const ui = ({ context }) => {
     <div className="flex flex-col h-full text-neutral-200 bg-neutral-950">
       <div className="flex border-b border-neutral-800 bg-neutral-950/60 px-4 pt-2">
         <button
-          className={`flex-1 pb-3 pt-2 text-xs font-medium transition-all relative ${
-            activeTab === "export"
+          className={`flex-1 pb-3 pt-2 text-xs font-medium transition-all relative ${activeTab === "export"
               ? "text-primary"
               : "text-neutral-500 hover:text-neutral-300"
-          }`}
+            }`}
           onClick={() => setActiveTab("export")}
         >
           {t('command.canvasImportExport.tab.export')}
@@ -274,11 +275,10 @@ export const ui = ({ context }) => {
           )}
         </button>
         <button
-          className={`flex-1 pb-3 pt-2 text-xs font-medium transition-all relative ${
-            activeTab === "import"
+          className={`flex-1 pb-3 pt-2 text-xs font-medium transition-all relative ${activeTab === "import"
               ? "text-primary"
               : "text-neutral-500 hover:text-neutral-300"
-          }`}
+            }`}
           onClick={() => setActiveTab("import")}
         >
           {t("command.canvasImportExport.tab.import")}
@@ -320,10 +320,9 @@ export const ui = ({ context }) => {
                     onClick={() => toggleCanvas(canvas.name)}
                     className={`
                       group relative flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-all duration-200 border
-                      ${
-                        isSelected
-                          ? "border-primary/40 bg-primary/10 shadow-[0_0_15px_-5px_rgba(var(--primary-rgb),0.3)]"
-                          : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800 hover:border-neutral-700"
+                      ${isSelected
+                        ? "border-primary/40 bg-primary/10 shadow-[0_0_15px_-5px_rgba(var(--primary-rgb),0.3)]"
+                        : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800 hover:border-neutral-700"
                       }
                     `}
                   >
@@ -350,11 +349,10 @@ export const ui = ({ context }) => {
                     <div
                       className={`
                       w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-200
-                      ${
-                        isSelected
+                      ${isSelected
                           ? "bg-primary border-primary scale-100"
                           : "border-neutral-600 bg-transparent group-hover:border-neutral-500"
-                      }
+                        }
                     `}
                     >
                       {isSelected && (
@@ -438,24 +436,23 @@ export const ui = ({ context }) => {
                 {loading
                   ? t("command.canvasImportExport.status.exporting")
                   : t("command.canvasImportExport.action.export", {
-                      count: selectedCanvases.size,
-                    })}
+                    count: selectedCanvases.size,
+                  })}
               </CanvasButton>
             ) : (
               <button
                 onClick={handleExport}
                 disabled={loading || selectedCanvases.size === 0}
-                className={`px-6 py-2.5 rounded-lg text-xs font-medium transition-all shadow-lg ${
-                  loading || selectedCanvases.size === 0
+                className={`px-6 py-2.5 rounded-lg text-xs font-medium transition-all shadow-lg ${loading || selectedCanvases.size === 0
                     ? "bg-neutral-900 text-neutral-500 cursor-not-allowed shadow-none"
                     : "bg-primary hover:bg-primary/90 text-white shadow-primary/20 hover:shadow-primary/40 hover:-translate-y-0.5 active:translate-y-0"
-                }`}
+                  }`}
               >
                 {loading
                   ? t("command.canvasImportExport.status.exporting")
                   : t("command.canvasImportExport.action.export", {
-                      count: selectedCanvases.size,
-                    })}
+                    count: selectedCanvases.size,
+                  })}
               </button>
             ))}
         </div>

@@ -157,6 +157,46 @@ export const getRenderBbox = (
   };
 };
 
+const normalizePath = (value: string) => value.replace(/\\/g, "/");
+
+const isRemoteImagePath = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("http://") || normalized.startsWith("https://");
+};
+
+const isAssetImagePath = (value: string) => {
+  const normalized = normalizePath(value).replace(/^\/+/, "");
+  return normalized.startsWith("assets/");
+};
+
+const sanitizeCanvasNameForPath = (value: string) => {
+  const safe = value.replace(/[/\\:*?"<>|]/g, "_").trim();
+  return safe || "Default";
+};
+
+const resolveLocalImagePath = async (
+  rawPath: string,
+  canvasName: string,
+): Promise<string> => {
+  if (!isAssetImagePath(rawPath)) return rawPath;
+  const normalized = normalizePath(rawPath).replace(/^\/+/, "");
+  const filename = normalized.split("/").pop() || "";
+  if (!filename) return "";
+  const storageDir = await window.electron?.getStorageDir?.();
+  if (!storageDir) return "";
+  const safeStorageDir = storageDir.replace(/[\\/]$/, "");
+  const safeCanvasName = sanitizeCanvasNameForPath(canvasName);
+  // assets/ 相对路径统一映射为当前画布 assets 目录下的绝对路径。
+  return `${safeStorageDir}/canvases/${safeCanvasName}/assets/${filename}`;
+};
+
+const getPathDirname = (value: string) => {
+  const normalized = normalizePath(value);
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return normalized;
+  return normalized.slice(0, index);
+};
+
 interface CanvasStoreState {
   canvasItems: CanvasItem[];
   canvasHistory: CanvasItem[][];
@@ -952,5 +992,18 @@ export const canvasActions = {
 
     canvasState.primaryId = null;
     canvasState.multiSelectUnion = null;
+  },
+  isRemoteImagePath: (value: string) => {
+    return isRemoteImagePath(value);
+  },
+  isAssetImagePath: (value: string) => {
+    return isAssetImagePath(value);
+  },
+  resolveLocalImagePath: async (rawPath: string, canvasName?: string) => {
+    const targetCanvasName = (canvasName || canvasState.currentCanvasName).trim() || "Default";
+    return resolveLocalImagePath(rawPath, targetCanvasName);
+  },
+  getPathDirname: (value: string) => {
+    return getPathDirname(value);
   },
 };

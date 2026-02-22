@@ -77,19 +77,23 @@ export const Minimap: React.FC = () => {
     const rect = containerRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
+    const viewportNow = canvasState.canvasViewport;
+    const scale = viewportNow.scale || 1;
+    const viewWNow = viewportNow.width / scale;
+    const viewHNow = viewportNow.height / scale;
 
     const targetWorldX = clickX / mapScale + minX;
     const targetWorldY = clickY / mapScale + minY;
 
-    const newX = -(targetWorldX - viewW / 2) * viewport.scale;
-    const newY = -(targetWorldY - viewH / 2) * viewport.scale;
+    const newX = -(targetWorldX - viewWNow / 2) * scale;
+    const newY = -(targetWorldY - viewHNow / 2) * scale;
 
     canvasActions.setCanvasViewport({
       x: newX,
       y: newY,
-      width: viewport.width,
-      height: viewport.height,
-      scale: viewport.scale,
+      width: viewportNow.width,
+      height: viewportNow.height,
+      scale,
     });
   };
 

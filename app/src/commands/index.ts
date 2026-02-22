@@ -6,6 +6,7 @@ import type { CommandContext, CommandDefinition } from "./types";
 import { API_BASE_URL } from "../config";
 import { useEnvState } from "../hooks/useEnvState";
 import { useT } from "../i18n/useT";
+import { shellApi } from "../service";
 
 export const getCommandContext = (): CommandContext => ({
   React,
@@ -21,6 +22,7 @@ export const getCommandContext = (): CommandContext => ({
   config: {
     API_BASE_URL,
   },
+  shell: shellApi,
   components: {},
 });
 

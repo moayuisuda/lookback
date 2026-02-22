@@ -43,6 +43,7 @@ const logPinDebug = (...args: unknown[]) => {
 import {
   startServer as startApiServer,
   DEFAULT_SERVER_PORT,
+  getApiAuthToken,
   getStorageDir,
   setStorageRoot,
   readSettings,
@@ -77,6 +78,37 @@ let isPinByAppActive = false;
 let localServerPort = DEFAULT_SERVER_PORT;
 let localServerStartTask: Promise<number> | null = null;
 let isQuitting = false;
+let isWindowIpcBound = false;
+let hasPendingSecondInstanceRestore = false;
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
+app.on("second-instance", () => {
+  if (!hasSingleInstanceLock) return;
+  const restoreOrCreateWindow = () => {
+    if (!mainWindow) {
+      void createWindow().then(() => {
+        applyPinStateToWindow();
+        registerGlobalShortcuts();
+      });
+      return;
+    }
+    restoreMainWindowVisibility();
+  };
+  if (!app.isReady()) {
+    if (hasPendingSecondInstanceRestore) return;
+    hasPendingSecondInstanceRestore = true;
+    app.once("ready", () => {
+      hasPendingSecondInstanceRestore = false;
+      restoreOrCreateWindow();
+    });
+    return;
+  }
+  restoreOrCreateWindow();
+});
 
 function requestAppQuit() {
   // 统一退出入口，避免重复触发 app.quit 导致生命周期逻辑重复执行。
@@ -605,152 +637,156 @@ async function createWindow(options?: { load?: boolean }) {
     loadMainWindow();
   }
 
-  ipcMain.on("window-min", () => mainWindow?.minimize());
-  ipcMain.on("window-max", () => {
-    if (mainWindow?.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow?.maximize();
-    }
-  });
-  ipcMain.on("window-close", () => requestAppQuit());
-  ipcMain.on("window-focus", () => mainWindow?.focus());
+  if (!isWindowIpcBound) {
+    isWindowIpcBound = true;
 
-  ipcMain.on("toggle-always-on-top", (_event, flag) => {
-    if (flag) {
-      setWindowAlwaysOnTop(true);
-      mainWindow?.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-      });
-    } else {
-      setWindowAlwaysOnTop(false);
-      mainWindow?.setVisibleOnAllWorkspaces(false);
-    }
-  });
-
-  ipcMain.on(
-    "set-pin-mode",
-    (_event, payload: { enabled: boolean; targetApp?: string }) => {
-      logPinDebug("ipc set-pin-mode", payload);
-      const enabled = payload?.enabled === true;
-      const targetApp =
-        typeof payload?.targetApp === "string" ? payload.targetApp.trim() : "";
-      isPinMode = enabled;
-      pinTargetApp = enabled ? targetApp : "";
-      logPinDebug("ipc set-pin-mode resolved", {
-        isPinMode,
-        pinTargetApp,
-        platform: process.platform,
-      });
-      applyPinStateToWindow();
-    },
-  );
-
-  ipcMain.on("set-pin-transparent", (_event, enabled: boolean) => {
-    if (!mainWindow) return;
-    isPinTransparent = enabled;
-    syncWindowShadow();
-  });
-
-  ipcMain.on("resize-window-by", (_event, deltaWidth) => {
-    if (!mainWindow) return;
-    const [w, h] = mainWindow.getSize();
-    const [x, y] = mainWindow.getPosition();
-    mainWindow.setBounds({
-      x: x - Math.round(deltaWidth),
-      y: y,
-      width: w + Math.round(deltaWidth),
-      height: h,
+    ipcMain.on("window-min", () => mainWindow?.minimize());
+    ipcMain.on("window-max", () => {
+      if (mainWindow?.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow?.maximize();
+      }
     });
-  });
+    ipcMain.on("window-close", () => requestAppQuit());
+    ipcMain.on("window-focus", () => mainWindow?.focus());
 
-  ipcMain.on(
-    "set-window-bounds",
-    (_event, bounds: Partial<Electron.Rectangle>) => {
-      if (!mainWindow) return;
-      const current = mainWindow.getBounds();
-      mainWindow.setBounds({
-        x: bounds.x ?? current.x,
-        y: bounds.y ?? current.y,
-        width: bounds.width ?? current.width,
-        height: bounds.height ?? current.height,
-      });
-    },
-  );
-
-  ipcMain.on("log-message", (_event, level: string, ...args: unknown[]) => {
-    if (typeof log[level as keyof typeof log] === "function") {
-      // @ts-expect-error dynamic log level access
-      log[level](...args);
-    } else {
-      log.info(...args);
-    }
-  });
-
-  ipcMain.handle("get-log-content", async () => {
-    try {
-      const logPath = log.transports.file.getFile().path;
-      if (await lockedFs.pathExists(logPath)) {
-        // Read last 50KB or so to avoid reading huge files
-        const stats = await lockedFs.stat(logPath);
-        const size = stats.size;
-        const READ_SIZE = 50 * 1024; // 50KB
-        const start = Math.max(0, size - READ_SIZE);
-
-        return await withFileLock(logPath, () => {
-          return new Promise<string>((resolve, reject) => {
-            const stream = fs.createReadStream(logPath, {
-              start,
-              encoding: "utf8",
-            });
-            const chunks: string[] = [];
-            stream.on("data", (chunk) => chunks.push(chunk.toString()));
-            stream.on("end", () => resolve(chunks.join("")));
-            stream.on("error", reject);
-          });
+    ipcMain.on("toggle-always-on-top", (_event, flag) => {
+      if (flag) {
+        setWindowAlwaysOnTop(true);
+        mainWindow?.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true,
         });
+      } else {
+        setWindowAlwaysOnTop(false);
+        mainWindow?.setVisibleOnAllWorkspaces(false);
       }
-      return "No log file found.";
-    } catch (error) {
-      log.error("Failed to read log file:", error);
-      return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  });
+    });
 
-  ipcMain.handle("open-external", async (_event, rawUrl: string) => {
-    try {
-      if (typeof rawUrl !== "string") {
-        return { success: false, error: "Invalid URL" };
-      }
-      const url = new URL(rawUrl);
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        return { success: false, error: "Unsupported URL protocol" };
-      }
-      await shell.openExternal(url.toString());
-      return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+    ipcMain.on(
+      "set-pin-mode",
+      (_event, payload: { enabled: boolean; targetApp?: string }) => {
+        logPinDebug("ipc set-pin-mode", payload);
+        const enabled = payload?.enabled === true;
+        const targetApp =
+          typeof payload?.targetApp === "string" ? payload.targetApp.trim() : "";
+        isPinMode = enabled;
+        pinTargetApp = enabled ? targetApp : "";
+        logPinDebug("ipc set-pin-mode resolved", {
+          isPinMode,
+          pinTargetApp,
+          platform: process.platform,
+        });
+        applyPinStateToWindow();
+      },
+    );
 
-  ipcMain.handle("list-running-apps", async () => {
-    try {
-      if (process.platform !== "darwin" && process.platform !== "win32") {
-        return { success: true, apps: [] as string[] };
+    ipcMain.on("set-pin-transparent", (_event, enabled: boolean) => {
+      if (!mainWindow) return;
+      isPinTransparent = enabled;
+      syncWindowShadow();
+    });
+
+    ipcMain.on("resize-window-by", (_event, deltaWidth) => {
+      if (!mainWindow) return;
+      const [w, h] = mainWindow.getSize();
+      const [x, y] = mainWindow.getPosition();
+      mainWindow.setBounds({
+        x: x - Math.round(deltaWidth),
+        y: y,
+        width: w + Math.round(deltaWidth),
+        height: h,
+      });
+    });
+
+    ipcMain.on(
+      "set-window-bounds",
+      (_event, bounds: Partial<Electron.Rectangle>) => {
+        if (!mainWindow) return;
+        const current = mainWindow.getBounds();
+        mainWindow.setBounds({
+          x: bounds.x ?? current.x,
+          y: bounds.y ?? current.y,
+          width: bounds.width ?? current.width,
+          height: bounds.height ?? current.height,
+        });
+      },
+    );
+
+    ipcMain.on("log-message", (_event, level: string, ...args: unknown[]) => {
+      if (typeof log[level as keyof typeof log] === "function") {
+        // @ts-expect-error dynamic log level access
+        log[level](...args);
+      } else {
+        log.info(...args);
       }
-      const apps = await getRunningAppNames();
-      return { success: true, apps };
-    } catch (error) {
-      return {
-        success: false,
-        apps: [] as string[],
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+    });
+
+    ipcMain.handle("get-log-content", async () => {
+      try {
+        const logPath = log.transports.file.getFile().path;
+        if (await lockedFs.pathExists(logPath)) {
+          // Read last 50KB or so to avoid reading huge files
+          const stats = await lockedFs.stat(logPath);
+          const size = stats.size;
+          const READ_SIZE = 50 * 1024; // 50KB
+          const start = Math.max(0, size - READ_SIZE);
+
+          return await withFileLock(logPath, () => {
+            return new Promise<string>((resolve, reject) => {
+              const stream = fs.createReadStream(logPath, {
+                start,
+                encoding: "utf8",
+              });
+              const chunks: string[] = [];
+              stream.on("data", (chunk) => chunks.push(chunk.toString()));
+              stream.on("end", () => resolve(chunks.join("")));
+              stream.on("error", reject);
+            });
+          });
+        }
+        return "No log file found.";
+      } catch (error) {
+        log.error("Failed to read log file:", error);
+        return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    });
+
+    ipcMain.handle("open-external", async (_event, rawUrl: string) => {
+      try {
+        if (typeof rawUrl !== "string") {
+          return { success: false, error: "Invalid URL" };
+        }
+        const url = new URL(rawUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          return { success: false, error: "Unsupported URL protocol" };
+        }
+        await shell.openExternal(url.toString());
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+
+    ipcMain.handle("list-running-apps", async () => {
+      try {
+        if (process.platform !== "darwin" && process.platform !== "win32") {
+          return { success: true, apps: [] as string[] };
+        }
+        const apps = await getRunningAppNames();
+        return { success: true, apps };
+      } catch (error) {
+        return {
+          success: false,
+          apps: [] as string[],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+  }
 }
 
 function toggleMainWindowVisibility() {
@@ -776,6 +812,20 @@ function toggleMainWindowVisibility() {
     mainWindow.setIgnoreMouseEvents(true, { forward: false });
     mainWindow.webContents.send("renderer-event", "app-visibility", false);
   }
+}
+
+function restoreMainWindowVisibility() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (isAppHidden) {
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+  }
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 function registerShortcut(
@@ -945,6 +995,10 @@ ipcMain.handle("get-server-port", async () => {
   return localServerPort;
 });
 
+ipcMain.handle("get-api-auth-token", async () => {
+  return getApiAuthToken();
+});
+
 ipcMain.handle("get-app-version", async () => {
   return app.getVersion();
 });
@@ -1054,7 +1108,9 @@ app.whenReady().then(async () => {
         applyPinStateToWindow();
         registerGlobalShortcuts();
       });
+      return;
     }
+    restoreMainWindowVisibility();
   });
 });
 

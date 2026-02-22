@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // electron/main.ts
 var import_electron2 = require("electron");
-var import_path7 = __toESM(require("path"), 1);
+var import_path8 = __toESM(require("path"), 1);
 var import_fs_extra7 = __toESM(require("fs-extra"), 1);
 var import_electron_log = __toESM(require("electron-log"), 1);
-var import_node_child_process = require("child_process");
+var import_node_child_process2 = require("child_process");
 var readline = __toESM(require("readline"), 1);
 
 // backend/fileLock.ts
@@ -96,13 +96,14 @@ var lockedFs = {
 
 // backend/server.ts
 var import_electron = require("electron");
-var import_path6 = __toESM(require("path"), 1);
-var import_express6 = __toESM(require("express"), 1);
+var import_path7 = __toESM(require("path"), 1);
+var import_express7 = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
 var import_body_parser = __toESM(require("body-parser"), 1);
 var import_fs_extra6 = __toESM(require("fs-extra"), 1);
 var import_https = __toESM(require("https"), 1);
 var import_http = __toESM(require("http"), 1);
+var import_node_crypto2 = require("crypto");
 var import_radash = require("radash");
 
 // backend/routes/settings.ts
@@ -655,6 +656,158 @@ var createTempRouter = (deps) => {
   return router;
 };
 
+// backend/routes/shell.ts
+var import_path6 = __toESM(require("path"), 1);
+var import_express6 = __toESM(require("express"), 1);
+var import_node_child_process = require("child_process");
+var import_node_crypto = require("crypto");
+var DEFAULT_TIMEOUT_MS = 15e3;
+var MAX_TIMEOUT_MS = 12e4;
+var MAX_OUTPUT_LENGTH = 1024 * 1024;
+var SHELL_AUTH_HEADER = "x-lookback-token";
+var sanitizeCommand = (value) => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("\0")) return null;
+  return trimmed;
+};
+var sanitizeArgs = (value) => {
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) return null;
+  const args = [];
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    if (item.includes("\0")) return null;
+    args.push(item);
+  }
+  return args;
+};
+var sanitizeCwd = (value) => {
+  if (value === void 0) return process.cwd();
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return process.cwd();
+  if (trimmed.includes("\0")) return null;
+  return import_path6.default.resolve(trimmed);
+};
+var sanitizeTimeoutMs = (value) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  if (value <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(MAX_TIMEOUT_MS, Math.floor(value));
+};
+var appendChunk = (current, chunk) => {
+  if (current.length >= MAX_OUTPUT_LENGTH) return current;
+  const remain = MAX_OUTPUT_LENGTH - current.length;
+  return current + chunk.toString("utf8", 0, remain);
+};
+var isAuthorized = (actual, expected) => {
+  if (!actual || !expected) return false;
+  const a = Buffer.from(actual, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return (0, import_node_crypto.timingSafeEqual)(a, b);
+};
+var runShellCommand = (command, args, cwd, timeoutMs) => new Promise((resolve, reject) => {
+  var _a, _b;
+  const child = (0, import_node_child_process.spawn)(command, args, {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    shell: false
+  });
+  let stdout = "";
+  let stderr = "";
+  let timedOut = false;
+  let settled = false;
+  const settle = (result) => {
+    if (settled) return;
+    settled = true;
+    resolve(result);
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (!settled) {
+        child.kill("SIGKILL");
+      }
+    }, 1e3);
+  }, timeoutMs);
+  (_a = child.stdout) == null ? void 0 : _a.on("data", (chunk) => {
+    stdout = appendChunk(stdout, chunk);
+  });
+  (_b = child.stderr) == null ? void 0 : _b.on("data", (chunk) => {
+    stderr = appendChunk(stderr, chunk);
+  });
+  child.once("error", (error) => {
+    clearTimeout(timer);
+    if (settled) return;
+    settled = true;
+    reject(error);
+  });
+  child.once("close", (code, signal) => {
+    clearTimeout(timer);
+    settle({ code, signal, stdout, stderr, timedOut });
+  });
+});
+var createShellRouter = (deps) => {
+  const router = import_express6.default.Router();
+  router.post("/api/shell", async (req, res) => {
+    const authHeader = req.get(SHELL_AUTH_HEADER) || "";
+    const expectedToken = deps.getApiAuthToken();
+    if (!isAuthorized(authHeader, expectedToken)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const body = req.body ?? {};
+    const command = sanitizeCommand(body.command);
+    const args = sanitizeArgs(body.args);
+    const cwd = sanitizeCwd(body.cwd);
+    const timeoutMs = sanitizeTimeoutMs(body.timeoutMs);
+    if (!command) {
+      res.status(400).json({ error: "Invalid command" });
+      return;
+    }
+    if (!args) {
+      res.status(400).json({ error: "Invalid args" });
+      return;
+    }
+    if (!cwd) {
+      res.status(400).json({ error: "Invalid cwd" });
+      return;
+    }
+    try {
+      const result = await runShellCommand(command, args, cwd, timeoutMs);
+      const success = result.code === 0 && !result.timedOut;
+      const error = result.timedOut ? "Command timed out" : success ? null : result.stderr.trim() || `Command exited with code ${result.code ?? "null"}`;
+      res.json({
+        success,
+        code: result.code,
+        signal: result.signal,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timedOut: result.timedOut,
+        error
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({
+        success: false,
+        code: null,
+        signal: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        error: message
+      });
+    }
+  });
+  return router;
+};
+
 // backend/imageAnalysis.ts
 var import_sharp2 = __toESM(require("sharp"), 1);
 function rgbToHsv(r, g, b) {
@@ -810,8 +963,9 @@ async function calculateTone(filePath) {
 var import_adm_zip = __toESM(require("adm-zip"), 1);
 var DEFAULT_SERVER_PORT = 30001;
 var MAX_SERVER_PORT = 65535;
-var CONFIG_FILE = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
-var DEFAULT_STORAGE_DIR = import_path6.default.join(import_electron.app.getPath("userData"), "lookback_storage");
+var CONFIG_FILE = import_path7.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
+var API_AUTH_TOKEN = (0, import_node_crypto2.randomBytes)(32).toString("hex");
+var DEFAULT_STORAGE_DIR = import_path7.default.join(import_electron.app.getPath("userData"), "lookback_storage");
 var loadStorageRoot = async () => {
   try {
     if (await lockedFs.pathExists(CONFIG_FILE)) {
@@ -824,12 +978,12 @@ var loadStorageRoot = async () => {
   }
   if (import_electron.app.isPackaged && process.platform !== "darwin") {
     try {
-      const exeDir = import_path6.default.dirname(import_electron.app.getPath("exe"));
-      const portableDataDir = import_path6.default.join(exeDir, "data");
+      const exeDir = import_path7.default.dirname(import_electron.app.getPath("exe"));
+      const portableDataDir = import_path7.default.join(exeDir, "data");
       if (await lockedFs.pathExists(portableDataDir)) {
         return portableDataDir;
       }
-      const testFile = import_path6.default.join(exeDir, ".write_test");
+      const testFile = import_path7.default.join(exeDir, ".write_test");
       const writable = await withFileLock(testFile, async () => {
         try {
           await import_fs_extra6.default.writeFile(testFile, "test");
@@ -848,19 +1002,19 @@ var loadStorageRoot = async () => {
   return DEFAULT_STORAGE_DIR;
 };
 var STORAGE_DIR = DEFAULT_STORAGE_DIR;
-var CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
-var SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+var CANVASES_DIR = import_path7.default.join(STORAGE_DIR, "canvases");
+var SETTINGS_FILE = import_path7.default.join(STORAGE_DIR, "settings.json");
 var settingsCache = null;
 var storageInitTask = null;
 var updateStoragePaths = (root) => {
   STORAGE_DIR = root;
-  CANVASES_DIR = import_path6.default.join(STORAGE_DIR, "canvases");
-  SETTINGS_FILE = import_path6.default.join(STORAGE_DIR, "settings.json");
+  CANVASES_DIR = import_path7.default.join(STORAGE_DIR, "canvases");
+  SETTINGS_FILE = import_path7.default.join(STORAGE_DIR, "settings.json");
 };
 var ensureStorageDirs = async (root) => {
   await Promise.all([
     lockedFs.ensureDir(root),
-    lockedFs.ensureDir(import_path6.default.join(root, "canvases"))
+    lockedFs.ensureDir(import_path7.default.join(root, "canvases"))
   ]);
 };
 var DEFAULT_COMMAND_FILES = [
@@ -868,27 +1022,28 @@ var DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
+  "openSelectedImageInFolder.jsx",
   "stitchExport.jsx"
 ];
 var ensureDefaultCommands = async () => {
-  const commandsDir = import_path6.default.join(STORAGE_DIR, "commands");
+  const commandsDir = import_path7.default.join(STORAGE_DIR, "commands");
   await lockedFs.ensureDir(commandsDir);
-  const sourceDir = import_path6.default.join(import_electron.app.getAppPath(), "src", "commands-pending");
+  const sourceDir = import_path7.default.join(import_electron.app.getAppPath(), "src", "commands-pending");
   await Promise.all(
     DEFAULT_COMMAND_FILES.map(async (fileName) => {
-      const destPath = import_path6.default.join(commandsDir, fileName);
-      if (await lockedFs.pathExists(destPath)) return;
-      const srcPath = import_path6.default.join(sourceDir, fileName);
+      const destPath = import_path7.default.join(commandsDir, fileName);
+      const srcPath = import_path7.default.join(sourceDir, fileName);
       try {
         const content = await lockedFs.readFile(srcPath, "utf-8");
         await lockedFs.writeFile(destPath, content);
       } catch (error) {
-        console.error("Failed to seed default command", fileName, error);
+        console.error("Failed to sync default command", fileName, error);
       }
     })
   );
 };
 var getStorageDir = () => STORAGE_DIR;
+var getApiAuthToken = () => API_AUTH_TOKEN;
 var setStorageRoot = async (root) => {
   const trimmed = root.trim();
   if (!trimmed) return;
@@ -952,18 +1107,18 @@ var ensureStorageInitialized = async () => {
 };
 var getCanvasAssetsDir = (canvasName) => {
   const safeName = canvasName.replace(/[/\\:*?"<>|]/g, "_") || "Default";
-  return import_path6.default.join(CANVASES_DIR, safeName, "assets");
+  return import_path7.default.join(CANVASES_DIR, safeName, "assets");
 };
 var cleanupCanvasAssets = async () => {
   const canvasesDir = CANVASES_DIR;
   if (!await lockedFs.pathExists(canvasesDir)) return;
   const dirs = await lockedFs.readdir(canvasesDir).catch(() => []);
   for (const dir of dirs) {
-    const canvasDir = import_path6.default.join(canvasesDir, dir);
+    const canvasDir = import_path7.default.join(canvasesDir, dir);
     const stat = await lockedFs.stat(canvasDir).catch(() => null);
     if (!stat || !stat.isDirectory()) continue;
-    const canvasJsonPath = import_path6.default.join(canvasDir, "canvas.json");
-    const assetsDir = import_path6.default.join(canvasDir, "assets");
+    const canvasJsonPath = import_path7.default.join(canvasDir, "canvas.json");
+    const assetsDir = import_path7.default.join(canvasDir, "assets");
     const hasCanvas = await lockedFs.pathExists(canvasJsonPath);
     if (!hasCanvas) continue;
     await withFileLocks([canvasJsonPath, assetsDir], async () => {
@@ -981,8 +1136,8 @@ var cleanupCanvasAssets = async () => {
         if ("type" in item && item.type === "image") {
           const imagePath = typeof item.imagePath === "string" ? item.imagePath : "";
           if (imagePath.startsWith("assets/")) {
-            const filename = import_path6.default.basename(imagePath);
-            const fullPath = import_path6.default.join(assetsDir, filename);
+            const filename = import_path7.default.basename(imagePath);
+            const fullPath = import_path7.default.join(assetsDir, filename);
             if (await import_fs_extra6.default.pathExists(fullPath)) {
               referenced.add(filename);
               return true;
@@ -1001,7 +1156,7 @@ var cleanupCanvasAssets = async () => {
         const files = await import_fs_extra6.default.readdir(assetsDir).catch(() => []);
         for (const file of files) {
           if (!referenced.has(file)) {
-            await import_fs_extra6.default.unlink(import_path6.default.join(assetsDir, file)).catch(() => void 0);
+            await import_fs_extra6.default.unlink(import_path7.default.join(assetsDir, file)).catch(() => void 0);
           }
         }
       }
@@ -1113,8 +1268,34 @@ var listenOnAvailablePort = (appServer, startPort) => new Promise((resolve, reje
 async function startServer() {
   await ensureStorageInitialized();
   await cleanupCanvasAssets();
-  const server = (0, import_express6.default)();
-  server.use((0, import_cors.default)());
+  const server = (0, import_express7.default)();
+  server.use(
+    (0, import_cors.default)({
+      origin: (origin, callback) => {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        try {
+          const parsed = new URL(origin);
+          if (parsed.protocol === "file:") {
+            callback(null, true);
+            return;
+          }
+          const isDevRenderer = (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") && parsed.port === "5173";
+          callback(null, isDevRenderer);
+        } catch {
+          if (origin === "null") {
+            callback(null, true);
+            return;
+          }
+          callback(null, false);
+        }
+      },
+      methods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "x-lookback-token"]
+    })
+  );
   server.use(import_body_parser.default.json({ limit: "25mb" }));
   const logErrorToFile = async (error, req) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -1126,7 +1307,7 @@ async function startServer() {
       method: req == null ? void 0 : req.method,
       url: req == null ? void 0 : req.originalUrl
     };
-    const logFile = import_path6.default.join(STORAGE_DIR, "server.log");
+    const logFile = import_path7.default.join(STORAGE_DIR, "server.log");
     await withFileLock(logFile, async () => {
       await import_fs_extra6.default.ensureFile(logFile);
       await import_fs_extra6.default.appendFile(logFile, `${JSON.stringify(payload)}
@@ -1157,14 +1338,19 @@ async function startServer() {
       getTone: calculateTone
     })
   );
+  server.use(
+    createShellRouter({
+      getApiAuthToken
+    })
+  );
   server.get("/api/canvas-export", async (req, res) => {
     try {
       const canvasNameRaw = req.query.canvasName || "Default";
       const safeName = canvasNameRaw.replace(/[/\\:*?"<>|]/g, "_") || "Default";
-      const canvasDir = import_path6.default.join(CANVASES_DIR, safeName);
-      const dataFile = import_path6.default.join(canvasDir, "canvas.json");
-      const viewportFile = import_path6.default.join(canvasDir, "canvas_viewport.json");
-      const assetsDir = import_path6.default.join(canvasDir, "assets");
+      const canvasDir = import_path7.default.join(CANVASES_DIR, safeName);
+      const dataFile = import_path7.default.join(canvasDir, "canvas.json");
+      const viewportFile = import_path7.default.join(canvasDir, "canvas_viewport.json");
+      const assetsDir = import_path7.default.join(canvasDir, "assets");
       const items = await withFileLock(dataFile, async () => {
         if (await import_fs_extra6.default.pathExists(dataFile)) return import_fs_extra6.default.readJson(dataFile);
         return [];
@@ -1178,7 +1364,7 @@ async function startServer() {
       for (const it of imageItems) {
         const p = typeof it.imagePath === "string" ? it.imagePath : "";
         if (p.startsWith("assets/")) {
-          const filename = import_path6.default.basename(p);
+          const filename = import_path7.default.basename(p);
           referencedFiles.add(filename);
         }
       }
@@ -1192,15 +1378,19 @@ async function startServer() {
       };
       zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"));
       for (const filename of referencedFiles) {
-        const filePath = import_path6.default.join(assetsDir, filename);
+        const filePath = import_path7.default.join(assetsDir, filename);
         const exists = await withFileLock(filePath, () => import_fs_extra6.default.pathExists(filePath));
         if (!exists) continue;
         const data = await import_fs_extra6.default.readFile(filePath);
-        zip.addFile(import_path6.default.posix.join("assets", filename), data);
+        zip.addFile(import_path7.default.posix.join("assets", filename), data);
       }
       const buf = zip.toBuffer();
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.lb"`);
+      const fullName = `${safeName}.lb`;
+      const isAscii = /^[\x20-\x7E]+$/.test(fullName);
+      const encodedName = encodeURIComponent(fullName).replace(/'/g, "%27");
+      const disposition = isAscii ? `attachment; filename="${fullName}"` : `attachment; filename="export.lb"; filename*=UTF-8''${encodedName}`;
+      res.setHeader("Content-Disposition", disposition);
       res.send(buf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1209,7 +1399,7 @@ async function startServer() {
   });
   server.post(
     "/api/canvas-import",
-    import_express6.default.raw({ type: "application/octet-stream", limit: "500mb" }),
+    import_express7.default.raw({ type: "application/octet-stream", limit: "500mb" }),
     async (req, res) => {
       try {
         const body = req.body;
@@ -1232,17 +1422,17 @@ async function startServer() {
           await lockedFs.ensureDir(canvasesDir);
           let candidate = name;
           let idx = 1;
-          while (await lockedFs.pathExists(import_path6.default.join(canvasesDir, candidate))) {
+          while (await lockedFs.pathExists(import_path7.default.join(canvasesDir, candidate))) {
             candidate = `${name}_${idx}`;
             idx += 1;
           }
           return candidate;
         };
         const finalName = await resolveUniqueCanvasName(baseName);
-        const canvasDir = import_path6.default.join(CANVASES_DIR, finalName);
-        const dataFile = import_path6.default.join(canvasDir, "canvas.json");
-        const viewportFile = import_path6.default.join(canvasDir, "canvas_viewport.json");
-        const assetsDir = import_path6.default.join(canvasDir, "assets");
+        const canvasDir = import_path7.default.join(CANVASES_DIR, finalName);
+        const dataFile = import_path7.default.join(canvasDir, "canvas.json");
+        const viewportFile = import_path7.default.join(canvasDir, "canvas_viewport.json");
+        const assetsDir = import_path7.default.join(canvasDir, "assets");
         await withFileLocks([canvasDir, assetsDir], async () => {
           await import_fs_extra6.default.ensureDir(canvasDir);
           await import_fs_extra6.default.ensureDir(assetsDir);
@@ -1251,14 +1441,14 @@ async function startServer() {
         for (const e of entries) {
           const name = e.entryName;
           if (name.startsWith("assets/") && !e.isDirectory) {
-            const filename = import_path6.default.basename(name);
-            const target = import_path6.default.join(assetsDir, filename);
+            const filename = import_path7.default.basename(name);
+            const target = import_path7.default.join(assetsDir, filename);
             await withFileLock(target, async () => {
               let candidate = target;
               let idx = 1;
-              const parsed = import_path6.default.parse(target);
+              const parsed = import_path7.default.parse(target);
               while (await import_fs_extra6.default.pathExists(candidate)) {
-                candidate = import_path6.default.join(parsed.dir, `${parsed.name}_${idx}${parsed.ext}`);
+                candidate = import_path7.default.join(parsed.dir, `${parsed.name}_${idx}${parsed.ext}`);
                 idx += 1;
               }
               await import_fs_extra6.default.writeFile(candidate, e.getData());
@@ -1286,7 +1476,7 @@ async function startServer() {
       res.status(400).send("Invalid filename");
       return;
     }
-    const filePath = import_path6.default.join(
+    const filePath = import_path7.default.join(
       CANVASES_DIR,
       safeCanvasDirName,
       "assets",
@@ -1410,13 +1600,14 @@ var en = {
   "titleBar.version.updateAvailable": "Update available: v{{version}}",
   "titleBar.window": "Window",
   "titleBar.pinTransparent": "Pin transparent",
-  "titleBar.canvasOpacity": "Canvas Opacity",
+  "titleBar.canvasOpacity": "Image Opacity",
   "titleBar.mouseThrough": "Paper Mode",
   "titleBar.shortcuts": "Shortcuts",
-  "titleBar.toggleWindowVisibility": "Toggle window visibility",
+  "titleBar.shortcuts.hint": "Try to use key combinations (e.g. Ctrl+K) to avoid conflicts with normal typing.",
+  "titleBar.toggleWindowVisibility": "Hide Window",
   "titleBar.commandPalette": "Command Palette",
-  "titleBar.canvasOpacityUp": "Increase Canvas Opacity",
-  "titleBar.canvasOpacityDown": "Decrease Canvas Opacity",
+  "titleBar.canvasOpacityUp": "Increase Image Opacity",
+  "titleBar.canvasOpacityDown": "Decrease Image Opacity",
   "titleBar.toggleMouseThrough": "Toggle Paper Mode",
   "titleBar.toggleGallery": "Toggle Gallery",
   "titleBar.canvasGroup": "Smart Layout (Canvas)",
@@ -1666,13 +1857,14 @@ var zh = {
   "titleBar.version.updateAvailable": "\u53EF\u66F4\u65B0\u81F3 v{{version}}",
   "titleBar.window": "\u7A97\u53E3",
   "titleBar.pinTransparent": "\u7F6E\u9876\u900F\u660E",
-  "titleBar.canvasOpacity": "\u753B\u5E03\u900F\u660E\u5EA6",
+  "titleBar.canvasOpacity": "\u56FE\u7247\u900F\u660E\u5EA6",
   "titleBar.mouseThrough": "\u9F20\u6807\u7A7F\u900F",
   "titleBar.shortcuts": "\u5FEB\u6377\u952E",
-  "titleBar.toggleWindowVisibility": "\u5207\u6362\u7A97\u53E3\u663E\u793A",
-  "titleBar.commandPalette": "Command Palette",
-  "titleBar.canvasOpacityUp": "\u589E\u52A0\u753B\u5E03\u900F\u660E\u5EA6",
-  "titleBar.canvasOpacityDown": "\u964D\u4F4E\u753B\u5E03\u4E0D\u900F\u660E\u5EA6",
+  "titleBar.shortcuts.hint": "\u5C3D\u91CF\u4E0D\u8981\u7ED1\u5B9A\u5355\u6309\u952E\uFF0C\u6613\u548C\u6B63\u5E38\u8F93\u5165\u51B2\u7A81",
+  "titleBar.toggleWindowVisibility": "\u9690\u85CF\u7A97\u53E3",
+  "titleBar.commandPalette": "\u547D\u4EE4\u9762\u677F",
+  "titleBar.canvasOpacityUp": "\u589E\u52A0\u56FE\u7247\u900F\u660E\u5EA6",
+  "titleBar.canvasOpacityDown": "\u964D\u4F4E\u56FE\u7247\u900F\u660E\u5EA6",
   "titleBar.toggleMouseThrough": "\u5207\u6362\u9F20\u6807\u7A7F\u900F",
   "titleBar.toggleGallery": "\u5207\u6362\u56FE\u5E93\u62BD\u5C49",
   "titleBar.canvasGroup": "\u753B\u5E03\u667A\u80FD\u5E03\u5C40",
@@ -1870,8 +2062,8 @@ import_electron_log.default.transports.file.level = "info";
 import_electron_log.default.transports.file.maxSize = 5 * 1024 * 1024;
 import_electron_log.default.transports.file.archiveLog = (file) => {
   const filePath = file.toString();
-  const info = import_path7.default.parse(filePath);
-  const dest = import_path7.default.join(info.dir, info.name + ".old" + info.ext);
+  const info = import_path8.default.parse(filePath);
+  const dest = import_path8.default.join(info.dir, info.name + ".old" + info.ext);
   lockedFs.rename(filePath, dest).catch((e) => {
     console.warn("Could not rotate log", e);
   });
@@ -1897,6 +2089,41 @@ var activeAppWatcherProcess = null;
 var isPinByAppActive = false;
 var localServerPort = DEFAULT_SERVER_PORT;
 var localServerStartTask = null;
+var isQuitting = false;
+var isWindowIpcBound = false;
+var hasPendingSecondInstanceRestore = false;
+var hasSingleInstanceLock = import_electron2.app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  import_electron2.app.quit();
+}
+import_electron2.app.on("second-instance", () => {
+  if (!hasSingleInstanceLock) return;
+  const restoreOrCreateWindow = () => {
+    if (!mainWindow) {
+      void createWindow().then(() => {
+        applyPinStateToWindow();
+        registerGlobalShortcuts();
+      });
+      return;
+    }
+    restoreMainWindowVisibility();
+  };
+  if (!import_electron2.app.isReady()) {
+    if (hasPendingSecondInstanceRestore) return;
+    hasPendingSecondInstanceRestore = true;
+    import_electron2.app.once("ready", () => {
+      hasPendingSecondInstanceRestore = false;
+      restoreOrCreateWindow();
+    });
+    return;
+  }
+  restoreOrCreateWindow();
+});
+function requestAppQuit() {
+  if (isQuitting) return;
+  isQuitting = true;
+  import_electron2.app.quit();
+}
 function normalizeAppIdentifier(name) {
   return name.trim().toLowerCase();
 }
@@ -1934,7 +2161,7 @@ function setWindowPinnedToTargetApp(active) {
 }
 function runAppleScript(script, timeoutMs = 1500) {
   return new Promise((resolve, reject) => {
-    (0, import_node_child_process.execFile)(
+    (0, import_node_child_process2.execFile)(
       "osascript",
       ["-e", script],
       { timeout: timeoutMs },
@@ -1950,7 +2177,7 @@ function runAppleScript(script, timeoutMs = 1500) {
 }
 function runPowerShell(script, timeoutMs = 8e3) {
   return new Promise((resolve, reject) => {
-    (0, import_node_child_process.execFile)(
+    (0, import_node_child_process2.execFile)(
       "powershell.exe",
       [
         "-NoProfile",
@@ -2051,7 +2278,7 @@ function startPinByAppWatcherWin32() {
     "  Start-Sleep -Milliseconds 80",
     "}"
   ].join("\n");
-  activeAppWatcherProcess = (0, import_node_child_process.spawn)("powershell.exe", [
+  activeAppWatcherProcess = (0, import_node_child_process2.spawn)("powershell.exe", [
     "-NoProfile",
     "-NonInteractive",
     "-ExecutionPolicy",
@@ -2104,7 +2331,7 @@ function startPinByAppWatcherDarwin() {
     "  delay 0.08",
     "end repeat"
   ].join("\n");
-  activeAppWatcherProcess = (0, import_node_child_process.spawn)("osascript", ["-e", script]);
+  activeAppWatcherProcess = (0, import_node_child_process2.spawn)("osascript", ["-e", script]);
   const rl = readline.createInterface({
     input: activeAppWatcherProcess.stderr,
     terminal: false
@@ -2237,7 +2464,7 @@ function loadMainWindow() {
     import_electron_log.default.info("Loading renderer from localhost");
     void mainWindow.loadURL("http://localhost:5173");
   } else {
-    const filePath = import_path7.default.join(__dirname, "../dist-renderer/index.html");
+    const filePath = import_path8.default.join(__dirname, "../dist-renderer/index.html");
     import_electron_log.default.info("Loading renderer from file:", filePath);
     void mainWindow.loadFile(filePath);
   }
@@ -2247,7 +2474,7 @@ async function saveWindowBounds() {
   if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
   try {
     const bounds = mainWindow.getBounds();
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
     const settings = await lockedFs.readJson(settingsPath).catch(() => ({}));
     await lockedFs.writeJson(settingsPath, {
       ...settings,
@@ -2264,7 +2491,7 @@ async function createWindow(options) {
   const { width, height } = import_electron2.screen.getPrimaryDisplay().workAreaSize;
   let windowState = {};
   try {
-    const settingsPath = import_path7.default.join(getStorageDir(), "settings.json");
+    const settingsPath = import_path8.default.join(getStorageDir(), "settings.json");
     if (await lockedFs.pathExists(settingsPath)) {
       const settingsRaw = await lockedFs.readJson(settingsPath);
       if (settingsRaw && typeof settingsRaw === "object") {
@@ -2282,11 +2509,11 @@ async function createWindow(options) {
     height: windowState.height || Math.floor(height * 0.8),
     x: windowState.x,
     y: windowState.y,
-    icon: import_path7.default.join(__dirname, "../resources/icon.png"),
+    icon: import_path8.default.join(__dirname, "../resources/icon.png"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: import_path7.default.join(__dirname, "preload.cjs")
+      preload: import_path8.default.join(__dirname, "preload.cjs")
     },
     frame: false,
     transparent: true,
@@ -2322,139 +2549,142 @@ async function createWindow(options) {
   if ((options == null ? void 0 : options.load) !== false) {
     loadMainWindow();
   }
-  import_electron2.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
-  import_electron2.ipcMain.on("window-max", () => {
-    if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow == null ? void 0 : mainWindow.maximize();
-    }
-  });
-  import_electron2.ipcMain.on("window-close", () => mainWindow == null ? void 0 : mainWindow.close());
-  import_electron2.ipcMain.on("window-focus", () => mainWindow == null ? void 0 : mainWindow.focus());
-  import_electron2.ipcMain.on("toggle-always-on-top", (_event, flag) => {
-    if (flag) {
-      setWindowAlwaysOnTop(true);
-      mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true
-      });
-    } else {
-      setWindowAlwaysOnTop(false);
-      mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(false);
-    }
-  });
-  import_electron2.ipcMain.on(
-    "set-pin-mode",
-    (_event, payload) => {
-      logPinDebug("ipc set-pin-mode", payload);
-      const enabled = (payload == null ? void 0 : payload.enabled) === true;
-      const targetApp = typeof (payload == null ? void 0 : payload.targetApp) === "string" ? payload.targetApp.trim() : "";
-      isPinMode = enabled;
-      pinTargetApp = enabled ? targetApp : "";
-      logPinDebug("ipc set-pin-mode resolved", {
-        isPinMode,
-        pinTargetApp,
-        platform: process.platform
-      });
-      applyPinStateToWindow();
-    }
-  );
-  import_electron2.ipcMain.on("set-pin-transparent", (_event, enabled) => {
-    if (!mainWindow) return;
-    isPinTransparent = enabled;
-    syncWindowShadow();
-  });
-  import_electron2.ipcMain.on("resize-window-by", (_event, deltaWidth) => {
-    if (!mainWindow) return;
-    const [w, h] = mainWindow.getSize();
-    const [x, y] = mainWindow.getPosition();
-    mainWindow.setBounds({
-      x: x - Math.round(deltaWidth),
-      y,
-      width: w + Math.round(deltaWidth),
-      height: h
+  if (!isWindowIpcBound) {
+    isWindowIpcBound = true;
+    import_electron2.ipcMain.on("window-min", () => mainWindow == null ? void 0 : mainWindow.minimize());
+    import_electron2.ipcMain.on("window-max", () => {
+      if (mainWindow == null ? void 0 : mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow == null ? void 0 : mainWindow.maximize();
+      }
     });
-  });
-  import_electron2.ipcMain.on(
-    "set-window-bounds",
-    (_event, bounds) => {
+    import_electron2.ipcMain.on("window-close", () => requestAppQuit());
+    import_electron2.ipcMain.on("window-focus", () => mainWindow == null ? void 0 : mainWindow.focus());
+    import_electron2.ipcMain.on("toggle-always-on-top", (_event, flag) => {
+      if (flag) {
+        setWindowAlwaysOnTop(true);
+        mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true
+        });
+      } else {
+        setWindowAlwaysOnTop(false);
+        mainWindow == null ? void 0 : mainWindow.setVisibleOnAllWorkspaces(false);
+      }
+    });
+    import_electron2.ipcMain.on(
+      "set-pin-mode",
+      (_event, payload) => {
+        logPinDebug("ipc set-pin-mode", payload);
+        const enabled = (payload == null ? void 0 : payload.enabled) === true;
+        const targetApp = typeof (payload == null ? void 0 : payload.targetApp) === "string" ? payload.targetApp.trim() : "";
+        isPinMode = enabled;
+        pinTargetApp = enabled ? targetApp : "";
+        logPinDebug("ipc set-pin-mode resolved", {
+          isPinMode,
+          pinTargetApp,
+          platform: process.platform
+        });
+        applyPinStateToWindow();
+      }
+    );
+    import_electron2.ipcMain.on("set-pin-transparent", (_event, enabled) => {
       if (!mainWindow) return;
-      const current = mainWindow.getBounds();
+      isPinTransparent = enabled;
+      syncWindowShadow();
+    });
+    import_electron2.ipcMain.on("resize-window-by", (_event, deltaWidth) => {
+      if (!mainWindow) return;
+      const [w, h] = mainWindow.getSize();
+      const [x, y] = mainWindow.getPosition();
       mainWindow.setBounds({
-        x: bounds.x ?? current.x,
-        y: bounds.y ?? current.y,
-        width: bounds.width ?? current.width,
-        height: bounds.height ?? current.height
+        x: x - Math.round(deltaWidth),
+        y,
+        width: w + Math.round(deltaWidth),
+        height: h
       });
-    }
-  );
-  import_electron2.ipcMain.on("log-message", (_event, level, ...args) => {
-    if (typeof import_electron_log.default[level] === "function") {
-      import_electron_log.default[level](...args);
-    } else {
-      import_electron_log.default.info(...args);
-    }
-  });
-  import_electron2.ipcMain.handle("get-log-content", async () => {
-    try {
-      const logPath = import_electron_log.default.transports.file.getFile().path;
-      if (await lockedFs.pathExists(logPath)) {
-        const stats = await lockedFs.stat(logPath);
-        const size = stats.size;
-        const READ_SIZE = 50 * 1024;
-        const start = Math.max(0, size - READ_SIZE);
-        return await withFileLock(logPath, () => {
-          return new Promise((resolve, reject) => {
-            const stream = import_fs_extra7.default.createReadStream(logPath, {
-              start,
-              encoding: "utf8"
-            });
-            const chunks = [];
-            stream.on("data", (chunk) => chunks.push(chunk.toString()));
-            stream.on("end", () => resolve(chunks.join("")));
-            stream.on("error", reject);
-          });
+    });
+    import_electron2.ipcMain.on(
+      "set-window-bounds",
+      (_event, bounds) => {
+        if (!mainWindow) return;
+        const current = mainWindow.getBounds();
+        mainWindow.setBounds({
+          x: bounds.x ?? current.x,
+          y: bounds.y ?? current.y,
+          width: bounds.width ?? current.width,
+          height: bounds.height ?? current.height
         });
       }
-      return "No log file found.";
-    } catch (error) {
-      import_electron_log.default.error("Failed to read log file:", error);
-      return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  });
-  import_electron2.ipcMain.handle("open-external", async (_event, rawUrl) => {
-    try {
-      if (typeof rawUrl !== "string") {
-        return { success: false, error: "Invalid URL" };
+    );
+    import_electron2.ipcMain.on("log-message", (_event, level, ...args) => {
+      if (typeof import_electron_log.default[level] === "function") {
+        import_electron_log.default[level](...args);
+      } else {
+        import_electron_log.default.info(...args);
       }
-      const url = new URL(rawUrl);
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        return { success: false, error: "Unsupported URL protocol" };
+    });
+    import_electron2.ipcMain.handle("get-log-content", async () => {
+      try {
+        const logPath = import_electron_log.default.transports.file.getFile().path;
+        if (await lockedFs.pathExists(logPath)) {
+          const stats = await lockedFs.stat(logPath);
+          const size = stats.size;
+          const READ_SIZE = 50 * 1024;
+          const start = Math.max(0, size - READ_SIZE);
+          return await withFileLock(logPath, () => {
+            return new Promise((resolve, reject) => {
+              const stream = import_fs_extra7.default.createReadStream(logPath, {
+                start,
+                encoding: "utf8"
+              });
+              const chunks = [];
+              stream.on("data", (chunk) => chunks.push(chunk.toString()));
+              stream.on("end", () => resolve(chunks.join("")));
+              stream.on("error", reject);
+            });
+          });
+        }
+        return "No log file found.";
+      } catch (error) {
+        import_electron_log.default.error("Failed to read log file:", error);
+        return `Failed to read log file: ${error instanceof Error ? error.message : String(error)}`;
       }
-      await import_electron2.shell.openExternal(url.toString());
-      return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  });
-  import_electron2.ipcMain.handle("list-running-apps", async () => {
-    try {
-      if (process.platform !== "darwin" && process.platform !== "win32") {
-        return { success: true, apps: [] };
+    });
+    import_electron2.ipcMain.handle("open-external", async (_event, rawUrl) => {
+      try {
+        if (typeof rawUrl !== "string") {
+          return { success: false, error: "Invalid URL" };
+        }
+        const url = new URL(rawUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          return { success: false, error: "Unsupported URL protocol" };
+        }
+        await import_electron2.shell.openExternal(url.toString());
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
       }
-      const apps = await getRunningAppNames();
-      return { success: true, apps };
-    } catch (error) {
-      return {
-        success: false,
-        apps: [],
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  });
+    });
+    import_electron2.ipcMain.handle("list-running-apps", async () => {
+      try {
+        if (process.platform !== "darwin" && process.platform !== "win32") {
+          return { success: true, apps: [] };
+        }
+        const apps = await getRunningAppNames();
+        return { success: true, apps };
+      } catch (error) {
+        return {
+          success: false,
+          apps: [],
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    });
+  }
 }
 function toggleMainWindowVisibility() {
   if (!mainWindow) return;
@@ -2477,6 +2707,19 @@ function toggleMainWindowVisibility() {
     mainWindow.setIgnoreMouseEvents(true, { forward: false });
     mainWindow.webContents.send("renderer-event", "app-visibility", false);
   }
+}
+function restoreMainWindowVisibility() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (isAppHidden) {
+    isAppHidden = false;
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindow.webContents.send("renderer-event", "app-visibility", true);
+  }
+  mainWindow.show();
+  mainWindow.focus();
 }
 function registerShortcut(accelerator, currentVar, updateVar, action, checkSettingsOpen = false) {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
@@ -2612,6 +2855,9 @@ import_electron2.ipcMain.handle("get-server-port", async () => {
   }
   return localServerPort;
 });
+import_electron2.ipcMain.handle("get-api-auth-token", async () => {
+  return getApiAuthToken();
+});
 import_electron2.ipcMain.handle("get-app-version", async () => {
   return import_electron2.app.getVersion();
 });
@@ -2648,7 +2894,7 @@ import_electron2.ipcMain.handle(
       const safeName = typeof defaultName === "string" && defaultName.trim() ? defaultName.trim() : fallbackName;
       const result = await import_electron2.dialog.showSaveDialog({
         title: t(locale, "dialog.saveImageTitle"),
-        defaultPath: import_path7.default.join(getStorageDir(), safeName),
+        defaultPath: import_path8.default.join(getStorageDir(), safeName),
         filters: [{ name: "PNG", extensions: ["png"] }]
       });
       if (result.canceled || !result.filePath) {
@@ -2700,7 +2946,9 @@ import_electron2.app.whenReady().then(async () => {
         applyPinStateToWindow();
         registerGlobalShortcuts();
       });
+      return;
     }
+    restoreMainWindowVisibility();
   });
 });
 import_electron2.ipcMain.handle(
@@ -2737,12 +2985,12 @@ import_electron2.ipcMain.handle("import-command", async () => {
   if (result.canceled || result.filePaths.length === 0) {
     return { success: false, canceled: true };
   }
-  const destDir = import_path7.default.join(getStorageDir(), "commands");
+  const destDir = import_path8.default.join(getStorageDir(), "commands");
   await import_fs_extra7.default.ensureDir(destDir);
   const results = [];
   for (const srcPath of result.filePaths) {
-    const fileName = import_path7.default.basename(srcPath);
-    const destPath = import_path7.default.join(destDir, fileName);
+    const fileName = import_path8.default.basename(srcPath);
+    const destPath = import_path8.default.join(destDir, fileName);
     try {
       await import_fs_extra7.default.copy(srcPath, destPath);
       results.push({ success: true, path: destPath });
@@ -2778,5 +3026,5 @@ import_electron2.app.on("will-quit", () => {
 import_electron2.app.on("window-all-closed", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
-  if (process.platform !== "darwin") import_electron2.app.quit();
+  requestAppQuit();
 });

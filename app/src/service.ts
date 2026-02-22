@@ -1,6 +1,41 @@
 import { API_BASE_URL } from "./config";
 import type { Locale } from "../shared/i18n/types";
 
+const buildApiBaseUrl = (port: number): string => `http://localhost:${port}`;
+const isValidPort = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65535;
+
+const getRuntimeApiBaseUrl = async (): Promise<string> => {
+  if (!window.electron?.getServerPort) return API_BASE_URL;
+  try {
+    const port = await window.electron.getServerPort();
+    if (isValidPort(port)) {
+      return buildApiBaseUrl(port);
+    }
+  } catch {
+    // Keep fallback when IPC is temporarily unavailable.
+  }
+  return API_BASE_URL;
+};
+
+const apiFetch = async (endpoint: string, init?: RequestInit): Promise<Response> => {
+  const baseUrl = await getRuntimeApiBaseUrl();
+  return fetch(`${baseUrl}${endpoint}`, init);
+};
+
+let apiAuthTokenCache: string | null = null;
+const getApiAuthToken = async (): Promise<string> => {
+  if (apiAuthTokenCache) return apiAuthTokenCache;
+  if (!window.electron?.getApiAuthToken) return "";
+  try {
+    const token = await window.electron.getApiAuthToken();
+    apiAuthTokenCache = typeof token === "string" ? token : "";
+    return apiAuthTokenCache;
+  } catch {
+    return "";
+  }
+};
+
 export interface settingStorageGetOptions<T> {
   key: string;
   fallback: T;
@@ -10,7 +45,7 @@ export type SettingsSnapshot = Record<string, unknown>;
 
 export const getSettingsSnapshot = async (): Promise<SettingsSnapshot> => {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings`);
+    const res = await apiFetch("/api/settings");
     if (!res.ok) return {};
     const data = (await res.json()) as unknown;
     if (data && typeof data === "object") {
@@ -36,9 +71,7 @@ export const readSetting = <T>(
 export const settingStorage = {
   async get<T>({ key, fallback }: settingStorageGetOptions<T>): Promise<T> {
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/settings/${encodeURIComponent(key)}`
-      );
+      const res = await apiFetch(`/api/settings/${encodeURIComponent(key)}`);
       if (!res.ok) return fallback;
       const data = (await res.json()) as unknown;
       if (!data || typeof data !== "object") return fallback;
@@ -52,7 +85,7 @@ export const settingStorage = {
 
   async set<T>(key: string, value: T): Promise<void> {
     try {
-      await fetch(`${API_BASE_URL}/api/settings/${encodeURIComponent(key)}`, {
+      await apiFetch(`/api/settings/${encodeURIComponent(key)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value }),
@@ -84,10 +117,10 @@ export interface CanvasViewport {
 }
 
 export async function loadCanvasImages<T = unknown[]>(canvasName?: string): Promise<T> {
-  const url = canvasName 
-    ? `${API_BASE_URL}/api/load-canvas?canvasName=${encodeURIComponent(canvasName)}` 
-    : `${API_BASE_URL}/api/load-canvas`;
-  const res = await fetch(url);
+  const endpoint = canvasName
+    ? `/api/load-canvas?canvasName=${encodeURIComponent(canvasName)}`
+    : "/api/load-canvas";
+  const res = await apiFetch(endpoint);
   if (!res.ok) {
     throw new Error(`Failed to load canvas: ${res.status}`);
   }
@@ -96,10 +129,10 @@ export async function loadCanvasImages<T = unknown[]>(canvasName?: string): Prom
 }
 
 export async function getCanvasViewport<T = unknown>(canvasName?: string): Promise<T | null> {
-  const url = canvasName 
-    ? `${API_BASE_URL}/api/canvas-viewport?canvasName=${encodeURIComponent(canvasName)}` 
-    : `${API_BASE_URL}/api/canvas-viewport`;
-  const res = await fetch(url);
+  const endpoint = canvasName
+    ? `/api/canvas-viewport?canvasName=${encodeURIComponent(canvasName)}`
+    : "/api/canvas-viewport";
+  const res = await apiFetch(endpoint);
   if (!res.ok) {
     return null;
   }
@@ -125,7 +158,7 @@ export interface CanvasMeta {
 }
 
 export async function listCanvases(): Promise<CanvasMeta[]> {
-  const res = await fetch(`${API_BASE_URL}/api/canvases`);
+  const res = await apiFetch("/api/canvases");
   if (!res.ok) throw new Error("Failed to list canvases");
   return res.json() as Promise<CanvasMeta[]>;
 }
@@ -187,7 +220,7 @@ export type ExternalCommandRecord = {
 
 export async function loadExternalCommands(): Promise<ExternalCommandRecord[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/commands`);
+    const res = await apiFetch("/api/commands");
     if (!res.ok) return [];
     const data = (await res.json()) as unknown;
     if (!Array.isArray(data)) return [];
@@ -202,8 +235,8 @@ export async function loadCommandScript(
   entry?: string
 ): Promise<string> {
   const params = entry ? `?entry=${encodeURIComponent(entry)}` : "";
-  const res = await fetch(
-    `${API_BASE_URL}/api/commands/${encodeURIComponent(folder)}/script${params}`,
+  const res = await apiFetch(
+    `/api/commands/${encodeURIComponent(folder)}/script${params}`,
     { cache: "no-store" },
   );
   if (!res.ok) {
@@ -231,8 +264,38 @@ export async function deleteExternalCommand(
   }
 }
 
+export type ShellRequest = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+};
+
+export type ShellResponse = {
+  success: boolean;
+  code: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  error: string | null;
+};
+
+export async function shellApi(payload: ShellRequest): Promise<ShellResponse> {
+  const token = await getApiAuthToken();
+  if (!token) {
+    throw new Error("API auth token unavailable");
+  }
+  return localApi<ShellResponse>("/api/shell", payload, {
+    headers: {
+      "x-lookback-token": token,
+    },
+  });
+}
+
 export type RequestOptions = {
   signal?: AbortSignal;
+  headers?: Record<string, string>;
 };
 
 export async function localApi<TResponse>(
@@ -243,7 +306,10 @@ export async function localApi<TResponse>(
   const method = options.method || (payload ? "POST" : "GET");
   const fetchOptions: RequestInit = {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
     signal: options.signal,
   };
 
@@ -251,7 +317,7 @@ export async function localApi<TResponse>(
     fetchOptions.body = JSON.stringify(payload);
   }
 
-  const res = await fetch(`${API_BASE_URL}${endpoint}`, fetchOptions);
+  const res = await apiFetch(endpoint, fetchOptions);
 
   if (!res.ok) {
     throw new Error(`Request failed with status ${res.status}`);

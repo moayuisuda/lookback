@@ -4,6 +4,7 @@ import type { globalActions } from '../store/globalStore';
 import type { commandActions } from '../store/commandStore';
 import type { useEnvState } from '../hooks/useEnvState';
 import type { useT } from '../i18n/useT';
+import type { ShellRequest, ShellResponse } from '../service';
 
 export type CommandContext = {
   React: typeof import('react');
@@ -19,6 +20,7 @@ export type CommandContext = {
   config: {
     API_BASE_URL: string;
   };
+  shell: (payload: ShellRequest) => Promise<ShellResponse>;
   components?: {
     ColorPicker?: React.FC<unknown>;
     CanvasButton?: React.FC<unknown>;

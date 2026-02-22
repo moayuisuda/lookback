@@ -6,12 +6,14 @@ import bodyParser from "body-parser";
 import fs from "fs-extra";
 import https from "https";
 import http from "http";
+import { randomBytes } from "node:crypto";
 import { debounce } from "radash";
 import { createSettingsRouter } from "./routes/settings";
 import { createCanvasRouter } from "./routes/canvas";
 import { createAnchorsRouter } from "./routes/anchors";
 import { createCommandsRouter } from "./routes/commands";
 import { createTempRouter } from "./routes/temp";
+import { createShellRouter } from "./routes/shell";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
 import { calculateTone, getDominantColor } from "./imageAnalysis";
 import AdmZip from "adm-zip";
@@ -27,6 +29,7 @@ export type SendToRenderer = (channel: RendererChannel, data: unknown) => void;
 export const DEFAULT_SERVER_PORT = 30001;
 const MAX_SERVER_PORT = 65535;
 const CONFIG_FILE = path.join(app.getPath("userData"), "lookback_config.json");
+const API_AUTH_TOKEN = randomBytes(32).toString("hex");
 
 const DEFAULT_STORAGE_DIR = path.join(app.getPath("userData"), "lookback_storage");
 
@@ -103,6 +106,7 @@ const DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
+  // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx",
 ];
 
@@ -126,6 +130,7 @@ const ensureDefaultCommands = async () => {
 };
 
 export const getStorageDir = (): string => STORAGE_DIR;
+export const getApiAuthToken = (): string => API_AUTH_TOKEN;
 
 export const setStorageRoot = async (root: string) => {
   const trimmed = root.trim();
@@ -393,7 +398,36 @@ export async function startServer(): Promise<number> {
   await ensureStorageInitialized();
   await cleanupCanvasAssets();
   const server = express();
-  server.use(cors());
+  server.use(
+    cors({
+      origin: (origin, callback) => {
+        // Electron renderer / non-browser requests typically have no Origin.
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        try {
+          const parsed = new URL(origin);
+          if (parsed.protocol === "file:") {
+            callback(null, true);
+            return;
+          }
+          const isDevRenderer =
+            (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+            parsed.port === "5173";
+          callback(null, isDevRenderer);
+        } catch {
+          if (origin === "null") {
+            callback(null, true);
+            return;
+          }
+          callback(null, false);
+        }
+      },
+      methods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "x-lookback-token"],
+    }),
+  );
   server.use(bodyParser.json({ limit: "25mb" }));
 
   const logErrorToFile = async (
@@ -439,6 +473,11 @@ export async function startServer(): Promise<number> {
       getDominantColor,
       getTone: calculateTone,
     })
+  );
+  server.use(
+    createShellRouter({
+      getApiAuthToken,
+    }),
   );
   server.get("/api/canvas-export", async (req, res) => {
     try {
@@ -490,7 +529,14 @@ export async function startServer(): Promise<number> {
 
       const buf = zip.toBuffer();
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.lb"`);
+      // RFC 5987: filename 只能用 ASCII，中文名通过 filename* 编码传递
+      const fullName = `${safeName}.lb`;
+      const isAscii = /^[\x20-\x7E]+$/.test(fullName);
+      const encodedName = encodeURIComponent(fullName).replace(/'/g, "%27");
+      const disposition = isAscii
+        ? `attachment; filename="${fullName}"`
+        : `attachment; filename="export.lb"; filename*=UTF-8''${encodedName}`;
+      res.setHeader("Content-Disposition", disposition);
       res.send(buf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
