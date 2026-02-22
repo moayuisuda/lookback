@@ -48,6 +48,28 @@ const pickSelectedImage = (items) => {
   return items.find((item) => item && item.type === "image" && item.isSelected);
 };
 
+const convertToPng = (blob) => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) {
+          resolve(pngBlob);
+        } else {
+          reject(new Error("Canvas toBlob failed"));
+        }
+      }, "image/png");
+    };
+    img.onerror = (e) => reject(new Error("Image load failed"));
+    img.src = URL.createObjectURL(blob);
+  });
+};
+
 export const ui = ({ context }) => {
   const { React, hooks, actions, config: appConfig } = context;
   const { useEffect, useRef } = React;
@@ -83,10 +105,31 @@ export const ui = ({ context }) => {
         if (!response.ok) {
             throw new Error(`Failed to fetch image: ${response.statusText}`);
         }
-        const blob = await response.blob();
-        
-        const item = new ClipboardItem({ [blob.type]: blob });
-        await navigator.clipboard.write([item]);
+        let blob = await response.blob();
+        let item;
+
+        // Try writing original format first (in case browser supports it, e.g. future JPEG/GIF support)
+        // If it fails, fallback to PNG conversion
+        try {
+          // ClipboardItem constructor throws if type is not supported
+          item = new ClipboardItem({ [blob.type]: blob });
+          await navigator.clipboard.write([item]);
+        } catch (err) {
+          // Fallback to PNG if original format is not supported
+          if (blob.type !== "image/png") {
+            try {
+               const pngBlob = await convertToPng(blob);
+               item = new ClipboardItem({ "image/png": pngBlob });
+               await navigator.clipboard.write([item]);
+            } catch (convertErr) {
+               // If conversion also fails, throw original error
+               console.error("PNG conversion failed", convertErr);
+               throw err;
+            }
+          } else {
+             throw err;
+          }
+        }
 
         actions.globalActions.pushToast(
           { key: "toast.command.copyImage.success" },
