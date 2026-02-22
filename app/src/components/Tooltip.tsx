@@ -10,6 +10,12 @@ export type TooltipProps = {
     delay?: number;
 };
 
+type TooltipTriggerProps = {
+    onMouseEnter?: (event: React.MouseEvent<HTMLElement>) => void;
+    onMouseLeave?: (event: React.MouseEvent<HTMLElement>) => void;
+    ref?: React.Ref<HTMLElement>;
+};
+
 export const Tooltip: React.FC<TooltipProps> = ({
     content,
     children,
@@ -48,17 +54,19 @@ export const Tooltip: React.FC<TooltipProps> = ({
         };
     }, []);
 
+    const trigger = children as React.ReactElement<TooltipTriggerProps>;
+
     return (
         <>
-            {React.cloneElement(children as React.ReactElement<any>, {
+            {React.cloneElement(trigger, {
                 ref: triggerRef,
                 onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
                     handleMouseEnter();
-                    (children as React.ReactElement<any>).props.onMouseEnter?.(e);
+                    trigger.props.onMouseEnter?.(e);
                 },
                 onMouseLeave: (e: React.MouseEvent<HTMLElement>) => {
                     handleMouseLeave();
-                    (children as React.ReactElement<any>).props.onMouseLeave?.(e);
+                    trigger.props.onMouseLeave?.(e);
                 },
             })}
             {visible &&

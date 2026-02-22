@@ -912,7 +912,7 @@ export const TitleBar: React.FC = () => {
             <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">
               <div className="flex items-center gap-1 text-[11px] text-neutral-400">
                 {t("titleBar.shortcuts")}
-                <Tooltip content={t("titleBar.shortcuts.hint" as any)} delay={150}>
+                <Tooltip content={t("titleBar.shortcuts.hint")} delay={150}>
                   <span className="flex items-center">
                     <Info size={12} className="text-neutral-500 hover:text-neutral-300 transition-colors" />
                   </span>
