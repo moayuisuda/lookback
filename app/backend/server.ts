@@ -101,12 +101,13 @@ const ensureStorageDirs = async (root: string) => {
   ]);
 };
 
+// 非必要，不要添加到默认加载
 const DEFAULT_COMMAND_FILES = [
   "addText.jsx",
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
-  "packageCanvasAssetsZip.jsx",
+  // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx",
 ];
