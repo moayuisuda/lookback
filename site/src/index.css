@@ -23,19 +23,19 @@ body,
   min-height: 100%;
 }
 
-html,
-body {
+html {
   background-color: var(--bg-main);
   overscroll-behavior-y: none;
-}
-
-body {
-  font-family: "Manrope", "PingFang SC", "Microsoft Yahei", sans-serif;
-  color: var(--text-main);
   background:
     radial-gradient(circle at 18% 4%, rgba(57, 197, 187, 0.2), transparent 40%),
     radial-gradient(circle at 92% 0%, rgba(44, 119, 255, 0.2), transparent 34%),
     linear-gradient(180deg, #071123 0%, #04070f 36%);
+}
+
+body {
+  overscroll-behavior-y: none;
+  font-family: "Manrope", "PingFang SC", "Microsoft Yahei", sans-serif;
+  color: var(--text-main);
 }
 
 .page-shell {

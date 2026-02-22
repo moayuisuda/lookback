@@ -108,6 +108,7 @@ const DEFAULT_COMMAND_FILES = [
   "imageGene.jsx",
   "imageSearch.jsx",
   // "multiSearch.jsx",
+  // "copySelectedImageToClipboard.jsx",
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx",

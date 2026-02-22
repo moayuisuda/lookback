@@ -1022,7 +1022,11 @@ var DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
+<<<<<<< HEAD
   // "multiSearch.jsx",
+=======
+  "copySelectedImageToClipboard.jsx",
+>>>>>>> 4baa94e656124cc816364e43a29bf581096abf9a
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx"
