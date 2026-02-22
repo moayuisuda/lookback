@@ -1596,7 +1596,7 @@ export const Canvas: React.FC = () => {
             style={contextMenuPosition}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <div className="max-h-[280px] overflow-y-auto p-2">
+            <div className="max-h-[280px] overflow-y-auto p-2 dark-scrollbar">
               {commands.length === 0 && (
                 <div className="px-2 py-4 text-xs text-neutral-500">
                   {t("commandPalette.empty")}
