@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap");
 
 :root {
   --color-primary: #39c5bb;
@@ -30,7 +30,7 @@ body {
 }
 
 body {
-  font-family: 'Manrope', 'PingFang SC', 'Microsoft Yahei', sans-serif;
+  font-family: "Manrope", "PingFang SC", "Microsoft Yahei", sans-serif;
   color: var(--text-main);
   background:
     radial-gradient(circle at 18% 4%, rgba(57, 197, 187, 0.2), transparent 40%),
@@ -46,7 +46,7 @@ body {
 }
 
 .page-shell::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   z-index: -2;
@@ -96,6 +96,14 @@ body {
   gap: 10px;
 }
 
+.brand-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .brand-icon {
   width: 18px;
   height: 18px;
@@ -105,7 +113,7 @@ body {
 }
 
 .brand-name {
-  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
@@ -113,7 +121,25 @@ body {
 .topbar-actions {
   display: inline-flex;
   align-items: center;
-  gap: 0;
+  gap: 10px;
+}
+
+.topbar-nav-btn {
+  border: 1px solid rgba(57, 197, 187, 0.32);
+  border-radius: 10px;
+  background: rgba(57, 197, 187, 0.08);
+  color: #cbe8ff;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.22s ease;
+}
+
+.topbar-nav-btn.active {
+  color: #032725;
+  border-color: rgba(57, 197, 187, 0.65);
+  background: linear-gradient(135deg, #7bf0e7 0%, #39c5bb 100%);
 }
 
 .locale-box {
@@ -174,7 +200,7 @@ body {
 
 .hero h1 {
   margin: 18px 0 10px;
-  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
   font-size: clamp(34px, 5vw, 60px);
   line-height: 1.02;
   letter-spacing: -0.015em;
@@ -319,7 +345,7 @@ body {
 
 .feature-sidebar h2 {
   margin: 8px 0 0;
-  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
   font-size: clamp(28px, 2.9vw, 40px);
   line-height: 1.1;
 }
@@ -383,7 +409,10 @@ body {
   page-break-inside: avoid;
   cursor: pointer;
   animation: fade-up 0.58s ease both;
-  transition: border-color 0.22s ease, transform 0.22s ease, background-color 0.22s ease;
+  transition:
+    border-color 0.22s ease,
+    transform 0.22s ease,
+    background-color 0.22s ease;
 }
 
 .feature-card:focus {
@@ -416,7 +445,7 @@ body {
 
 .feature-card-top h3 {
   margin: 0;
-  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
   font-size: clamp(21px, 2.1vw, 30px);
   line-height: 1.18;
   letter-spacing: -0.01em;
@@ -521,7 +550,7 @@ body {
 
 .download-guide-head h2 {
   margin: 0;
-  font-family: 'Space Grotesk', 'Manrope', sans-serif;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
   font-size: clamp(28px, 3.2vw, 40px);
   line-height: 1.1;
   letter-spacing: -0.012em;
@@ -550,7 +579,9 @@ body {
   font-size: 14px;
   font-weight: 700;
   background: rgba(57, 197, 187, 0.08);
-  transition: border-color 0.2s ease, color 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
 }
 
 .download-guide-release:hover {
@@ -659,6 +690,151 @@ body {
   font-size: 13px;
 }
 
+.command-market {
+  margin-top: 40px;
+  border-radius: 18px;
+  border: 1px solid var(--line-soft);
+  background:
+    linear-gradient(150deg, rgba(44, 119, 255, 0.11), rgba(57, 197, 187, 0.08)),
+    rgba(8, 14, 24, 0.9);
+  padding: 24px;
+}
+
+.command-market-page {
+  margin-top: 10px;
+}
+
+.command-market-head {
+  display: grid;
+  gap: 8px;
+}
+
+.command-market-badge {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+.command-market-head h2 {
+  margin: 0;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+}
+
+.command-market-head > p {
+  margin: 0;
+  color: var(--text-sub);
+  line-height: 1.7;
+}
+
+.command-market-status {
+  margin: 14px 0 0;
+  color: #cde0f7;
+  font-size: 14px;
+}
+
+.command-market-status.error {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 123, 123, 0.4);
+  background: rgba(122, 32, 32, 0.24);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.command-market-status.error p {
+  margin: 0;
+}
+
+.command-market-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.command-card {
+  border: 1px solid rgba(126, 152, 184, 0.28);
+  border-radius: 14px;
+  background: rgba(11, 18, 30, 0.92);
+  padding: 14px;
+  display: grid;
+}
+
+.command-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.command-card h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+  color: #eaf4ff;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+}
+
+.command-desc {
+  margin: 0;
+  color: var(--text-sub);
+  line-height: 1.65;
+  font-size: 14px;
+}
+
+.command-download-btn {
+  border: 1px solid rgba(57, 197, 187, 0.38);
+  border-radius: 10px;
+  padding: 7px 11px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #c8ecff;
+  background: rgba(57, 197, 187, 0.1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.command-download-btn:hover {
+  border-color: rgba(57, 197, 187, 0.62);
+  color: #e8f6ff;
+}
+
+.command-link-btn {
+  border: 1px solid rgba(57, 197, 187, 0.34);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: #bde8ff;
+  text-decoration: none;
+  background: rgba(57, 197, 187, 0.08);
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.command-link-btn:hover {
+  border-color: rgba(57, 197, 187, 0.58);
+  color: #e8f6ff;
+}
+
+.command-download-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .footer {
   max-width: 1220px;
   margin: 44px auto 10px;
@@ -699,7 +875,9 @@ body {
   display: inline-flex;
   margin-top: 10px;
   width: fit-content;
-  transition: transform 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    filter 0.2s ease;
 }
 
 .sponsor-link:hover {
@@ -787,11 +965,19 @@ body {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .command-market-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 700px) {
   .topbar {
     padding: 10px;
+  }
+
+  .topbar-actions {
+    gap: 8px;
   }
 
   .hero-actions {

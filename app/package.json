@@ -18,6 +18,12 @@
     "mac": {
       "icon": "resources/icon.icns"
     },
+    "protocols": [
+      {
+        "name": "LookBack Links",
+        "schemes": ["lookback"]
+      }
+    ],
     "files": [
       "dist-electron",
       "dist-renderer",

@@ -80,23 +80,38 @@ let localServerStartTask: Promise<number> | null = null;
 let isQuitting = false;
 let isWindowIpcBound = false;
 let hasPendingSecondInstanceRestore = false;
+const LOOKBACK_PROTOCOL_SCHEME = "lookback";
+const LOOKBACK_IMPORT_HOST = "import-command";
+const LOOKBACK_IMPORT_QUERY_KEY = "url";
+const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
+const DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15000;
+const pendingDeepLinkUrls: string[] = [];
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 }
 
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   if (!hasSingleInstanceLock) return;
+  const deepLinkUrls = argv.filter((arg) =>
+    typeof arg === "string" &&
+    arg.toLowerCase().startsWith(`${LOOKBACK_PROTOCOL_SCHEME}://`),
+  );
+  if (deepLinkUrls.length > 0) {
+    pendingDeepLinkUrls.push(...deepLinkUrls);
+  }
   const restoreOrCreateWindow = () => {
     if (!mainWindow) {
       void createWindow().then(() => {
         applyPinStateToWindow();
         registerGlobalShortcuts();
+        void flushPendingDeepLinks();
       });
       return;
     }
     restoreMainWindowVisibility();
+    void flushPendingDeepLinks();
   };
   if (!app.isReady()) {
     if (hasPendingSecondInstanceRestore) return;
@@ -110,11 +125,127 @@ app.on("second-instance", () => {
   restoreOrCreateWindow();
 });
 
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (typeof url !== "string") return;
+  pendingDeepLinkUrls.push(url);
+  if (app.isReady()) {
+    void flushPendingDeepLinks();
+  }
+});
+
+pendingDeepLinkUrls.push(
+  ...process.argv.filter((arg) =>
+    typeof arg === "string" &&
+    arg.toLowerCase().startsWith(`${LOOKBACK_PROTOCOL_SCHEME}://`),
+  ),
+);
+
 function requestAppQuit() {
   // 统一退出入口，避免重复触发 app.quit 导致生命周期逻辑重复执行。
   if (isQuitting) return;
   isQuitting = true;
   app.quit();
+}
+
+function registerLookBackProtocol() {
+  // 开发态避免把协议错误绑定到裸 Electron，可执行导向会触发 Electron 欢迎页。
+  // 协议注册交给打包应用处理（build.protocols + 运行时 setAsDefaultProtocolClient）。
+  if (!app.isPackaged) return;
+  app.setAsDefaultProtocolClient(LOOKBACK_PROTOCOL_SCHEME);
+}
+
+function toCommandFileName(targetUrl: URL) {
+  const baseName = path.basename(targetUrl.pathname || "");
+  const decodedBaseName = decodeURIComponent(baseName || "").trim();
+  const fallback = `command_${Date.now()}.jsx`;
+  const rawName = decodedBaseName || fallback;
+  const sanitized = rawName.replace(/[<>:"/\\|?*]/g, "_");
+  const ext = path.extname(sanitized).toLowerCase();
+  if (!SUPPORTED_COMMAND_EXTENSIONS.has(ext)) {
+    throw new Error("Unsupported command file extension");
+  }
+  return sanitized;
+}
+
+async function importCommandFromRemoteUrl(remoteUrl: string) {
+  const parsed = new URL(remoteUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Unsupported URL protocol");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, DEEP_LINK_DOWNLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(parsed.toString(), { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const content = await response.text();
+    if (!content.includes("export const config")) {
+      throw new Error("Invalid command script");
+    }
+
+    await ensureStorageInitialized();
+    const fileName = toCommandFileName(parsed);
+    const commandsDir = path.join(getStorageDir(), "commands");
+    await lockedFs.ensureDir(commandsDir);
+    const destPath = path.join(commandsDir, fileName);
+    await lockedFs.writeFile(destPath, content, "utf-8");
+    return destPath;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function emitImportToastSuccess() {
+  mainWindow?.webContents.send("toast", {
+    key: "toast.importSuccess",
+    type: "success",
+  });
+}
+
+function emitImportToastFailed(errorMessage: string) {
+  mainWindow?.webContents.send("toast", {
+    key: "toast.importFailed",
+    type: "error",
+    params: { error: errorMessage },
+  });
+}
+
+function resolveDeepLinkImportUrl(rawUrl: string) {
+  const deepLink = new URL(rawUrl);
+  if (deepLink.protocol !== `${LOOKBACK_PROTOCOL_SCHEME}:`) return "";
+  if (deepLink.hostname !== LOOKBACK_IMPORT_HOST) return "";
+  return deepLink.searchParams.get(LOOKBACK_IMPORT_QUERY_KEY)?.trim() || "";
+}
+
+async function handleDeepLink(rawUrl: string) {
+  const importUrl = resolveDeepLinkImportUrl(rawUrl);
+  if (!importUrl) return;
+  try {
+    await importCommandFromRemoteUrl(importUrl);
+    restoreMainWindowVisibility();
+    emitImportToastSuccess();
+    mainWindow?.webContents.send("renderer-event", "command-imported");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    restoreMainWindowVisibility();
+    emitImportToastFailed(message);
+  }
+}
+
+async function flushPendingDeepLinks() {
+  if (!app.isReady()) return;
+  if (pendingDeepLinkUrls.length === 0) return;
+  const queue = [...pendingDeepLinkUrls];
+  pendingDeepLinkUrls.length = 0;
+  for (const rawUrl of queue) {
+    await handleDeepLink(rawUrl);
+  }
 }
 
 function normalizeAppIdentifier(name: string): string {
@@ -1069,6 +1200,7 @@ app.whenReady().then(async () => {
   log.info("Log file location:", log.transports.file.getFile().path);
   log.info("App path:", app.getAppPath());
   log.info("User data:", app.getPath("userData"));
+  registerLookBackProtocol();
 
   const taskInitStorage = ensureStorageInitialized();
   const taskCreateWindow = createWindow();
@@ -1087,6 +1219,7 @@ app.whenReady().then(async () => {
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
 
   applyPinStateToWindow();
+  await flushPendingDeepLinks();
 
   registerGlobalShortcuts();
 

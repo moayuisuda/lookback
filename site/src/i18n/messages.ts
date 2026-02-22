@@ -3,6 +3,7 @@ export const zh = {
   'nav.language': '语言',
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
+  'nav.market': '社区命令',
 
   'hero.badge': '素材整理画布',
   'hero.title': '在一个画布中整理、参考视觉素材',
@@ -64,6 +65,16 @@ export const zh = {
   'download.faq.win.step.1': '如果提示风险，点击「更多信息」。',
   'download.faq.win.step.2': '接着点击「仍要打开」。',
 
+  'commandMarket.badge': '命令市场',
+  'commandMarket.title': '下载社区命令',
+  'commandMarket.desc': '自动拉取仓库 commands 目录的全量命令，点击即可下载到本地导入。',
+  'commandMarket.loading': '正在获取命令列表...',
+  'commandMarket.error': '命令列表加载失败：{{error}}',
+  'commandMarket.retry': '重试',
+  'commandMarket.empty': '当前没有可下载命令。',
+  'commandMarket.download': '导入',
+  'commandMarket.downloading': '导入中...',
+
   'footer.line': 'LookBack · 素材整理画布',
   'footer.contact': '联系邮箱：ahhcr68@gmail.com',
   'footer.sponsor': '赞助 LookBack',
@@ -75,6 +86,7 @@ export const en = {
   'nav.language': 'Language',
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
+  'nav.market': 'Community Commands',
 
   'hero.badge': 'Assets Organization Canvas',
   'hero.title': 'Organize visual assets in one canvas',
@@ -140,6 +152,17 @@ export const en = {
   'download.faq.win.title': 'win: Security warning',
   'download.faq.win.step.1': 'If a risk warning appears, click "More info".',
   'download.faq.win.step.2': 'Then click "Run anyway".',
+
+  'commandMarket.badge': 'Command Market',
+  'commandMarket.title': 'Download Community Commands',
+  'commandMarket.desc':
+    'Automatically fetch every command under the repository commands folder and download any item with one click.',
+  'commandMarket.loading': 'Loading command list...',
+  'commandMarket.error': 'Failed to load command list: {{error}}',
+  'commandMarket.retry': 'Retry',
+  'commandMarket.empty': 'No commands available right now.',
+  'commandMarket.download': 'Import',
+  'commandMarket.downloading': 'Importing...',
 
   'footer.line': 'LookBack · Assets Organization Canvas',
   'footer.contact': 'Contact: ahhcr68@gmail.com',

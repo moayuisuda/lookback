@@ -1022,7 +1022,8 @@ var DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
-  "openSelectedImageInFolder.jsx",
+  "packageCanvasAssetsZip.jsx",
+  // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx"
 ];
 var ensureDefaultCommands = async () => {
@@ -2092,21 +2093,35 @@ var localServerStartTask = null;
 var isQuitting = false;
 var isWindowIpcBound = false;
 var hasPendingSecondInstanceRestore = false;
+var LOOKBACK_PROTOCOL_SCHEME = "lookback";
+var LOOKBACK_IMPORT_HOST = "import-command";
+var LOOKBACK_IMPORT_QUERY_KEY = "url";
+var SUPPORTED_COMMAND_EXTENSIONS = /* @__PURE__ */ new Set([".js", ".jsx", ".ts", ".tsx"]);
+var DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15e3;
+var pendingDeepLinkUrls = [];
 var hasSingleInstanceLock = import_electron2.app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   import_electron2.app.quit();
 }
-import_electron2.app.on("second-instance", () => {
+import_electron2.app.on("second-instance", (_event, argv) => {
   if (!hasSingleInstanceLock) return;
+  const deepLinkUrls = argv.filter(
+    (arg) => typeof arg === "string" && arg.toLowerCase().startsWith(`${LOOKBACK_PROTOCOL_SCHEME}://`)
+  );
+  if (deepLinkUrls.length > 0) {
+    pendingDeepLinkUrls.push(...deepLinkUrls);
+  }
   const restoreOrCreateWindow = () => {
     if (!mainWindow) {
       void createWindow().then(() => {
         applyPinStateToWindow();
         registerGlobalShortcuts();
+        void flushPendingDeepLinks();
       });
       return;
     }
     restoreMainWindowVisibility();
+    void flushPendingDeepLinks();
   };
   if (!import_electron2.app.isReady()) {
     if (hasPendingSecondInstanceRestore) return;
@@ -2119,10 +2134,111 @@ import_electron2.app.on("second-instance", () => {
   }
   restoreOrCreateWindow();
 });
+import_electron2.app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (typeof url !== "string") return;
+  pendingDeepLinkUrls.push(url);
+  if (import_electron2.app.isReady()) {
+    void flushPendingDeepLinks();
+  }
+});
+pendingDeepLinkUrls.push(
+  ...process.argv.filter(
+    (arg) => typeof arg === "string" && arg.toLowerCase().startsWith(`${LOOKBACK_PROTOCOL_SCHEME}://`)
+  )
+);
 function requestAppQuit() {
   if (isQuitting) return;
   isQuitting = true;
   import_electron2.app.quit();
+}
+function registerLookBackProtocol() {
+  if (!import_electron2.app.isPackaged) return;
+  import_electron2.app.setAsDefaultProtocolClient(LOOKBACK_PROTOCOL_SCHEME);
+}
+function toCommandFileName(targetUrl) {
+  const baseName = import_path8.default.basename(targetUrl.pathname || "");
+  const decodedBaseName = decodeURIComponent(baseName || "").trim();
+  const fallback = `command_${Date.now()}.jsx`;
+  const rawName = decodedBaseName || fallback;
+  const sanitized = rawName.replace(/[<>:"/\\|?*]/g, "_");
+  const ext = import_path8.default.extname(sanitized).toLowerCase();
+  if (!SUPPORTED_COMMAND_EXTENSIONS.has(ext)) {
+    throw new Error("Unsupported command file extension");
+  }
+  return sanitized;
+}
+async function importCommandFromRemoteUrl(remoteUrl) {
+  const parsed = new URL(remoteUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Unsupported URL protocol");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, DEEP_LINK_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(parsed.toString(), { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const content = await response.text();
+    if (!content.includes("export const config")) {
+      throw new Error("Invalid command script");
+    }
+    await ensureStorageInitialized();
+    const fileName = toCommandFileName(parsed);
+    const commandsDir = import_path8.default.join(getStorageDir(), "commands");
+    await lockedFs.ensureDir(commandsDir);
+    const destPath = import_path8.default.join(commandsDir, fileName);
+    await lockedFs.writeFile(destPath, content, "utf-8");
+    return destPath;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function emitImportToastSuccess() {
+  mainWindow == null ? void 0 : mainWindow.webContents.send("toast", {
+    key: "toast.importSuccess",
+    type: "success"
+  });
+}
+function emitImportToastFailed(errorMessage) {
+  mainWindow == null ? void 0 : mainWindow.webContents.send("toast", {
+    key: "toast.importFailed",
+    type: "error",
+    params: { error: errorMessage }
+  });
+}
+function resolveDeepLinkImportUrl(rawUrl) {
+  var _a;
+  const deepLink = new URL(rawUrl);
+  if (deepLink.protocol !== `${LOOKBACK_PROTOCOL_SCHEME}:`) return "";
+  if (deepLink.hostname !== LOOKBACK_IMPORT_HOST) return "";
+  return ((_a = deepLink.searchParams.get(LOOKBACK_IMPORT_QUERY_KEY)) == null ? void 0 : _a.trim()) || "";
+}
+async function handleDeepLink(rawUrl) {
+  const importUrl = resolveDeepLinkImportUrl(rawUrl);
+  if (!importUrl) return;
+  try {
+    await importCommandFromRemoteUrl(importUrl);
+    restoreMainWindowVisibility();
+    emitImportToastSuccess();
+    mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "command-imported");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    restoreMainWindowVisibility();
+    emitImportToastFailed(message);
+  }
+}
+async function flushPendingDeepLinks() {
+  if (!import_electron2.app.isReady()) return;
+  if (pendingDeepLinkUrls.length === 0) return;
+  const queue = [...pendingDeepLinkUrls];
+  pendingDeepLinkUrls.length = 0;
+  for (const rawUrl of queue) {
+    await handleDeepLink(rawUrl);
+  }
 }
 function normalizeAppIdentifier(name) {
   return name.trim().toLowerCase();
@@ -2917,6 +3033,7 @@ import_electron2.app.whenReady().then(async () => {
   import_electron_log.default.info("Log file location:", import_electron_log.default.transports.file.getFile().path);
   import_electron_log.default.info("App path:", import_electron2.app.getAppPath());
   import_electron_log.default.info("User data:", import_electron2.app.getPath("userData"));
+  registerLookBackProtocol();
   const taskInitStorage = ensureStorageInitialized();
   const taskCreateWindow = createWindow();
   const taskStartServer = startServer2();
@@ -2930,6 +3047,7 @@ import_electron2.app.whenReady().then(async () => {
   const taskLoadShortcuts = loadShortcuts();
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
   applyPinStateToWindow();
+  await flushPendingDeepLinks();
   registerGlobalShortcuts();
   if (mainWindow) {
     try {

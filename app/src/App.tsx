@@ -8,6 +8,7 @@ import {
 } from "./store/globalStore";
 import { canvasActions, canvasState } from "./store/canvasStore";
 import { anchorActions } from "./store/anchorStore";
+import { commandActions } from "./store/commandStore";
 import { useSnapshot } from "valtio";
 import { clsx } from "clsx";
 
@@ -94,6 +95,10 @@ function App() {
         if (event === "app-visibility") {
           const visible = args[0] as boolean;
           globalActions.setAppHidden(!visible);
+          return;
+        }
+        if (event === "command-imported") {
+          void commandActions.loadExternalCommands();
         }
       }
     );

@@ -92,7 +92,11 @@ export const CommandPalette: React.FC = () => {
 
   useEffect(() => {
     if (!snap.isOpen) return;
-    void commandActions.loadExternalCommands();
+    // 已有 activeCommandId 说明是从 contextmenu 直接触发 UI 命令，
+    // 命令列表已加载过，跳过重新加载以避免模块实例被替换导致 ui 组件重挂载
+    if (!snap.activeCommandId) {
+      void commandActions.loadExternalCommands();
+    }
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -223,11 +227,6 @@ export const CommandPalette: React.FC = () => {
       if (results.length === 0) return;
       const next = (snap.selectedIndex - 1 + results.length) % results.length;
       commandActions.setSelectedIndex(next);
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      void handleConfirmSelection();
       return;
     }
   };
