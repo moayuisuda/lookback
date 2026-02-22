@@ -3,6 +3,7 @@ export const zh = {
   'nav.language': '语言',
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
+  'nav.download': '下载页',
   'nav.market': '社区命令',
 
   'hero.badge': '素材整理画布',
@@ -67,7 +68,7 @@ export const zh = {
 
   'commandMarket.badge': '命令市场',
   'commandMarket.title': '下载社区命令',
-  'commandMarket.desc': '自动拉取仓库 commands 目录的全量命令，点击即可下载到本地导入。',
+  'commandMarket.desc': '选择你需要的命令，点击即可下载到本地导入。',
   'commandMarket.loading': '正在获取命令列表...',
   'commandMarket.error': '命令列表加载失败：{{error}}',
   'commandMarket.retry': '重试',
@@ -86,6 +87,7 @@ export const en = {
   'nav.language': 'Language',
   'nav.language.zh': '中文',
   'nav.language.en': 'EN',
+  'nav.download': 'Download',
   'nav.market': 'Community Commands',
 
   'hero.badge': 'Assets Organization Canvas',
@@ -156,7 +158,7 @@ export const en = {
   'commandMarket.badge': 'Command Market',
   'commandMarket.title': 'Download Community Commands',
   'commandMarket.desc':
-    'Automatically fetch every command under the repository commands folder and download any item with one click.',
+    'Select the commands you need and download any item with one click.',
   'commandMarket.loading': 'Loading command list...',
   'commandMarket.error': 'Failed to load command list: {{error}}',
   'commandMarket.retry': 'Retry',

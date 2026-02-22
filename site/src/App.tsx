@@ -75,27 +75,26 @@ function App() {
         <div className="topbar-actions">
           <button
             type="button"
+            className={snap.route === '/' ? 'topbar-nav-btn active' : 'topbar-nav-btn'}
+            onClick={() => siteActions.goToRoute('/')}
+          >
+            {t('nav.download')}
+          </button>
+          <button
+            type="button"
             className={snap.route === '/market' ? 'topbar-nav-btn active' : 'topbar-nav-btn'}
             onClick={() => siteActions.goToRoute('/market')}
           >
             {t('nav.market')}
           </button>
-          <div className="locale-box" aria-label={t('nav.language')}>
-            <button
-              type="button"
-              className={locale === 'zh' ? 'locale-btn active' : 'locale-btn'}
-              onClick={() => setLocale('zh')}
-            >
-              {t('nav.language.zh')}
-            </button>
-            <button
-              type="button"
-              className={locale === 'en' ? 'locale-btn active' : 'locale-btn'}
-              onClick={() => setLocale('en')}
-            >
-              {t('nav.language.en')}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="topbar-nav-btn"
+            aria-label={t('nav.language')}
+            onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
+          >
+            {locale === 'zh' ? 'EN' : '中文'}
+          </button>
         </div>
       </header>
 
