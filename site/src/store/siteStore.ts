@@ -107,8 +107,8 @@ function toBaseName(fileName: string) {
   return fileName.replace(/\.[^/.]+$/, '');
 }
 
-function toLocalRoute(pathname: string): SiteRoute {
-  const normalized = pathname.replace(/\/+$/, '');
+function toLocalRoute(hash: string): SiteRoute {
+  const normalized = hash.replace(/^#/, '').replace(/\/+$/, '');
   if (normalized === '/market') return '/market';
   return '/';
 }
@@ -337,11 +337,11 @@ export const siteActions = {
     siteState.faqPlatform = platform;
   },
   syncRouteFromLocation() {
-    siteState.route = toLocalRoute(window.location.pathname);
+    siteState.route = toLocalRoute(window.location.hash);
   },
   goToRoute(route: SiteRoute) {
     if (siteState.route === route) return;
-    window.history.pushState({}, '', route);
+    window.location.hash = route === '/' ? '' : route;
     siteState.route = route;
   },
   setLatestRelease(release: LatestRelease) {

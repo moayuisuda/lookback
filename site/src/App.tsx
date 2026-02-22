@@ -28,11 +28,11 @@ function App() {
     siteActions.setLocalVersion(sitePackage.version);
     siteActions.setFaqPlatform(detectPlatform() === 'win' ? 'win' : 'mac');
     siteActions.syncRouteFromLocation();
-    const onPopState = () => siteActions.syncRouteFromLocation();
-    window.addEventListener('popstate', onPopState);
+    const onHashChange = () => siteActions.syncRouteFromLocation();
+    window.addEventListener('hashchange', onHashChange);
     void siteActions.loadLatestRelease();
     return () => {
-      window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('hashchange', onHashChange);
     };
   }, []);
 
