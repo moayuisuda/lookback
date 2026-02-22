@@ -67,7 +67,7 @@ export const zh = {
   'download.faq.win.step.2': '接着点击「仍要打开」。',
 
   'commandMarket.badge': '命令市场',
-  'commandMarket.title': '下载社区命令',
+  'commandMarket.title': '拓展画布能力',
   'commandMarket.desc': '选择你需要的命令，点击即可下载到本地导入。',
   'commandMarket.loading': '正在获取命令列表...',
   'commandMarket.error': '命令列表加载失败：{{error}}',
@@ -156,7 +156,7 @@ export const en = {
   'download.faq.win.step.2': 'Then click "Run anyway".',
 
   'commandMarket.badge': 'Command Market',
-  'commandMarket.title': 'Download Community Commands',
+  'commandMarket.title': 'Expand Canvas Capabilities',
   'commandMarket.desc':
     'Select the commands you need and download any item with one click.',
   'commandMarket.loading': 'Loading command list...',
