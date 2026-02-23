@@ -15,9 +15,11 @@ interface SelectOverlayProps {
   isSelectionBoxActive: boolean;
   onDeleteSelection: () => void;
   onFlipSelection: () => void;
+  onFlipYSelection: () => void;
   onScaleStart: (client: { x: number; y: number }) => void;
   onDeleteItem: (id: string) => void;
   onFlipItem: (id: string) => void;
+  onFlipYItem: (id: string) => void;
   onRotateItemStart: (id: string, client: { x: number; y: number }) => void;
   onScaleStartItem: (id: string, client: { x: number; y: number }) => void;
   onCommitItem: (id: string, next: Partial<CanvasItem>) => void;
@@ -76,9 +78,11 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   isSelectionBoxActive,
   onDeleteSelection,
   onFlipSelection,
+  onFlipYSelection,
   onScaleStart,
   onDeleteItem,
   onFlipItem,
+  onFlipYItem,
   onRotateItemStart,
   onScaleStartItem,
   onCommitItem,
@@ -154,6 +158,25 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             }}
           />
         )}
+        {item.type !== "text" && (
+          <CanvasControlButton
+            x={singleUnion.x}
+            y={singleUnion.y + singleUnion.height}
+            scale={btnScale}
+            size={24}
+            fill={THEME.primary}
+            stroke="white"
+            strokeWidth={2}
+            iconPath={CANVAS_ICONS.FLIP_Y.PATH}
+            iconScale={CANVAS_ICONS.FLIP_Y.SCALE}
+            iconOffsetX={CANVAS_ICONS.FLIP_Y.OFFSET_X}
+            iconOffsetY={CANVAS_ICONS.FLIP_Y.OFFSET_Y}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFlipYItem(item.itemId);
+            }}
+          />
+        )}
         <CanvasControlButton
           x={singleUnion.x + singleUnion.width}
           y={singleUnion.y}
@@ -222,6 +245,23 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         onClick={(e) => {
           e.stopPropagation();
           onFlipSelection();
+        }}
+      />
+      <CanvasControlButton
+        x={union.x}
+        y={union.y + union.height}
+        scale={btnScale}
+        size={24}
+        fill={THEME.primary}
+        stroke="white"
+        strokeWidth={2}
+        iconPath={CANVAS_ICONS.FLIP_Y.PATH}
+        iconScale={CANVAS_ICONS.FLIP_Y.SCALE}
+        iconOffsetX={CANVAS_ICONS.FLIP_Y.OFFSET_X}
+        iconOffsetY={CANVAS_ICONS.FLIP_Y.OFFSET_Y}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFlipYSelection();
         }}
       />
       <CanvasControlButton

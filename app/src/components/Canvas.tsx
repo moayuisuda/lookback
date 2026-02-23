@@ -1223,6 +1223,29 @@ export const Canvas: React.FC = () => {
     }, 0);
   });
 
+  const handleFlipYSelection = useMemoizedFn(() => {
+    const selectedItems = getSelectedItems();
+    if (selectedItems.length === 0) return;
+
+    let hasChanges = false;
+    selectedItems.forEach((item) => {
+      if (item.type !== "text") {
+        const currentFlipY = item.flipY === true;
+        canvasActions.updateCanvasImageSilent(item.itemId, {
+          flipY: !currentFlipY,
+        });
+        hasChanges = true;
+      }
+    });
+
+    if (hasChanges) {
+      canvasActions.commitCanvasChange();
+    }
+    setTimeout(() => {
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    }, 0);
+  });
+
   useHotkeys(
     "mod+f",
     (e) => {
@@ -1435,7 +1458,12 @@ export const Canvas: React.FC = () => {
         const dx = ev.clientX - centerX;
         const dy = ev.clientY - centerY;
         const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-        const rotation = angle + 90;
+        let rotation = angle + 90;
+
+        if (ev.shiftKey) {
+          rotation = Math.round(rotation / 45) * 45;
+        }
+
         canvasActions.updateCanvasImageSilent(id, { rotation });
       };
 
@@ -1456,6 +1484,15 @@ export const Canvas: React.FC = () => {
     const currentFlipX = target.flipX === true;
     canvasActions.updateCanvasImage(id, {
       flipX: !currentFlipX,
+    });
+  });
+
+  const handleFlipYItem = useMemoizedFn((id: string) => {
+    const target = canvasState.canvasItems.find((item) => item.itemId === id);
+    if (!target || target.type === "text") return;
+    const currentFlipY = target.flipY === true;
+    canvasActions.updateCanvasImage(id, {
+      flipY: !currentFlipY,
     });
   });
 
@@ -1728,9 +1765,11 @@ export const Canvas: React.FC = () => {
             isSelectionBoxActive={selectionBox.start !== null}
             onDeleteSelection={handleDeleteSelection}
             onFlipSelection={handleFlipSelection}
+            onFlipYSelection={handleFlipYSelection}
             onScaleStart={handleGroupScaleStart}
             onDeleteItem={handleDeleteItem}
             onFlipItem={handleFlipItem}
+            onFlipYItem={handleFlipYItem}
             onRotateItemStart={handleRotateItemStart}
             onScaleStartItem={handleItemScaleStart}
             onCommitItem={handleCommitItem}

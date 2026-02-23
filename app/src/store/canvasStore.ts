@@ -49,6 +49,7 @@ export interface CanvasImage extends ImageMeta {
   y: number;
   scale: number;
   flipX?: boolean;
+  flipY?: boolean;
   rotation: number;
   width: number;
   height: number;
@@ -74,6 +75,7 @@ export interface CanvasPersistedItem {
 
   // Image specific
   flipX?: boolean;
+  flipY?: boolean;
   imageId?: string;
   imagePath?: string;
   dominantColor?: string | null;
@@ -296,6 +298,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
           rotation: img.rotation,
           scale: img.scale,
           flipX: img.flipX,
+          flipY: img.flipY,
           width: img.width,
           height: img.height,
           grayscale: img.grayscale,
@@ -318,6 +321,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
         rotation: img.rotation,
         scale: img.scale,
         flipX: img.flipX,
+        flipY: img.flipY,
         width: img.width,
         height: img.height,
         grayscale: img.grayscale,
@@ -456,6 +460,7 @@ export const canvasActions = {
             y: temp.y,
             scale: temp.scale,
             flipX: temp.flipX,
+            flipY: temp.flipY,
             rotation: temp.rotation,
             width: temp.width!,
             height: temp.height!,
@@ -494,6 +499,7 @@ export const canvasActions = {
             y: ref.y,
             scale: ref.scale,
             flipX: ref.flipX,
+            flipY: ref.flipY,
             rotation: ref.rotation,
             width: ref.width!,
             height: ref.height!,
@@ -584,7 +590,7 @@ export const canvasActions = {
       canvasState.canvasItems = JSON.parse(
         JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
       ) as CanvasItem[];
-      console.log('undo', canvasState.canvasItems)
+      console.log("undo", canvasState.canvasItems);
       canvasActions.clearSelectionState();
       void persistCanvasItems(canvasState.canvasItems);
     }
@@ -1000,7 +1006,8 @@ export const canvasActions = {
     return isAssetImagePath(value);
   },
   resolveLocalImagePath: async (rawPath: string, canvasName?: string) => {
-    const targetCanvasName = (canvasName || canvasState.currentCanvasName).trim() || "Default";
+    const targetCanvasName =
+      (canvasName || canvasState.currentCanvasName).trim() || "Default";
     return resolveLocalImagePath(rawPath, targetCanvasName);
   },
   getPathDirname: (value: string) => {
