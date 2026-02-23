@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from "react";
 import { FileUp, Trash2 } from "lucide-react";
 import Input, { type InputRef } from "rc-input";
 import { useSnapshot } from "valtio";
+import { useMemoizedFn } from "ahooks";
 import { useT } from "../i18n/useT";
 import { commandActions, commandState } from "../store/commandStore";
 import { globalActions, globalState } from "../store/globalStore";
@@ -19,6 +20,7 @@ import { useClickOutside } from "../hooks/useClickOutside";
 import { ConfirmModal } from "./ConfirmModal";
 import { deleteExternalCommand } from "../service";
 import { clsx } from "clsx";
+import { ShortcutInput } from "./ShortcutInput";
 
 type CommandResult = {
   kind: "command";
@@ -74,11 +76,22 @@ export const CommandPalette: React.FC = () => {
     });
   };
 
+  const handleShortcutInvalid = useMemoizedFn(() => {
+    globalActions.pushToast({ key: "toast.shortcutInvalid" }, "error");
+  });
+
+  const handleSetExternalCommandShortcut = useMemoizedFn(
+    async (commandId: string, accelerator: string) => {
+      await commandActions.setExternalCommandShortcut(commandId, accelerator);
+    },
+  );
+
   const handleConfirmDelete = async () => {
     const target = snap.deleteTarget;
     if (!target) return;
     const result = await deleteExternalCommand(target.folder, target.entry);
     if (result.success) {
+      await commandActions.clearExternalCommandShortcut(target.id);
       globalActions.pushToast({ key: "toast.commandDeleted" }, "success");
       void commandActions.loadExternalCommands();
     } else {
@@ -101,7 +114,7 @@ export const CommandPalette: React.FC = () => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
-  }, [snap.isOpen]);
+  }, [snap.isOpen, snap.activeCommandId]);
 
   const commands = getCommands();
   const commandContext = getCommandContext();
@@ -273,7 +286,7 @@ export const CommandPalette: React.FC = () => {
       <div className="absolute inset-0 z-[9998] flex items-start justify-center bg-black/40 backdrop-blur-sm no-drag top-[32px]">
         <div
           ref={panelRef}
-          className="mt-2 w-[640px] rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-2xl overflow-hidden"
+          className="relative mt-2 w-[640px] rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-2xl overflow-hidden"
         >
           {isTaskUi ? (
             <>
@@ -362,17 +375,49 @@ export const CommandPalette: React.FC = () => {
                             {t("commandPalette.commandLabel")}
                           </span>
                           {result.command.external && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRequestDelete(result.command);
-                              }}
-                              className="text-neutral-500 hover:text-red-400 p-1 rounded hover:bg-red-950/30 transition-colors"
-                              title={t("commandPalette.delete")}
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <>
+                              <div
+                                className="group relative flex items-center"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <ShortcutInput
+                                  value={snap.externalCommandShortcuts[result.command.id] ?? ""}
+                                  onChange={(accelerator) =>
+                                    void handleSetExternalCommandShortcut(
+                                      result.command.id,
+                                      accelerator,
+                                    )
+                                  }
+                                  onInvalid={handleShortcutInvalid}
+                                />
+                                {snap.externalCommandShortcuts[result.command.id] && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void commandActions.clearExternalCommandShortcut(
+                                        result.command.id,
+                                      )
+                                    }
+                                    className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full border border-neutral-600 bg-neutral-900 text-[9px] leading-none text-neutral-300 hover:text-white hover:border-neutral-400 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                                    title={t("commandPalette.shortcutClear")}
+                                    aria-label={t("commandPalette.shortcutClear")}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRequestDelete(result.command);
+                                }}
+                                className="text-neutral-500 hover:text-red-400 p-1 rounded hover:bg-red-950/30 transition-colors"
+                                title={t("commandPalette.delete")}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>

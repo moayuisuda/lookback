@@ -36,6 +36,8 @@ export const zh = {
   'commandPalette.import': '导入命令',
   'commandPalette.importUnavailable': '导入不可用',
   'commandPalette.delete': '删除',
+  'commandPalette.shortcut': '快捷键',
+  'commandPalette.shortcutClear': '清空快捷键',
   'commandPalette.deleteTitle': '删除命令',
   'commandPalette.deleteMessage': '确定删除 "{{name}}"？此操作不可撤销。',
   'commandPalette.toneAny': '任意',

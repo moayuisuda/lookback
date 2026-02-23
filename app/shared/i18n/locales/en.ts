@@ -36,6 +36,8 @@ export const en = {
   'commandPalette.import': 'Import Command',
   'commandPalette.importUnavailable': 'Import is unavailable',
   'commandPalette.delete': 'Delete',
+  'commandPalette.shortcut': 'Shortcut',
+  'commandPalette.shortcutClear': 'Clear shortcut',
   'commandPalette.deleteTitle': 'Delete Command',
   'commandPalette.deleteMessage': 'Delete "{{name}}"? This cannot be undone.',
   'commandPalette.toneAny': 'Any',

@@ -1,5 +1,11 @@
 import React, { useEffect } from "react";
-import { X, LayoutTemplate, PictureInPicture2, Eraser, Filter } from "lucide-react";
+import {
+  X,
+  LayoutTemplate,
+  PictureInPicture2,
+  Eraser,
+  Filter,
+} from "lucide-react";
 import { useSnapshot } from "valtio";
 import { globalState, globalActions } from "../../store/globalStore";
 import { anchorState, anchorActions } from "../../store/anchorStore";
@@ -79,7 +85,7 @@ const AnchorControls: React.FC = () => {
   }, [anchorSnap.lastTriggered]);
 
   return (
-    <div className="flex flex-col items-center gap-0.5">
+    <div className="flex flex-col items-center gap-1">
       {["1", "2", "3"].map((slot) => {
         const hasAnchor = !!anchorSnap.anchors[slot];
         const isAnimating = animatingSlot === slot;
