@@ -52,7 +52,7 @@ export const config = {
   id: "screenshot",
   i18n: {
     en: {
-      "command.screenshot.title": "Screenshot",
+      "command.screenshot.title": "Clip Image",
       "command.screenshot.description": "Crop and save selected image",
       "command.screenshot.mode.overwrite": "Overwrite",
       "command.screenshot.mode.duplicate": "New Copy",
@@ -66,7 +66,7 @@ export const config = {
       "toast.command.screenshot.failed": "Screenshot failed: {{error}}",
     },
     zh: {
-      "command.screenshot.title": "截图",
+      "command.screenshot.title": "裁剪图片",
       "command.screenshot.description": "裁剪并保存选中图片",
       "command.screenshot.mode.overwrite": "覆盖当前",
       "command.screenshot.mode.duplicate": "新建副本",
@@ -81,7 +81,7 @@ export const config = {
     },
   },
   titleKey: "command.screenshot.title",
-  title: "Screenshot",
+  title: "Clip Image",
   descriptionKey: "command.screenshot.description",
   description: "Crop and save selected image",
   keywords: ["screenshot", "crop", "capture", "save", "截图", "裁剪", "保存"],
