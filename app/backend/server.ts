@@ -99,18 +99,7 @@ const ensureStorageDirs = async (root: string) => {
   ]);
 };
 
-// 非必要，不要添加到默认加载
-const DEFAULT_COMMAND_FILES = [
-  "addText.jsx",
-  "canvasImportExport.jsx",
-  "imageGene.jsx",
-  "imageSearch.jsx",
-  "multiSearch.jsx",
-  // "copySelectedImageToClipboard.jsx",
-  // "packageCanvasAssetsZip.jsx",
-  // "openSelectedImageInFolder.jsx",
-  "stitchExport.jsx",
-];
+import { DEFAULT_COMMAND_FILES } from "../shared/constants";
 
 const ensureDefaultCommands = async () => {
   const commandsDir = path.join(STORAGE_DIR, "commands");

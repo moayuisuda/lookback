@@ -1023,6 +1023,21 @@ async function calculateTone(filePath) {
 
 // backend/server.ts
 var import_adm_zip = __toESM(require("adm-zip"), 1);
+
+// shared/constants.ts
+var DEFAULT_COMMAND_FILES = [
+  "addText.jsx",
+  "canvasImportExport.jsx",
+  "imageGene.jsx",
+  "imageSearch.jsx",
+  // "multiSearch.jsx",
+  // "copySelectedImageToClipboard.jsx",
+  // "packageCanvasAssetsZip.jsx",
+  // "openSelectedImageInFolder.jsx",
+  "stitchExport.jsx"
+];
+
+// backend/server.ts
 var DEFAULT_SERVER_PORT = 30001;
 var MAX_SERVER_PORT = 65535;
 var CONFIG_FILE = import_path7.default.join(import_electron.app.getPath("userData"), "lookback_config.json");
@@ -1079,17 +1094,6 @@ var ensureStorageDirs = async (root) => {
     lockedFs.ensureDir(import_path7.default.join(root, "canvases"))
   ]);
 };
-var DEFAULT_COMMAND_FILES = [
-  "addText.jsx",
-  "canvasImportExport.jsx",
-  "imageGene.jsx",
-  "imageSearch.jsx",
-  "multiSearch.jsx",
-  // "copySelectedImageToClipboard.jsx",
-  // "packageCanvasAssetsZip.jsx",
-  // "openSelectedImageInFolder.jsx",
-  "stitchExport.jsx"
-];
 var ensureDefaultCommands = async () => {
   const commandsDir = import_path7.default.join(STORAGE_DIR, "commands");
   await lockedFs.ensureDir(commandsDir);
@@ -1634,35 +1638,6 @@ var en = {
   "commandPalette.deleteTitle": "Delete Command",
   "commandPalette.deleteMessage": 'Delete "{{name}}"? This cannot be undone.',
   "commandPalette.toneAny": "Any",
-  "command.stitchExport.title": "Stitch Export",
-  "command.stitchExport.description": "Stitch selected images and export",
-  "command.imageSearch.title": "Image Search",
-  "command.imageSearch.description": "Search images by tone and color",
-  "command.imageGene.title": "Image Gene",
-  "command.imageGene.description": "Analyze palette, lightness and chroma distributions",
-  "command.imageGene.empty": "Select one or more images first",
-  "command.imageGene.loading": "Analyzing image gene...",
-  "command.imageGene.failed": "Image gene analysis failed. Check image accessibility.",
-  "command.imageGene.sourceCount": "Images: {{count}}",
-  "command.imageGene.samples": "Sampled pixels: {{count}}",
-  "command.imageGene.failedCount": "{{count}} images failed to load and were skipped",
-  "command.imageGene.removeBackground": "Auto remove background",
-  "command.imageGene.palette": "Palette",
-  "command.imageGene.lightness": "Lightness Distribution",
-  "command.imageGene.saturation": "Saturation Distribution",
-  "command.imageGene.chroma": "Chroma Distribution",
-  "command.imageGene.low": "Low",
-  "command.imageGene.mid": "Mid",
-  "command.imageGene.high": "High",
-  "command.imageGene.copy": "Click to copy color",
-  "command.imageGene.copied": "Copied",
-  "command.imageGene.mean": "Mean",
-  "command.imageGene.std": "Std Dev",
-  "command.imageGene.p10": "P10",
-  "command.imageGene.p50": "P50",
-  "command.imageGene.p90": "P90",
-  "command.imageGene.shadowClip": "Shadow Clip",
-  "command.imageGene.highlightClip": "Highlight Clip",
   "command.imageHistogram.title": "Image Histogram",
   "command.imageHistogram.description": "Inspect saturation and luminance histograms of selected images",
   "command.imageHistogram.empty": "Select one or more images first",
@@ -1894,35 +1869,6 @@ var zh = {
   "commandPalette.deleteTitle": "\u5220\u9664\u547D\u4EE4",
   "commandPalette.deleteMessage": '\u786E\u5B9A\u5220\u9664 "{{name}}"\uFF1F\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002',
   "commandPalette.toneAny": "\u4EFB\u610F",
-  "command.stitchExport.title": "\u62FC\u56FE\u5BFC\u51FA",
-  "command.stitchExport.description": "\u62FC\u63A5\u9009\u4E2D\u7684\u56FE\u7247\u5E76\u5BFC\u51FA",
-  "command.imageSearch.title": "\u4EE5\u56FE\u641C\u56FE",
-  "command.imageSearch.description": "\u6309\u8272\u8C03\u548C\u989C\u8272\u641C\u7D22\u56FE\u7247",
-  "command.imageGene.title": "\u56FE\u7247\u57FA\u56E0",
-  "command.imageGene.description": "\u5206\u6790\u8272\u677F\u3001\u660E\u5EA6\u4E0E\u8272\u5EA6\u5206\u5E03",
-  "command.imageGene.empty": "\u8BF7\u5148\u9009\u4E2D\u4E00\u5F20\u6216\u591A\u5F20\u56FE\u7247",
-  "command.imageGene.loading": "\u6B63\u5728\u5206\u6790\u56FE\u7247\u57FA\u56E0\u2026",
-  "command.imageGene.failed": "\u56FE\u7247\u57FA\u56E0\u5206\u6790\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u56FE\u7247\u662F\u5426\u53EF\u8BBF\u95EE",
-  "command.imageGene.sourceCount": "\u56FE\u7247\u6570\uFF1A{{count}}",
-  "command.imageGene.samples": "\u91C7\u6837\u50CF\u7D20\uFF1A{{count}}",
-  "command.imageGene.failedCount": "{{count}} \u5F20\u56FE\u7247\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7",
-  "command.imageGene.removeBackground": "\u81EA\u52A8\u53BB\u9664\u80CC\u666F\u8272",
-  "command.imageGene.palette": "\u4E3B\u8272\u677F",
-  "command.imageGene.lightness": "\u660E\u5EA6\u5206\u5E03",
-  "command.imageGene.saturation": "\u9971\u548C\u5EA6\u5206\u5E03",
-  "command.imageGene.chroma": "\u8272\u5EA6\u5206\u5E03",
-  "command.imageGene.low": "\u4F4E",
-  "command.imageGene.mid": "\u4E2D",
-  "command.imageGene.high": "\u9AD8",
-  "command.imageGene.copy": "\u70B9\u51FB\u590D\u5236\u8272\u503C",
-  "command.imageGene.copied": "\u5DF2\u590D\u5236",
-  "command.imageGene.mean": "\u5747\u503C",
-  "command.imageGene.std": "\u6807\u51C6\u5DEE",
-  "command.imageGene.p10": "P10",
-  "command.imageGene.p50": "P50",
-  "command.imageGene.p90": "P90",
-  "command.imageGene.shadowClip": "\u6697\u90E8\u88C1\u526A",
-  "command.imageGene.highlightClip": "\u9AD8\u5149\u88C1\u526A",
   "command.imageHistogram.title": "\u56FE\u50CF\u76F4\u65B9\u56FE",
   "command.imageHistogram.description": "\u67E5\u770B\u9009\u4E2D\u56FE\u7247\u7684\u9971\u548C\u5EA6\u4E0E\u660E\u5EA6\u76F4\u65B9\u56FE",
   "command.imageHistogram.empty": "\u8BF7\u5148\u9009\u4E2D\u4E00\u5F20\u6216\u591A\u5F20\u56FE\u7247",
@@ -2699,6 +2645,7 @@ async function saveWindowBounds() {
 var debouncedSaveWindowBounds = (0, import_radash2.debounce)({ delay: 1e3 }, saveWindowBounds);
 async function createWindow(options) {
   import_electron_log.default.info("Creating main window...");
+  import_electron_log.default.info("Storage dir for window state:", getStorageDir());
   isAppHidden = false;
   const { width, height } = import_electron2.screen.getPrimaryDisplay().workAreaSize;
   let windowState = {};
@@ -3131,14 +3078,14 @@ import_electron2.app.whenReady().then(async () => {
   import_electron_log.default.info("User data:", import_electron2.app.getPath("userData"));
   registerLookBackProtocol();
   const taskInitStorage = ensureStorageInitialized();
-  const taskCreateWindow = createWindow();
-  const taskStartServer = startServer2();
   try {
     await taskInitStorage;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     import_electron_log.default.error("Failed to initialize storage before loading settings:", message);
   }
+  const taskCreateWindow = createWindow();
+  const taskStartServer = startServer2();
   const taskLoadPin = loadWindowPinState();
   const taskLoadShortcuts = loadShortcuts();
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);

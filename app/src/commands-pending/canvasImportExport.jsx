@@ -55,7 +55,9 @@ export const config = {
       "toast.command.importSaved": "已导入 {{count}} 个画布",
     },
   },
+  titleKey: "Canvas Import/Export",
   title: "Canvas Import/Export",
+  descriptionKey: "Import and export canvas data (.lb files)",
   description: "Import and export canvas data (.lb files)",
   keywords: ["import", "export", "canvas", "backup"],
 };

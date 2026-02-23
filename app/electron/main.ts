@@ -694,6 +694,7 @@ const debouncedSaveWindowBounds = debounce({ delay: 1000 }, saveWindowBounds);
 
 async function createWindow(options?: { load?: boolean }) {
   log.info("Creating main window...");
+  log.info("Storage dir for window state:", getStorageDir());
   isAppHidden = false;
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -1203,16 +1204,18 @@ app.whenReady().then(async () => {
   registerLookBackProtocol();
 
   const taskInitStorage = ensureStorageInitialized();
-  const taskCreateWindow = createWindow();
-  // Start server early, but handle errors later
-  const taskStartServer = startServer();
 
+  // Wait for storage to be initialized before creating window or starting server
   try {
     await taskInitStorage;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     log.error("Failed to initialize storage before loading settings:", message);
   }
+
+  const taskCreateWindow = createWindow();
+  // Start server early, but handle errors later
+  const taskStartServer = startServer();
 
   const taskLoadPin = loadWindowPinState();
   const taskLoadShortcuts = loadShortcuts();

@@ -6,9 +6,9 @@ export const LATEST_RELEASE_PAGE = 'https://github.com/moayuisuda/lookback-relea
 const GITHUB_RELEASE_DOWNLOAD_PREFIX = 'https://github.com/moayuisuda/lookback-release/releases/download/';
 const MIRROR_RELEASE_DOWNLOAD_PREFIX = 'https://xget.xi-xu.me/gh/moayuisuda/lookback-release/releases/download/';
 const COMMAND_MARKET_TREE_API =
-  'https://api.github.com/repos/moayuisuda/lookback-release/git/trees/main?recursive=1';
+  'https://api.github.com/repos/moayuisuda/lookback/git/trees/main?recursive=1';
 const COMMAND_MARKET_RAW_PREFIX =
-  'https://raw.githubusercontent.com/moayuisuda/lookback-release/refs/heads/main/';
+  'https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/';
 const LOOKBACK_IMPORT_DEEP_LINK = 'lookback://import-command';
 const LOOKBACK_IMPORT_FALLBACK_MS = 1800;
 
@@ -94,8 +94,10 @@ function resolveMirrorDownloadUrl(downloadUrl: string) {
   return downloadUrl.replace(GITHUB_RELEASE_DOWNLOAD_PREFIX, MIRROR_RELEASE_DOWNLOAD_PREFIX);
 }
 
+import { DEFAULT_COMMAND_FILES } from '../../../app/shared/constants';
+
 function isCommandScript(path: string) {
-  return path.startsWith('commands/') && /\.(jsx?|tsx?)$/i.test(path);
+  return path.startsWith('app/src/commands-pending/') && /\.(jsx?|tsx?)$/i.test(path);
 }
 
 function getFileName(path: string) {
@@ -313,8 +315,10 @@ async function parseCommandScript(path: string): Promise<CommandMarketItem | nul
 }
 
 export function getCommandMarketDisplay(item: CommandMarketItem, locale: Locale) {
+  const isBuiltIn = DEFAULT_COMMAND_FILES.includes(item.fileName);
+  const suffix = isBuiltIn ? (locale === 'zh' ? '（内置）' : ' (Built-in)') : '';
   return {
-    name: item.localized[locale]?.title || item.title,
+    name: (item.localized[locale]?.title || item.title) + suffix,
     description: item.localized[locale]?.description || item.description,
   };
 }

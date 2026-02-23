@@ -69,7 +69,7 @@ export const config = {
       "toast.command.multiSearch.opened": "Opened {{count}} websites for \"{{keyword}}\"",
     },
     zh: {
-      "command.multiSearch.title": "多路搜索",
+      "command.multiSearch.title": "多站点搜图",
       "command.multiSearch.description": "输入关键词后按勾选站点分别搜索",
       "command.multiSearch.input.label": "搜索词",
       "command.multiSearch.input.placeholder": "请输入搜索词",
@@ -90,7 +90,7 @@ export const config = {
   title: "Multi Search",
   descriptionKey: "command.multiSearch.description",
   description: "Search keyword across multiple websites",
-  keywords: ["search", "multi", "pinterest", "huaban", "pixiv", "x", "多路", "花瓣", "搜索"],
+  keywords: ["search", "multi", "pinterest", "huaban", "pixiv", "x", "多站点", "花瓣", "搜索"],
 };
 
 const buildSearchTargets = (keyword, selectedSources) => {
