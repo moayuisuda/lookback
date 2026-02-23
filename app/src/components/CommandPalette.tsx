@@ -96,7 +96,10 @@ export const CommandPalette: React.FC = () => {
       void commandActions.loadExternalCommands();
     } else {
       globalActions.pushToast(
-        { key: "toast.commandDeleteFailed", params: { error: result.error || "" } },
+        {
+          key: "toast.commandDeleteFailed",
+          params: { error: result.error || "" },
+        },
         "error",
       );
     }
@@ -303,7 +306,7 @@ export const CommandPalette: React.FC = () => {
                 </button>
               </div>
               {isUiComponent(activeUi) ? (
-                <div className="max-h-[500px] overflow-y-auto dark-scrollbar">
+                <div className="max-h-full overflow-y-auto dark-scrollbar">
                   {React.createElement(activeUi, {
                     context: commandContext,
                   })}
@@ -381,7 +384,11 @@ export const CommandPalette: React.FC = () => {
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <ShortcutInput
-                                  value={snap.externalCommandShortcuts[result.command.id] ?? ""}
+                                  value={
+                                    snap.externalCommandShortcuts[
+                                      result.command.id
+                                    ] ?? ""
+                                  }
                                   onChange={(accelerator) =>
                                     void handleSetExternalCommandShortcut(
                                       result.command.id,
@@ -390,7 +397,9 @@ export const CommandPalette: React.FC = () => {
                                   }
                                   onInvalid={handleShortcutInvalid}
                                 />
-                                {snap.externalCommandShortcuts[result.command.id] && (
+                                {snap.externalCommandShortcuts[
+                                  result.command.id
+                                ] && (
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -400,7 +409,9 @@ export const CommandPalette: React.FC = () => {
                                     }
                                     className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full border border-neutral-600 bg-neutral-900 text-[9px] leading-none text-neutral-300 hover:text-white hover:border-neutral-400 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                                     title={t("commandPalette.shortcutClear")}
-                                    aria-label={t("commandPalette.shortcutClear")}
+                                    aria-label={t(
+                                      "commandPalette.shortcutClear",
+                                    )}
                                   >
                                     ×
                                   </button>
