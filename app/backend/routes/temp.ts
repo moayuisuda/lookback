@@ -15,6 +15,16 @@ export const createTempRouter = (deps: TempRouteDeps) => {
   const router = express.Router();
   const getAssetsDir = (canvasName?: string) =>
     deps.getCanvasAssetsDir(canvasName || "Default");
+  const createRequestId = (): string =>
+    `durl_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+  const normalizeLogUrl = (rawUrl: string): string => {
+    try {
+      const parsed = new URL(rawUrl);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return rawUrl;
+    }
+  };
   const resolveUniqueFilename = async (
     assetsDir: string,
     desired: string
@@ -32,6 +42,14 @@ export const createTempRouter = (deps: TempRouteDeps) => {
   };
 
   router.post("/api/download-url", async (req, res) => {
+    const requestId = createRequestId();
+    const startedAt = Date.now();
+    let stage = "validate-input";
+    let lockWaitMs = 0;
+    let downloadMs = 0;
+    let metadataMs = 0;
+    let dominantColorMs = 0;
+    let toneMs = 0;
     try {
       const { url, canvasName } = req.body as {
         url?: string;
@@ -50,6 +68,10 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         res.status(400).json({ error: "Invalid URL" });
         return;
       }
+      console.info(`[temp][download-url][${requestId}] start`, {
+        canvasName: canvasName || "Default",
+        url: normalizeLogUrl(trimmedUrl),
+      });
 
       let urlFilename = "image.jpg";
       try {
@@ -70,7 +92,9 @@ export const createTempRouter = (deps: TempRouteDeps) => {
       const timestamp = Date.now();
       const filename = `${safeName}_${timestamp}${ext}`;
       const assetsDir = getAssetsDir(canvasName);
+      stage = "ensure-assets-dir";
       await fs.ensureDir(assetsDir);
+      stage = "resolve-unique-filename";
       const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
       const filepath = path.join(assetsDir, uniqueFilename);
 
@@ -79,17 +103,53 @@ export const createTempRouter = (deps: TempRouteDeps) => {
       let dominantColor: string | null = null;
       let tone: string | null = null;
 
+      stage = "wait-file-locks";
+      const lockRequestedAt = Date.now();
       await withFileLocks([assetsDir, filepath], async () => {
+        // 记录锁等待时长，用于判断是否由文件锁竞争导致慢请求/异常。
+        lockWaitMs = Date.now() - lockRequestedAt;
+        console.info(`[temp][download-url][${requestId}] lock-acquired`, {
+          lockWaitMs,
+          file: uniqueFilename,
+        });
+
+        stage = "download-image";
+        const downloadStartedAt = Date.now();
         await deps.downloadImage(trimmedUrl, filepath);
+        downloadMs = Date.now() - downloadStartedAt;
+
         try {
+          stage = "read-metadata";
+          const metadataStartedAt = Date.now();
           const metadata = await sharp(filepath).metadata();
+          metadataMs = Date.now() - metadataStartedAt;
           width = metadata.width || 0;
           height = metadata.height || 0;
         } catch (e) {
           console.error("Failed to read image metadata", e);
         }
+        stage = "analyze-dominant-color";
+        const dominantStartedAt = Date.now();
         dominantColor = await deps.getDominantColor(filepath);
+        dominantColorMs = Date.now() - dominantStartedAt;
+
+        stage = "analyze-tone";
+        const toneStartedAt = Date.now();
         tone = await deps.getTone(filepath);
+        toneMs = Date.now() - toneStartedAt;
+      });
+
+      stage = "complete";
+      console.info(`[temp][download-url][${requestId}] success`, {
+        elapsedMs: Date.now() - startedAt,
+        lockWaitMs,
+        downloadMs,
+        metadataMs,
+        dominantColorMs,
+        toneMs,
+        width,
+        height,
+        file: uniqueFilename,
       });
 
       res.json({
@@ -103,6 +163,16 @@ export const createTempRouter = (deps: TempRouteDeps) => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error(`[temp][download-url][${requestId}] failed`, {
+        stage,
+        elapsedMs: Date.now() - startedAt,
+        lockWaitMs,
+        downloadMs,
+        metadataMs,
+        dominantColorMs,
+        toneMs,
+        error: message,
+      });
       res.status(500).json({ error: message });
     }
   });

@@ -1,11 +1,9 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import path from "path";
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
 import fs from "fs-extra";
-import https from "https";
-import http from "http";
 import { randomBytes } from "node:crypto";
 import { debounce } from "radash";
 import { createSettingsRouter } from "./routes/settings";
@@ -107,7 +105,7 @@ const DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
-  // "multiSearch.jsx",
+  "multiSearch.jsx",
   // "copySelectedImageToClipboard.jsx",
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
@@ -272,7 +270,7 @@ const cleanupCanvasAssets = async () => {
 
 function downloadImage(url: string, dest: string): Promise<void> {
   const REQUEST_TIMEOUT_MS = 15000;
-  const MAX_REDIRECTS = 5;
+  const MAX_RETRY_ATTEMPTS = 3;
 
   const copyFromLocalPath = async (targetUrl: string): Promise<void> => {
     let srcPath = targetUrl;
@@ -289,86 +287,125 @@ function downloadImage(url: string, dest: string): Promise<void> {
     await fs.copy(decodeURIComponent(srcPath), dest);
   };
 
-  const requestRemote = async (targetUrl: string, redirectCount = 0): Promise<void> => {
-    await new Promise<void>((resolve, reject) => {
-      const client = targetUrl.startsWith("https") ? https : http;
-      const file = fs.createWriteStream(dest);
+  const isRetryableDownloadError = (error: Error): boolean => {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      code === "ECONNABORTED" ||
+      code === "EAI_AGAIN" ||
+      code === "EPIPE" ||
+      code === "ENETUNREACH"
+    ) {
+      return true;
+    }
+    return /socket hang up|timeout|network/i.test(error.message);
+  };
 
-      const cleanup = () => {
-        fs.unlink(dest, () => { });
-      };
-
-      const fail = (error: Error) => {
-        file.destroy();
-        cleanup();
-        reject(error);
-      };
-
-      const request = client.get(
-        targetUrl,
-        {
-          timeout: REQUEST_TIMEOUT_MS,
-          headers: {
-            // 某些站点（例如 twitter 图片 CDN）会基于 UA 做拦截
-            "User-Agent": "Mozilla/5.0 LookBack/1.0",
-          },
-        },
-        (response) => {
-          const statusCode = response.statusCode ?? 0;
-          const locationHeader = response.headers.location;
-
-          if (
-            statusCode >= 300 &&
-            statusCode < 400 &&
-            typeof locationHeader === "string"
-          ) {
-            file.close();
-            cleanup();
-            response.resume();
-            if (redirectCount >= MAX_REDIRECTS) {
-              reject(new Error("Too many redirects"));
-              return;
-            }
-            const nextUrl = new URL(locationHeader, targetUrl).toString();
-            void requestRemote(nextUrl, redirectCount + 1).then(resolve).catch(reject);
-            return;
-          }
-
-          if (statusCode !== 200) {
-            file.close();
-            cleanup();
-            response.resume();
-            reject(
-              new Error(`Server responded with ${statusCode}: ${response.statusMessage}`)
-            );
-            return;
-          }
-
-          response.pipe(file);
-          file.on("finish", () => {
-            file.close();
-            resolve();
-          });
+  const normalizeRemoteUrl = (rawUrl: string): string => {
+    try {
+      const parsed = new URL(rawUrl);
+      // X/Twitter 拖拽经常只给 media path，补齐参数后稳定命中原图。
+      if (
+        parsed.hostname === "pbs.twimg.com" &&
+        parsed.pathname.startsWith("/media/")
+      ) {
+        if (!parsed.searchParams.has("name")) {
+          parsed.searchParams.set("name", "orig");
         }
-      );
+        if (!parsed.searchParams.has("format")) {
+          const ext = path.extname(parsed.pathname).replace(".", "");
+          if (ext) {
+            parsed.searchParams.set("format", ext);
+          }
+        }
+      }
+      return parsed.toString();
+    } catch {
+      return rawUrl;
+    }
+  };
 
-      request.on("timeout", () => {
-        request.destroy(new Error("Download timeout"));
+  const requestRemoteOnce = async (targetUrl: string): Promise<void> => {
+    const referer = (() => {
+      try {
+        return new URL(targetUrl).origin;
+      } catch {
+        return "";
+      }
+    })();
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, REQUEST_TIMEOUT_MS);
+    try {
+      const response = await net.fetch(targetUrl, {
+        method: "GET",
+        redirect: "follow",
+        signal: abortController.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 LookBack/1.0",
+          Accept:
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          ...(referer ? { Referer: `${referer}/` } : {}),
+          Connection: "close",
+        },
       });
-      request.on("error", (err) => {
-        fail(err);
-      });
-      file.on("error", (err) => {
-        request.destroy(err);
-        fail(err);
-      });
-    });
+      if (!response.ok) {
+        throw new Error(
+          `Server responded with ${response.status}: ${response.statusText}`
+        );
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await fs.writeFile(dest, buffer);
+    } catch (error) {
+      void fs.remove(dest).catch(() => void 0);
+      if (
+        error instanceof Error &&
+        (error.name === "AbortError" || /aborted/i.test(error.message))
+      ) {
+        throw new Error("Download timeout");
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  const requestRemote = async (targetUrl: string): Promise<void> => {
+    const normalizedUrl = normalizeRemoteUrl(targetUrl);
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        console.info("[temp][download] attempt", {
+          attempt,
+          targetUrl: normalizedUrl,
+        });
+        await requestRemoteOnce(normalizedUrl);
+        return;
+      } catch (error) {
+        const normalized =
+          error instanceof Error ? error : new Error(String(error));
+        lastError = normalized;
+        const shouldRetry =
+          attempt < MAX_RETRY_ATTEMPTS &&
+          isRetryableDownloadError(normalized);
+        if (!shouldRetry) break;
+        await new Promise((resolve) => {
+          setTimeout(resolve, attempt * 250);
+        });
+      }
+    }
+    throw lastError ?? new Error("Download failed");
   };
 
   if (url.startsWith("file://") || url.startsWith("/")) {
     return copyFromLocalPath(url);
   }
-  return requestRemote(url, 0);
+  return requestRemote(url);
 }
 
 const listenOnAvailablePort = (

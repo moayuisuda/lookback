@@ -62,6 +62,29 @@ const createDroppedImageMeta = (file: {
   };
 };
 
+type DownloadUrlResponse = {
+  success?: boolean;
+  filename?: string;
+  path?: string;
+  width?: number;
+  height?: number;
+  dominantColor?: string | null;
+  tone?: string | null;
+  error?: string;
+};
+
+const getDownloadUrlErrorMessage = async (resp: Response): Promise<string> => {
+  try {
+    const payload = (await resp.json()) as DownloadUrlResponse;
+    if (typeof payload.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+  } catch {
+    // ignore invalid body and fallback to status code
+  }
+  return `HTTP ${resp.status}`;
+};
+
 type CanvasItemsLayerProps = {
   items: readonly Snapshot<CanvasItem>[];
   onDragStart: (
@@ -498,31 +521,31 @@ export const Canvas: React.FC = () => {
                   canvasName: canvasSnap.currentCanvasName,
                 }),
               });
-              if (resp.ok) {
-                const result = (await resp.json()) as {
-                  success?: boolean;
-                  filename?: string;
-                  path?: string;
-                  width?: number;
-                  height?: number;
-                  dominantColor?: string | null;
-                  tone?: string | null;
-                };
-                if (result.success && result.filename && result.path) {
-                  const meta = createDroppedImageMeta({
-                    path: result.path,
-                    storedFilename: result.path,
-                    originalName: result.filename,
-                    dominantColor: result.dominantColor ?? null,
-                    tone: result.tone ?? null,
-                    width: result.width || 0,
-                    height: result.height || 0,
-                  });
-                  canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
-                }
+              if (!resp.ok) {
+                throw new Error(await getDownloadUrlErrorMessage(resp));
+              }
+              const result = (await resp.json()) as DownloadUrlResponse;
+              if (result.success && result.filename && result.path) {
+                const meta = createDroppedImageMeta({
+                  path: result.path,
+                  storedFilename: result.path,
+                  originalName: result.filename,
+                  dominantColor: result.dominantColor ?? null,
+                  tone: result.tone ?? null,
+                  width: result.width || 0,
+                  height: result.height || 0,
+                });
+                canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
+              } else {
+                throw new Error("Invalid download response");
               }
             } catch (err) {
               console.error("URL drop error", err);
+              const message = err instanceof Error ? err.message : String(err);
+              globalActions.pushToast(
+                { key: "toast.canvasUrlImportFailed", params: { error: message } },
+                "error",
+              );
             }
           }
           return;

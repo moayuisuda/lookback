@@ -154,6 +154,7 @@ export const zh = {
   'toast.commandDeleted': '命令已删除',
   'toast.commandDeleteFailed': '删除命令失败: {{error}}',
   'toast.loadRunningAppsFailed': '加载应用列表失败：{{error}}',
+  'toast.canvasUrlImportFailed': '网页图片导入失败：{{error}}',
 
   'envInit.brandTitle': 'Oh, Captain!',
   'envInit.heading': '正在配置 Python 环境…',

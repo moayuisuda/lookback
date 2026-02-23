@@ -101,8 +101,6 @@ var import_express7 = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
 var import_body_parser = __toESM(require("body-parser"), 1);
 var import_fs_extra6 = __toESM(require("fs-extra"), 1);
-var import_https = __toESM(require("https"), 1);
-var import_http = __toESM(require("http"), 1);
 var import_node_crypto2 = require("crypto");
 var import_radash = require("radash");
 
@@ -477,6 +475,15 @@ var import_sharp = __toESM(require("sharp"), 1);
 var createTempRouter = (deps) => {
   const router = import_express5.default.Router();
   const getAssetsDir = (canvasName) => deps.getCanvasAssetsDir(canvasName || "Default");
+  const createRequestId = () => `durl_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+  const normalizeLogUrl = (rawUrl) => {
+    try {
+      const parsed = new URL(rawUrl);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return rawUrl;
+    }
+  };
   const resolveUniqueFilename = async (assetsDir, desired) => {
     return withFileLock(assetsDir, async () => {
       const parsed = import_path5.default.parse(desired);
@@ -490,6 +497,14 @@ var createTempRouter = (deps) => {
     });
   };
   router.post("/api/download-url", async (req, res) => {
+    const requestId = createRequestId();
+    const startedAt = Date.now();
+    let stage = "validate-input";
+    let lockWaitMs = 0;
+    let downloadMs = 0;
+    let metadataMs = 0;
+    let dominantColorMs = 0;
+    let toneMs = 0;
     try {
       const { url, canvasName } = req.body;
       if (!url || typeof url !== "string") {
@@ -501,6 +516,10 @@ var createTempRouter = (deps) => {
         res.status(400).json({ error: "Invalid URL" });
         return;
       }
+      console.info(`[temp][download-url][${requestId}] start`, {
+        canvasName: canvasName || "Default",
+        url: normalizeLogUrl(trimmedUrl)
+      });
       let urlFilename = "image.jpg";
       try {
         const urlObj = new URL(trimmedUrl);
@@ -517,24 +536,57 @@ var createTempRouter = (deps) => {
       const timestamp = Date.now();
       const filename = `${safeName}_${timestamp}${ext}`;
       const assetsDir = getAssetsDir(canvasName);
+      stage = "ensure-assets-dir";
       await import_fs_extra5.default.ensureDir(assetsDir);
+      stage = "resolve-unique-filename";
       const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
       const filepath = import_path5.default.join(assetsDir, uniqueFilename);
       let width = 0;
       let height = 0;
       let dominantColor = null;
       let tone = null;
+      stage = "wait-file-locks";
+      const lockRequestedAt = Date.now();
       await withFileLocks([assetsDir, filepath], async () => {
+        lockWaitMs = Date.now() - lockRequestedAt;
+        console.info(`[temp][download-url][${requestId}] lock-acquired`, {
+          lockWaitMs,
+          file: uniqueFilename
+        });
+        stage = "download-image";
+        const downloadStartedAt = Date.now();
         await deps.downloadImage(trimmedUrl, filepath);
+        downloadMs = Date.now() - downloadStartedAt;
         try {
+          stage = "read-metadata";
+          const metadataStartedAt = Date.now();
           const metadata = await (0, import_sharp.default)(filepath).metadata();
+          metadataMs = Date.now() - metadataStartedAt;
           width = metadata.width || 0;
           height = metadata.height || 0;
         } catch (e) {
           console.error("Failed to read image metadata", e);
         }
+        stage = "analyze-dominant-color";
+        const dominantStartedAt = Date.now();
         dominantColor = await deps.getDominantColor(filepath);
+        dominantColorMs = Date.now() - dominantStartedAt;
+        stage = "analyze-tone";
+        const toneStartedAt = Date.now();
         tone = await deps.getTone(filepath);
+        toneMs = Date.now() - toneStartedAt;
+      });
+      stage = "complete";
+      console.info(`[temp][download-url][${requestId}] success`, {
+        elapsedMs: Date.now() - startedAt,
+        lockWaitMs,
+        downloadMs,
+        metadataMs,
+        dominantColorMs,
+        toneMs,
+        width,
+        height,
+        file: uniqueFilename
       });
       res.json({
         success: true,
@@ -547,6 +599,16 @@ var createTempRouter = (deps) => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error(`[temp][download-url][${requestId}] failed`, {
+        stage,
+        elapsedMs: Date.now() - startedAt,
+        lockWaitMs,
+        downloadMs,
+        metadataMs,
+        dominantColorMs,
+        toneMs,
+        error: message
+      });
       res.status(500).json({ error: message });
     }
   });
@@ -1022,11 +1084,8 @@ var DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageGene.jsx",
   "imageSearch.jsx",
-<<<<<<< HEAD
-  // "multiSearch.jsx",
-=======
-  "copySelectedImageToClipboard.jsx",
->>>>>>> 4baa94e656124cc816364e43a29bf581096abf9a
+  "multiSearch.jsx",
+  // "copySelectedImageToClipboard.jsx",
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
   "stitchExport.jsx"
@@ -1171,7 +1230,7 @@ var cleanupCanvasAssets = async () => {
 };
 function downloadImage(url, dest) {
   const REQUEST_TIMEOUT_MS = 15e3;
-  const MAX_REDIRECTS = 5;
+  const MAX_RETRY_ATTEMPTS = 3;
   const copyFromLocalPath = async (targetUrl) => {
     let srcPath = targetUrl;
     if (targetUrl.startsWith("file://")) {
@@ -1182,75 +1241,101 @@ function downloadImage(url, dest) {
     }
     await import_fs_extra6.default.copy(decodeURIComponent(srcPath), dest);
   };
-  const requestRemote = async (targetUrl, redirectCount = 0) => {
-    await new Promise((resolve, reject) => {
-      const client = targetUrl.startsWith("https") ? import_https.default : import_http.default;
-      const file = import_fs_extra6.default.createWriteStream(dest);
-      const cleanup = () => {
-        import_fs_extra6.default.unlink(dest, () => {
-        });
-      };
-      const fail = (error) => {
-        file.destroy();
-        cleanup();
-        reject(error);
-      };
-      const request = client.get(
-        targetUrl,
-        {
-          timeout: REQUEST_TIMEOUT_MS,
-          headers: {
-            // 某些站点（例如 twitter 图片 CDN）会基于 UA 做拦截
-            "User-Agent": "Mozilla/5.0 LookBack/1.0"
-          }
-        },
-        (response) => {
-          const statusCode = response.statusCode ?? 0;
-          const locationHeader = response.headers.location;
-          if (statusCode >= 300 && statusCode < 400 && typeof locationHeader === "string") {
-            file.close();
-            cleanup();
-            response.resume();
-            if (redirectCount >= MAX_REDIRECTS) {
-              reject(new Error("Too many redirects"));
-              return;
-            }
-            const nextUrl = new URL(locationHeader, targetUrl).toString();
-            void requestRemote(nextUrl, redirectCount + 1).then(resolve).catch(reject);
-            return;
-          }
-          if (statusCode !== 200) {
-            file.close();
-            cleanup();
-            response.resume();
-            reject(
-              new Error(`Server responded with ${statusCode}: ${response.statusMessage}`)
-            );
-            return;
-          }
-          response.pipe(file);
-          file.on("finish", () => {
-            file.close();
-            resolve();
-          });
+  const isRetryableDownloadError = (error) => {
+    const code = error.code;
+    if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNABORTED" || code === "EAI_AGAIN" || code === "EPIPE" || code === "ENETUNREACH") {
+      return true;
+    }
+    return /socket hang up|timeout|network/i.test(error.message);
+  };
+  const normalizeRemoteUrl = (rawUrl) => {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.hostname === "pbs.twimg.com" && parsed.pathname.startsWith("/media/")) {
+        if (!parsed.searchParams.has("name")) {
+          parsed.searchParams.set("name", "orig");
         }
-      );
-      request.on("timeout", () => {
-        request.destroy(new Error("Download timeout"));
+        if (!parsed.searchParams.has("format")) {
+          const ext = import_path7.default.extname(parsed.pathname).replace(".", "");
+          if (ext) {
+            parsed.searchParams.set("format", ext);
+          }
+        }
+      }
+      return parsed.toString();
+    } catch {
+      return rawUrl;
+    }
+  };
+  const requestRemoteOnce = async (targetUrl) => {
+    const referer = (() => {
+      try {
+        return new URL(targetUrl).origin;
+      } catch {
+        return "";
+      }
+    })();
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, REQUEST_TIMEOUT_MS);
+    try {
+      const response = await import_electron.net.fetch(targetUrl, {
+        method: "GET",
+        redirect: "follow",
+        signal: abortController.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 LookBack/1.0",
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          ...referer ? { Referer: `${referer}/` } : {},
+          Connection: "close"
+        }
       });
-      request.on("error", (err) => {
-        fail(err);
-      });
-      file.on("error", (err) => {
-        request.destroy(err);
-        fail(err);
-      });
-    });
+      if (!response.ok) {
+        throw new Error(
+          `Server responded with ${response.status}: ${response.statusText}`
+        );
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await import_fs_extra6.default.writeFile(dest, buffer);
+    } catch (error) {
+      void import_fs_extra6.default.remove(dest).catch(() => void 0);
+      if (error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message))) {
+        throw new Error("Download timeout");
+      }
+      throw error instanceof Error ? error : new Error(String(error));
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+  const requestRemote = async (targetUrl) => {
+    const normalizedUrl = normalizeRemoteUrl(targetUrl);
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        console.info("[temp][download] attempt", {
+          attempt,
+          targetUrl: normalizedUrl
+        });
+        await requestRemoteOnce(normalizedUrl);
+        return;
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        lastError = normalized;
+        const shouldRetry = attempt < MAX_RETRY_ATTEMPTS && isRetryableDownloadError(normalized);
+        if (!shouldRetry) break;
+        await new Promise((resolve) => {
+          setTimeout(resolve, attempt * 250);
+        });
+      }
+    }
+    throw lastError ?? new Error("Download failed");
   };
   if (url.startsWith("file://") || url.startsWith("/")) {
     return copyFromLocalPath(url);
   }
-  return requestRemote(url, 0);
+  return requestRemote(url);
 }
 var listenOnAvailablePort = (appServer, startPort) => new Promise((resolve, reject) => {
   const tryListen = (port) => {
@@ -1659,6 +1744,7 @@ var en = {
   "toast.commandDeleted": "Command deleted",
   "toast.commandDeleteFailed": "Failed to delete command: {{error}}",
   "toast.loadRunningAppsFailed": "Failed to load app list: {{error}}",
+  "toast.canvasUrlImportFailed": "Failed to import web image: {{error}}",
   "indexing.starting": "Starting...",
   "indexing.progress": "Indexing {{current}}/{{total}}...",
   "indexing.completed": "Completed",
@@ -1916,6 +2002,7 @@ var zh = {
   "toast.commandDeleted": "\u547D\u4EE4\u5DF2\u5220\u9664",
   "toast.commandDeleteFailed": "\u5220\u9664\u547D\u4EE4\u5931\u8D25: {{error}}",
   "toast.loadRunningAppsFailed": "\u52A0\u8F7D\u5E94\u7528\u5217\u8868\u5931\u8D25\uFF1A{{error}}",
+  "toast.canvasUrlImportFailed": "\u7F51\u9875\u56FE\u7247\u5BFC\u5165\u5931\u8D25\uFF1A{{error}}",
   "envInit.brandTitle": "Oh, Captain!",
   "envInit.heading": "\u6B63\u5728\u914D\u7F6E Python \u73AF\u5883\u2026",
   "envInit.subheading": "\u9996\u6B21\u8FD0\u884C\u53EF\u80FD\u4F1A\u4E0B\u8F7D\u5DE5\u5177\u5E76\u5B89\u88C5\u4F9D\u8D56\uFF0C\u8FD9\u662F\u4E00\u6B21\u6027\u6B65\u9AA4\u3002",
