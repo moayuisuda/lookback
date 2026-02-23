@@ -13,7 +13,7 @@ export type FeatureItem = {
 export const FEATURE_LIST: FeatureItem[] = [
   {
     id: 0,
-    image: '/autoLayout.jpg',
+    image: '/autoLayout.webp',
     layout: 'xl',
     titleKey: 'feature.0.title',
     descKey: 'feature.0.desc',
@@ -21,7 +21,7 @@ export const FEATURE_LIST: FeatureItem[] = [
   },
   {
     id: 2,
-    image: '/anchor.gif',
+    image: '/anchor.webp',
     layout: 'tall',
     titleKey: 'feature.2.title',
     descKey: 'feature.2.desc',
@@ -29,7 +29,7 @@ export const FEATURE_LIST: FeatureItem[] = [
   },
   {
     id: 1,
-    image: '/plugins.jpg',
+    image: '/plugins.webp',
     layout: 'compact',
     titleKey: 'feature.1.title',
     descKey: 'feature.1.desc',
@@ -37,14 +37,14 @@ export const FEATURE_LIST: FeatureItem[] = [
   },
   {
     id: 3,
-    image: '/image-gene.jpg',
+    image: '/image-gene.webp',
     layout: 'wide',
     titleKey: 'feature.3.title',
     descKey: 'feature.3.desc',
   },
   {
     id: 6,
-    image: '/on-top.jpg',
+    image: '/on-top.webp',
     layout: 'compact',
     titleKey: 'feature.6.title',
     descKey: 'feature.6.desc',
@@ -52,14 +52,14 @@ export const FEATURE_LIST: FeatureItem[] = [
   },
   {
     id: 5,
-    image: '/image-search.jpg',
+    image: '/image-search.webp',
     layout: 'wide',
     titleKey: 'feature.5.title',
     descKey: 'feature.5.desc',
   },
   {
     id: 4,
-    image: '/moreway-import.jpg',
+    image: '/moreway-import.webp',
     layout: 'compact',
     titleKey: 'feature.4.title',
     descKey: 'feature.4.desc',

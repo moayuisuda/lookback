@@ -149,15 +149,15 @@ function App() {
                 <div className="stage-orbit stage-orbit-b" />
                 <div className="stage-card stage-main">
                   <img
-                    src="/autoLayout.jpg"
+                    src="/autoLayout.webp"
                     alt={t("features.imageAlt", { index: 1 })}
                   />
                 </div>
                 <div className="stage-card stage-secondary">
-                  <img src="/stitch-export.jpg" alt={t("hero.previewAlt")} />
+                  <img src="/stitch-export.webp" alt={t("hero.previewAlt")} />
                 </div>
                 <div className="stage-card stage-tertiary">
-                  <img src="/image-search.jpg" alt={t("hero.searchAlt")} />
+                  <img src="/image-search.webp" alt={t("hero.searchAlt")} />
                 </div>
               </div>
             </section>
