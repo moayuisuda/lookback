@@ -1028,13 +1028,13 @@ var import_adm_zip = __toESM(require("adm-zip"), 1);
 var DEFAULT_COMMAND_FILES = [
   "addText.jsx",
   "canvasImportExport.jsx",
-  "imageGene.jsx",
   "imageSearch.jsx",
+  "stitchExport.jsx"
+  // "imageGene.jsx",
   // "multiSearch.jsx",
   // "copySelectedImageToClipboard.jsx",
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
-  "stitchExport.jsx"
 ];
 
 // backend/server.ts

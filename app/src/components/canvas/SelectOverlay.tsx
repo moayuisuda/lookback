@@ -4,6 +4,7 @@ import {
   type CanvasItem,
   getRenderBbox,
 } from "../../store/canvasStore";
+import { globalState } from "../../store/globalStore";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";
 import { CANVAS_ICONS } from "./CanvasIcons";
@@ -83,6 +84,11 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   onCommitItem,
 }) => {
   const canvasSnap = useSnapshot(canvasState);
+  const globalSnap = useSnapshot(globalState);
+
+  // In ghost mode (mouse through), we should not show the selection overlay
+  if (globalSnap.mouseThrough) return null;
+
   if (isSelectionBoxActive) return null;
 
   const selectedItems = canvasSnap.canvasItems.filter((item) => item.isSelected);

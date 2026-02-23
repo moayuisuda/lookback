@@ -577,7 +577,7 @@ export const config = {
   id: "imageGene",
   i18n: {
     en: {
-      "command.imageGene.title": "Image Gene (Built-in)",
+      "command.imageGene.title": "Image Gene",
       "command.imageGene.description": "Analyze palette, lightness and chroma distributions",
       "command.imageGene.empty": "Select one or more images first",
       "command.imageGene.loading": "Analyzing image gene...",
@@ -604,7 +604,7 @@ export const config = {
       "command.imageGene.highlightClip": "Highlight Clip",
     },
     zh: {
-      "command.imageGene.title": "图像基因（内置）",
+      "command.imageGene.title": "图像基因",
       "command.imageGene.description": "分析调色板、亮度及色度分布",
       "command.imageGene.empty": "请先选中一张或多张图片",
       "command.imageGene.loading": "正在分析图片基因…",

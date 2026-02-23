@@ -1735,11 +1735,13 @@ export const Canvas: React.FC = () => {
             onScaleStartItem={handleItemScaleStart}
             onCommitItem={handleCommitItem}
           />
-          <SelectionRect
-            selectionBox={selectionBox}
-            stageScale={stageScale}
-            isZoomMode={selectionMode === "zoom"}
-          />
+          {!shouldEnableMouseThrough && (
+            <SelectionRect
+              selectionBox={selectionBox}
+              stageScale={stageScale}
+              isZoomMode={selectionMode === "zoom"}
+            />
+          )}
         </g>
       </svg>
       {showMinimap && !shouldEnableMouseThrough && <Minimap />}
