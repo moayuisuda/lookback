@@ -350,6 +350,45 @@ const persistCanvasViewport = async (viewport: CanvasViewport) => {
   }
 };
 
+const cloneCanvasItem = (item: CanvasItem): CanvasItem =>
+  JSON.parse(JSON.stringify(item)) as CanvasItem;
+
+const syncCanvasItem = (target: CanvasItem, source: CanvasItem) => {
+  const targetRecord = target as unknown as Record<string, unknown>;
+  const sourceRecord = source as unknown as Record<string, unknown>;
+
+  // 先删掉目标上多余字段，避免 text/image 结构切换后遗留脏字段。
+  Object.keys(targetRecord).forEach((key) => {
+    if (!(key in sourceRecord)) {
+      delete targetRecord[key];
+    }
+  });
+
+  // 再整体覆盖当前快照字段，保证历史回放结果唯一。
+  Object.entries(sourceRecord).forEach(([key, value]) => {
+    targetRecord[key] = value;
+  });
+};
+
+const mergeToItems = (nextItemsInput: CanvasItem[]) => {
+  const currentById = new Map(
+    canvasState.canvasItems.map((item) => [item.itemId, item] as const),
+  );
+
+  const nextItems = nextItemsInput.map((nextItem) => {
+    const source = cloneCanvasItem(nextItem);
+    const current = currentById.get(source.itemId);
+    if (!current || current.type !== source.type) {
+      return source;
+    }
+    syncCanvasItem(current, source);
+    return current;
+  });
+
+  // 保持数组 proxy 身份稳定，避免组件订阅在替换时丢失。
+  canvasState.canvasItems.splice(0, canvasState.canvasItems.length, ...nextItems);
+};
+
 const debouncedPersistCanvasViewport = debounce(
   { delay: 500 },
   persistCanvasViewport,
@@ -510,7 +549,7 @@ export const canvasActions = {
         }
       });
 
-      canvasState.canvasItems = reconstructed;
+      mergeToItems(reconstructed);
       canvasState.canvasHistory = [
         snapshot(canvasState).canvasItems as CanvasItem[],
       ];
@@ -528,7 +567,7 @@ export const canvasActions = {
       }
     } catch (error) {
       void error;
-      canvasState.canvasItems = [];
+      mergeToItems([]);
       canvasState.canvasHistory = [[]];
       canvasState.canvasHistoryIndex = 0;
     }
@@ -549,7 +588,7 @@ export const canvasActions = {
     await settingStorage.set("lastActiveCanvas", name);
 
     // Clear state
-    canvasState.canvasItems = [];
+    mergeToItems([]);
     canvasState.canvasHistory = [[]];
     canvasState.canvasHistoryIndex = 0;
 
@@ -587,10 +626,9 @@ export const canvasActions = {
     if (canvasState.canvasHistoryIndex > 0) {
       canvasState.canvasHistoryIndex--;
       const snap = snapshot(canvasState);
-      canvasState.canvasItems = JSON.parse(
-        JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
-      ) as CanvasItem[];
-      console.log("undo", canvasState.canvasItems);
+      mergeToItems(
+        snap.canvasHistory[canvasState.canvasHistoryIndex] as CanvasItem[],
+      );
       canvasActions.clearSelectionState();
       void persistCanvasItems(canvasState.canvasItems);
     }
@@ -600,9 +638,9 @@ export const canvasActions = {
     if (canvasState.canvasHistoryIndex < canvasState.canvasHistory.length - 1) {
       canvasState.canvasHistoryIndex++;
       const snap = snapshot(canvasState);
-      canvasState.canvasItems = JSON.parse(
-        JSON.stringify(snap.canvasHistory[canvasState.canvasHistoryIndex]),
-      ) as CanvasItem[];
+      mergeToItems(
+        snap.canvasHistory[canvasState.canvasHistoryIndex] as CanvasItem[],
+      );
       canvasActions.clearSelectionState();
       void persistCanvasItems(canvasState.canvasItems);
     }
@@ -811,18 +849,20 @@ export const canvasActions = {
   removeManyFromCanvas: (canvasIds: string[]) => {
     if (!canvasIds.length) return;
     const idSet = new Set(canvasIds);
-    canvasState.canvasItems = canvasState.canvasItems.filter(
+    const nextItems = canvasState.canvasItems.filter(
       (img) => !idSet.has(img.itemId),
     );
+    mergeToItems(nextItems);
     canvasActions.commitCanvasChange();
   },
 
   removeImageFromCanvas: (imageId: string) => {
     const prevLen = canvasState.canvasItems.length;
-    canvasState.canvasItems = canvasState.canvasItems.filter((img) => {
+    const nextItems = canvasState.canvasItems.filter((img) => {
       if (img.type === "text") return true;
       return img.id !== imageId;
     });
+    mergeToItems(nextItems);
     if (canvasState.canvasItems.length !== prevLen) {
       canvasActions.commitCanvasChange();
     }
@@ -885,7 +925,7 @@ export const canvasActions = {
   clearCanvas: () => {
     if (canvasState.canvasItems.length === 0) return;
 
-    canvasState.canvasItems = [];
+    mergeToItems([]);
     canvasActions.commitCanvasChange();
   },
 
