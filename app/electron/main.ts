@@ -393,6 +393,7 @@ function startPinByAppWatcherWin32() {
     "public static class WinZOrder {",
     '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
     '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+    '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);',
     '  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
     "}",
     '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
@@ -400,7 +401,11 @@ function startPinByAppWatcherWin32() {
     `$target = "${pinTargetApp}";`,
     "$TOPMOST = [IntPtr](-1);",
     "$NOTOPMOST = [IntPtr](-2);",
+    "$GW_HWNDPREV = 3;",
     "$SWP = 0x0013;",
+    "$lastName = '';",
+    "$isTopmost = $false;",
+    "$restoreAfter = [IntPtr]::Zero;",
     "while ($true) {",
     "  $fgHwnd = [WinZOrder]::GetForegroundWindow();",
     "  if ($fgHwnd -ne [IntPtr]::Zero) {",
@@ -410,12 +415,20 @@ function startPinByAppWatcherWin32() {
     "      $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue;",
     "      if ($null -ne $proc) {",
     "        $name = $proc.ProcessName;",
-    "        if ($name.ToLower() -eq $target.ToLower()) {",
+    "        $shouldPin = $name.ToLower() -eq $target.ToLower();",
+    "        if ($shouldPin -and -not $isTopmost) {",
+    "          $restoreAfter = [WinZOrder]::GetWindow($ourHwnd, $GW_HWNDPREV);",
     "          [WinZOrder]::SetWindowPos($ourHwnd, $TOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "          [Console]::WriteLine($name);",
-    "        } else {",
+    "          $isTopmost = $true;",
+    "        } elseif (-not $shouldPin -and $isTopmost) {",
     "          [WinZOrder]::SetWindowPos($ourHwnd, $NOTOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "          [WinZOrder]::SetWindowPos($ourHwnd, $fgHwnd, 0, 0, 0, 0, $SWP) | Out-Null;",
+    "          $isTopmost = $false;",
+    "          if ($fgHwnd -ne $ourHwnd -and $restoreAfter -ne [IntPtr]::Zero) {",
+    "            [WinZOrder]::SetWindowPos($ourHwnd, $restoreAfter, 0, 0, 0, 0, $SWP) | Out-Null;",
+    "          }",
+    "        }",
+    "        if ($name -ne $lastName) {",
+    "          $lastName = $name;",
     "          [Console]::WriteLine($name);",
     "        }",
     "      }",
@@ -449,7 +462,6 @@ function startPinByAppWatcherWin32() {
 
     if (shouldPin !== isPinByAppActive) {
       isPinByAppActive = shouldPin;
-      mainWindow.setAlwaysOnTop(shouldPin, shouldPin ? getPinAlwaysOnTopLevel() : undefined);
       mainWindow.setVisibleOnAllWorkspaces(false);
       syncWindowShadow();
     }
