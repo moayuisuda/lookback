@@ -870,6 +870,7 @@ export const canvasActions = {
 
     const rectMap = new Map(rects.map((r) => [r.id, r]));
 
+    console.log("nihao");
     canvasState.canvasItems.forEach((item) => {
       const r = rectMap.get(item.itemId);
       if (r && typeof r.x === "number" && typeof r.y === "number") {

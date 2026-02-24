@@ -312,16 +312,6 @@ export const Canvas: React.FC = () => {
     canvasState.canvasItems.filter((item) => item.isSelected),
   );
 
-  const getSelectedCount = useMemoizedFn(() => {
-    let count = 0;
-    canvasState.canvasItems.forEach((item) => {
-      if (item.isSelected) {
-        count += 1;
-      }
-    });
-    return count;
-  });
-
   const setSelectionByIds = useMemoizedFn((ids: Set<string>) => {
     canvasState.canvasItems.forEach((item) => {
       item.isSelected = ids.has(item.itemId);
@@ -543,7 +533,10 @@ export const Canvas: React.FC = () => {
               console.error("URL drop error", err);
               const message = err instanceof Error ? err.message : String(err);
               globalActions.pushToast(
-                { key: "toast.canvasUrlImportFailed", params: { error: message } },
+                {
+                  key: "toast.canvasUrlImportFailed",
+                  params: { error: message },
+                },
                 "error",
               );
             }
@@ -564,13 +557,13 @@ export const Canvas: React.FC = () => {
           metas.length > 1
             ? canvasActions.addManyImagesToCanvasCentered(metas, basePoint)
             : (() => {
-              const id = canvasActions.addToCanvas(
-                metas[0],
-                basePoint.x,
-                basePoint.y,
-              );
-              return id ? [id] : [];
-            })();
+                const id = canvasActions.addToCanvas(
+                  metas[0],
+                  basePoint.x,
+                  basePoint.y,
+                );
+                return id ? [id] : [];
+              })();
 
         if (newIds.length > 0) {
           const newSet = new Set(newIds);
@@ -1046,8 +1039,7 @@ export const Canvas: React.FC = () => {
 
       const isClick = width <= 2 && height <= 2;
       const viewportScale = canvasState.canvasViewport.scale || 1;
-      const zoomArea =
-        width * height * viewportScale * viewportScale;
+      const zoomArea = width * height * viewportScale * viewportScale;
       const shouldZoom = zoomArea >= MIN_ZOOM_AREA;
 
       if (canvasState.selectionMode === "zoom") {
@@ -1263,51 +1255,7 @@ export const Canvas: React.FC = () => {
     clearSelection();
   });
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable
-      ) {
-        return;
-      }
-
-      // Undo: Ctrl+Z / Cmd+Z
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "z") {
-        e.preventDefault();
-        canvasActions.undoCanvas();
-        clearSelection();
-        return;
-      }
-
-      // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Z") {
-        e.preventDefault();
-        canvasActions.redoCanvas();
-        clearSelection();
-        return;
-      }
-
-      if (
-        (e.key === "Delete" || e.key === "Backspace") &&
-        getSelectedCount() > 0
-      ) {
-        canvasActions.removeManyFromCanvas(Array.from(getSelectedIds()));
-        clearSelection();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    clearSelection,
-    closeContextMenu,
-    getSelectedCount,
-    getSelectedIds,
-    setMultiSelectUnion,
-    setPrimaryId,
-  ]);
+  // Cleanup: removed manual keydown for undo/redo/delete as they are handled by useHotkeys
 
   const handleDragStart = useMemoizedFn(
     (id: string, client: { clientX: number; clientY: number }) => {
@@ -1331,7 +1279,9 @@ export const Canvas: React.FC = () => {
       const snapshots = new Map<string, { x: number; y: number }>();
       currentSelected.forEach((selectedId) => {
         // 从 proxy 读取最新位置，避免 snapshot 未刷新导致第二次拖拽漂移
-        const target = canvasState.canvasItems.find((it) => it.itemId === selectedId);
+        const target = canvasState.canvasItems.find(
+          (it) => it.itemId === selectedId,
+        );
         if (target) snapshots.set(selectedId, { x: target.x, y: target.y });
       });
       multiDragRef.current = {

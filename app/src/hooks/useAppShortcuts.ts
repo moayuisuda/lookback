@@ -2,11 +2,16 @@ import { useEffect } from "react";
 import { useSnapshot } from "valtio";
 import { useHotkeys } from "react-hotkeys-hook";
 import { globalState, globalActions } from "../store/globalStore";
-import { acceleratorToHotkey, isAcceleratorMatch, parseAccelerator } from "../utils/hotkeys";
+import {
+  acceleratorToHotkey,
+  isAcceleratorMatch,
+  parseAccelerator,
+} from "../utils/hotkeys";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { commandActions, commandState } from "../store/commandStore";
 import { getCommandContext } from "../commands";
 
+import { canvasActions, canvasState } from "../store/canvasStore";
 
 export const useAppShortcuts = () => {
   const snap = useSnapshot(globalState);
@@ -37,6 +42,52 @@ export const useAppShortcuts = () => {
     },
     { preventDefault: true, enabled: Boolean(zoomToFitHotkey) },
     [zoomToFitHotkey],
+  );
+
+  // Canvas Undo / Redo
+  useHotkeys(
+    "mod+z",
+    (e) => {
+      e.preventDefault();
+      canvasActions.undoCanvas();
+      canvasActions.clearSelectionState();
+    },
+    [],
+  );
+
+  useHotkeys(
+    "mod+shift+z, mod+y",
+    (e) => {
+      e.preventDefault();
+      canvasActions.redoCanvas();
+      canvasActions.clearSelectionState();
+    },
+    [],
+  );
+
+  // Canvas Delete
+  useHotkeys(
+    "del, backspace",
+    (e) => {
+      const selectedIds = canvasState.canvasItems
+        .filter((item) => item.isSelected)
+        .map((item) => item.itemId);
+      if (selectedIds.length === 0) return;
+
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      canvasActions.removeManyFromCanvas(selectedIds);
+      canvasActions.clearSelectionState();
+    },
+    [],
   );
 
   useEffect(() => {
@@ -81,7 +132,10 @@ export const useAppShortcuts = () => {
 
   useEffect(() => {
     if (isCommandPaletteOpen) return;
-    const shortcutEntries: Array<{ command: (typeof externalCommands)[number]; accelerator: string }> = [];
+    const shortcutEntries: Array<{
+      command: (typeof externalCommands)[number];
+      accelerator: string;
+    }> = [];
     externalCommands.forEach((command) => {
       const accelerator = externalCommandShortcuts[command.id];
       if (!accelerator || !accelerator.trim()) return;
