@@ -16,7 +16,19 @@
     "compression": "maximum",
     "icon": "resources/icon.png",
     "mac": {
-      "icon": "resources/icon.icns"
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.inherit.plist",
+      "notarize": {
+        "teamId": "${APPLE_TEAM_ID}"
+      }
     },
     "protocols": [
       {
