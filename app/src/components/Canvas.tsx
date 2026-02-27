@@ -290,6 +290,15 @@ export const Canvas: React.FC = () => {
 
   void commandSnap.externalCommands;
   const commands = getCommands();
+  const visibleCommands = useMemo(() => {
+    return commands.filter((command) => {
+      if (command.external) {
+        return commandSnap.externalCommandContextMenus[command.id] !== false;
+      }
+      return true;
+    });
+  }, [commands, commandSnap.externalCommandContextMenus]);
+
   const commandContext = useMemo(() => getCommandContext(), []);
 
   const setIsSpaceDown = useMemoizedFn((value: boolean) => {
@@ -1558,20 +1567,28 @@ export const Canvas: React.FC = () => {
   const globalSnap = useSnapshot(globalState);
   const contextMenuPosition = useMemo(() => {
     const menuWidth = 320;
-    const menuHeight = 360;
     const padding = 8;
     const maxX = Math.max(
       padding,
       (dimensions.width || 0) - menuWidth - padding,
     );
-    const maxY = Math.max(
-      padding,
-      (dimensions.height || 0) - menuHeight - padding,
-    );
-    return {
+
+    const style: React.CSSProperties = {
       left: Math.min(contextMenu.x, maxX),
-      top: Math.min(contextMenu.y, maxY),
     };
+
+    // 如果点击位置靠近底部（阈值 300px），使用 bottom 定位让菜单向上生长
+    const threshold = (dimensions.height || 0) - 300;
+    if (contextMenu.y > threshold) {
+      style.bottom = Math.max(
+        padding,
+        (dimensions.height || 0) - contextMenu.y,
+      );
+    } else {
+      style.top = contextMenu.y;
+    }
+
+    return style;
   }, [contextMenu.x, contextMenu.y, dimensions.height, dimensions.width]);
 
   return (
@@ -1607,12 +1624,12 @@ export const Canvas: React.FC = () => {
             onContextMenu={(e) => e.preventDefault()}
           >
             <div className="max-h-[280px] overflow-y-auto p-2 dark-scrollbar">
-              {commands.length === 0 && (
+              {visibleCommands.length === 0 && (
                 <div className="px-2 py-4 text-xs text-neutral-500">
                   {t("commandPalette.empty")}
                 </div>
               )}
-              {commands.map((command) => {
+              {visibleCommands.map((command) => {
                 const title = getCommandTitle(command, t);
                 const description = getCommandDescription(command, t);
                 return (

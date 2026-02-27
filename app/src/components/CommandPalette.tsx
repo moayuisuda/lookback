@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from "react";
-import { FileUp, Trash2 } from "lucide-react";
+import { FileUp, Trash2, MousePointerClick } from "lucide-react";
 import Input, { type InputRef } from "rc-input";
 import { useSnapshot } from "valtio";
 import { useMemoizedFn } from "ahooks";
@@ -85,6 +85,10 @@ export const CommandPalette: React.FC = () => {
       await commandActions.setExternalCommandShortcut(commandId, accelerator);
     },
   );
+
+  const handleToggleContextMenu = useMemoizedFn(async (commandId: string) => {
+    await commandActions.toggleExternalCommandContextMenu(commandId);
+  });
 
   const handleConfirmDelete = async () => {
     const target = snap.deleteTarget;
@@ -417,6 +421,26 @@ export const CommandPalette: React.FC = () => {
                                   </button>
                                 )}
                               </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleToggleContextMenu(
+                                    result.command.id,
+                                  );
+                                }}
+                                className={clsx(
+                                  "p-1 rounded transition-colors",
+                                  snap.externalCommandContextMenus[
+                                    result.command.id
+                                  ] === false
+                                    ? "text-neutral-600 hover:text-neutral-400 hover:bg-neutral-800"
+                                    : "text-primary hover:text-primary/80 hover:bg-primary/20",
+                                )}
+                                title={t("commandPalette.toggleContextMenu")}
+                              >
+                                <MousePointerClick size={14} />
+                              </button>
                               <button
                                 type="button"
                                 onClick={(e) => {
