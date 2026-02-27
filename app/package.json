@@ -1,6 +1,8 @@
 {
   "name": "pic-captain",
   "productName": "LookBack",
+  "description": "A powerful cross-platform lookback tool",
+  "author": "Haohui An",
   "private": true,
   "license": "AGPL-3.0-only",
   "version": "0.1.27",
