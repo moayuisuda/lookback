@@ -28,7 +28,7 @@
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
       "entitlementsInherit": "entitlements.mac.inherit.plist",
-      "notarize": true
+      "notarize": false
     },
     "protocols": [
       {

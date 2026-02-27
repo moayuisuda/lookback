@@ -67,6 +67,26 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
 
+      - name: Notarize macOS artifacts
+        run: |
+          # 提交 zip 文件公证（Apple 要求 zip 格式提交）
+          ZIP_FILE=$(find dist -name "*-mac.zip" | head -n 1)
+          echo "Notarizing: $ZIP_FILE"
+          xcrun notarytool submit "$ZIP_FILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+          # staple 认证票据到 dmg
+          DMG_FILE=$(find dist -name "*.dmg" | head -n 1)
+          echo "Stapling: $DMG_FILE"
+          xcrun stapler staple "$DMG_FILE"
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
