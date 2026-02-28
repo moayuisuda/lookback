@@ -773,7 +773,7 @@ var isAuthorized = (actual, expected) => {
   return (0, import_node_crypto.timingSafeEqual)(a, b);
 };
 var runShellCommand = (command, args, cwd, timeoutMs) => new Promise((resolve, reject) => {
-  var _a, _b;
+  var _a2, _b;
   const child = (0, import_node_child_process.spawn)(command, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -798,7 +798,7 @@ var runShellCommand = (command, args, cwd, timeoutMs) => new Promise((resolve, r
       }
     }, 1e3);
   }, timeoutMs);
-  (_a = child.stdout) == null ? void 0 : _a.on("data", (chunk) => {
+  (_a2 = child.stdout) == null ? void 0 : _a2.on("data", (chunk) => {
     stdout = appendChunk(stdout, chunk);
   });
   (_b = child.stderr) == null ? void 0 : _b.on("data", (chunk) => {
@@ -2103,6 +2103,24 @@ var import_radash2 = require("radash");
 if (!import_electron2.app.isPackaged) {
   import_electron2.app.setName("LookBack");
 }
+function syncReadIsPinMode() {
+  if (process.platform !== "darwin") return false;
+  try {
+    const settingsPath = import_path8.default.join(
+      import_electron2.app.getPath("userData"),
+      "lookback_storage",
+      "settings.json"
+    );
+    const raw = JSON.parse(import_fs_extra7.default.readFileSync(settingsPath, "utf-8"));
+    return raw && typeof raw === "object" && raw.pinMode === true;
+  } catch {
+    return false;
+  }
+}
+var _a;
+if (syncReadIsPinMode()) {
+  (_a = import_electron2.app.dock) == null ? void 0 : _a.hide();
+}
 Object.assign(console, import_electron_log.default.functions);
 import_electron_log.default.transports.file.level = "info";
 import_electron_log.default.transports.file.maxSize = 5 * 1024 * 1024;
@@ -2262,11 +2280,11 @@ function emitImportToastFailed(errorMessage) {
   });
 }
 function resolveDeepLinkImportUrl(rawUrl) {
-  var _a;
+  var _a2;
   const deepLink = new URL(rawUrl);
   if (deepLink.protocol !== `${LOOKBACK_PROTOCOL_SCHEME}:`) return "";
   if (deepLink.hostname !== LOOKBACK_IMPORT_HOST) return "";
-  return ((_a = deepLink.searchParams.get(LOOKBACK_IMPORT_QUERY_KEY)) == null ? void 0 : _a.trim()) || "";
+  return ((_a2 = deepLink.searchParams.get(LOOKBACK_IMPORT_QUERY_KEY)) == null ? void 0 : _a2.trim()) || "";
 }
 async function handleDeepLink(rawUrl) {
   const importUrl = resolveDeepLinkImportUrl(rawUrl);
@@ -2707,6 +2725,15 @@ function syncWindowShadow() {
   const shouldHaveShadow = !(isPinMode && isPinTransparent);
   mainWindow.setHasShadow(shouldHaveShadow);
 }
+function syncDockVisibility() {
+  var _a2, _b;
+  if (process.platform !== "darwin") return;
+  if (isPinMode) {
+    (_a2 = import_electron2.app.dock) == null ? void 0 : _a2.hide();
+  } else {
+    (_b = import_electron2.app.dock) == null ? void 0 : _b.show();
+  }
+}
 function applyPinStateToWindow() {
   if (!mainWindow) {
     logPinDebug("applyPinStateToWindow skipped: no mainWindow");
@@ -2718,6 +2745,7 @@ function applyPinStateToWindow() {
     pinTargetApp,
     platform: process.platform
   });
+  syncDockVisibility();
   if (!isPinMode) {
     setWindowPinnedToDesktop(false);
     syncWindowShadow();

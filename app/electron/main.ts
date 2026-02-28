@@ -20,6 +20,31 @@ if (!app.isPackaged) {
   app.setName("LookBack");
 }
 
+// 在进程最早期同步读取置顶状态：
+// macOS 在 app 被激活（launch/open）时会在 OS 层面切换 Space，发生在任何异步代码之前。
+// 唯一可靠的拦截点是进程启动时同步调用 app.dock.hide()，
+// 让 macOS 将此 app 视为 accessory 级别（不切 Space、不出现在 Dock）。
+// applyPinStateToWindow 之后会根据实际 pin 状态决定是否恢复 dock。
+function syncReadIsPinMode(): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    const settingsPath = path.join(
+      app.getPath("userData"),
+      "lookback_storage",
+      "settings.json",
+    );
+    const raw = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    return raw && typeof raw === "object" && raw.pinMode === true;
+  } catch {
+    return false;
+  }
+}
+
+if (syncReadIsPinMode()) {
+  // 隐藏 Dock 图标使 app 以 accessory 模式激活，彻底阻止 macOS 切换 Space。
+  app.dock?.hide();
+}
+
 Object.assign(console, log.functions);
 log.transports.file.level = "info";
 // Set max log size to 5MB
@@ -755,6 +780,17 @@ function syncWindowShadow() {
   mainWindow.setHasShadow(shouldHaveShadow);
 }
 
+function syncDockVisibility() {
+  if (process.platform !== "darwin") return;
+  // 置顶模式隐藏 Dock 图标：使 macOS 以 accessory 模式对待此 app，
+  // 切换置顶时不跳回桌面、不切换 Space。
+  if (isPinMode) {
+    app.dock?.hide();
+  } else {
+    app.dock?.show();
+  }
+}
+
 function applyPinStateToWindow() {
   if (!mainWindow) {
     logPinDebug("applyPinStateToWindow skipped: no mainWindow");
@@ -766,6 +802,8 @@ function applyPinStateToWindow() {
     pinTargetApp,
     platform: process.platform,
   });
+
+  syncDockVisibility();
 
   if (!isPinMode) {
     setWindowPinnedToDesktop(false);
