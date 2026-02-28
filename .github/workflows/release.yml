@@ -70,31 +70,44 @@ jobs:
 
       - name: Notarize macOS artifacts
         run: |
-          # 提交 zip 文件公证（Apple 要求 zip 格式提交）
           ZIP_FILE=$(find dist -name "*-mac.zip" | head -n 1)
           echo "Notarizing: $ZIP_FILE"
-          RESULT=$(xcrun notarytool submit "$ZIP_FILE" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait \
-            --timeout 86400 \
-            --output-format json)
-          echo "$RESULT"
-          SUBMISSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-          STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-          # 无论成功失败都打印日志
-          if [ -n "$SUBMISSION_ID" ]; then
-            xcrun notarytool log "$SUBMISSION_ID" \
+          # 最多重试 3 次，应对 runner 网络抖动
+          for ATTEMPT in 1 2 3; do
+            echo "=== Attempt $ATTEMPT ==="
+            RESULT=$(xcrun notarytool submit "$ZIP_FILE" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
-          fi
+              --team-id "$APPLE_TEAM_ID" \
+              --wait \
+              --timeout 86400 \
+              --output-format json 2>&1) && SUBMIT_EXIT=$? || SUBMIT_EXIT=$?
+            echo "$RESULT"
+            STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+            SUBMISSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            if [ -n "$SUBMISSION_ID" ]; then
+              echo "Fetching notarization log for $SUBMISSION_ID..."
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" || true
+            fi
+            if [ "$STATUS" = "Accepted" ]; then
+              echo "Notarization accepted!"
+              break
+            elif echo "$RESULT" | grep -q "offline\|network\|timeout\|HTTPError"; then
+              echo "Network error, retrying in 60s..."
+              sleep 60
+              continue
+            else
+              echo "Notarization failed: $STATUS"
+              exit 1
+            fi
+          done
           if [ "$STATUS" != "Accepted" ]; then
-            echo "Notarization failed with status: $STATUS"
+            echo "All attempts failed."
             exit 1
           fi
-          # staple 认证票据到 dmg
           DMG_FILE=$(find dist -name "*.dmg" | head -n 1)
           echo "Stapling: $DMG_FILE"
           xcrun stapler staple "$DMG_FILE"
