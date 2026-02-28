@@ -74,6 +74,17 @@ let isPinMode = false;
 let pinTargetApp = "";
 let isPinTransparent = true;
 let activeAppWatcherProcess: ChildProcess | null = null;
+let winZOrderHelperProcess: ChildProcess | null = null;
+let winZOrderHelperReadline: readline.Interface | null = null;
+let winZOrderHelperOurHwnd = "";
+const winZOrderPending = new Map<
+  string,
+  {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+  }
+>();
 let isPinByAppActive = false;
 let localServerPort = DEFAULT_SERVER_PORT;
 let localServerStartTask: Promise<number> | null = null;
@@ -273,11 +284,12 @@ function setWindowAlwaysOnTop(enabled: boolean) {
   mainWindow.setAlwaysOnTop(false);
 }
 
-// 获取当前窗口的 HWND 整数值，供 PowerShell 脚本使用。
-function getOurHwndInt(): number {
-  if (!mainWindow) return 0;
+function getOurHwndForPowerShell(): string {
+  if (!mainWindow) return "";
   const buf = mainWindow.getNativeWindowHandle();
-  return buf.readUInt32LE(0);
+  if (buf.length >= 8) return buf.readBigUInt64LE(0).toString();
+  if (buf.length >= 4) return buf.readUInt32LE(0).toString();
+  return "";
 }
 
 function setWindowPinnedToDesktop(enabled: boolean) {
@@ -382,8 +394,163 @@ function stopPinByAppWatcher() {
   isPinByAppActive = false;
 }
 
+function stopWinZOrderHelper() {
+  if (winZOrderHelperReadline) {
+    winZOrderHelperReadline.removeAllListeners();
+    winZOrderHelperReadline.close();
+    winZOrderHelperReadline = null;
+  }
+
+  if (winZOrderHelperProcess) {
+    winZOrderHelperProcess.kill();
+    winZOrderHelperProcess = null;
+  }
+
+  winZOrderHelperOurHwnd = "";
+  for (const [, pending] of winZOrderPending) {
+    clearTimeout(pending.timeout);
+    pending.reject(new Error("Z-order helper stopped"));
+  }
+  winZOrderPending.clear();
+}
+
+function ensureWinZOrderHelper() {
+  if (process.platform !== "win32") return;
+  const ourHwnd = getOurHwndForPowerShell();
+  if (!ourHwnd) return;
+
+  if (winZOrderHelperProcess && winZOrderHelperOurHwnd === ourHwnd) return;
+  stopWinZOrderHelper();
+
+  winZOrderHelperOurHwnd = ourHwnd;
+
+  const script = [
+    '$sig = @"',
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class WinTools {",
+    '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+    '  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
+    "}",
+    '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
+    `$ourHwnd = [IntPtr]${ourHwnd};`,
+    "$SWP_NOSIZE = 0x0001;",
+    "$SWP_NOMOVE = 0x0002;",
+    "$SWP_NOACTIVATE = 0x0010;",
+    "$SWP_ASYNCWINDOWPOS = 0x4000;",
+    "$flags = $SWP_NOSIZE -bor $SWP_NOMOVE -bor $SWP_NOACTIVATE -bor $SWP_ASYNCWINDOWPOS;",
+    "$HWND_NOTOPMOST = [IntPtr](-2);",
+    "while ($true) {",
+    "  $line = [Console]::ReadLine();",
+    "  if ($null -eq $line) { break }",
+    "  $line = $line.Trim();",
+    "  if ($line -eq '') { continue }",
+    "  $parts = $line.Split(':', 2);",
+    "  $cmd = $parts[0];",
+    "  $id = if ($parts.Length -gt 1) { $parts[1] } else { '' };",
+    "  if ($cmd -eq 'set-below-foreground') {",
+    "    $fg = [WinTools]::GetForegroundWindow();",
+    "    if ($fg -ne [IntPtr]::Zero -and $fg -ne $ourHwnd) {",
+    "      [WinTools]::SetWindowPos($ourHwnd, $HWND_NOTOPMOST, 0, 0, 0, 0, $flags) | Out-Null;",
+    "      [WinTools]::SetWindowPos($ourHwnd, $fg, 0, 0, 0, 0, $flags) | Out-Null;",
+    "    }",
+    "    if ($id -ne '') { [Console]::WriteLine('ack:' + $id) }",
+    "    continue",
+    "  }",
+    "  if ($id -ne '') { [Console]::WriteLine('ack:' + $id) }",
+    "}",
+  ].join("\n");
+
+  winZOrderHelperProcess = spawn(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script,
+    ],
+    { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
+  );
+
+  if (winZOrderHelperProcess.stderr) {
+    winZOrderHelperProcess.stderr.on("data", (chunk) => {
+      const message = String(chunk ?? "").trim();
+      if (message) logPinDebug("WinZOrder helper stderr", message);
+    });
+  }
+
+  winZOrderHelperReadline = readline.createInterface({
+    input: winZOrderHelperProcess.stdout!,
+    terminal: false,
+  });
+
+  winZOrderHelperReadline.on("line", (line) => {
+    const text = line.trim();
+    if (!text.startsWith("ack:")) return;
+    const id = text.slice("ack:".length).trim();
+    const pending = winZOrderPending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    winZOrderPending.delete(id);
+    pending.resolve();
+  });
+
+  const rejectAll = (reason: string) => {
+    for (const [, pending] of winZOrderPending) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+    winZOrderPending.clear();
+  };
+
+  winZOrderHelperProcess.on("error", (error) => {
+    logPinDebug("WinZOrder helper error", error);
+    rejectAll("Z-order helper error");
+    stopWinZOrderHelper();
+  });
+
+  winZOrderHelperProcess.on("exit", (code) => {
+    logPinDebug("WinZOrder helper exited", code);
+    rejectAll("Z-order helper exited");
+    stopWinZOrderHelper();
+  });
+}
+
+function sendWinZOrderCommand(
+  command: "set-below-foreground",
+  timeoutMs = 800,
+) {
+  if (process.platform !== "win32") return Promise.resolve();
+  ensureWinZOrderHelper();
+  const proc = winZOrderHelperProcess;
+  if (!proc || !proc.stdin) return Promise.resolve();
+
+  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      winZOrderPending.delete(id);
+      reject(new Error("Z-order helper timeout"));
+    }, timeoutMs);
+    winZOrderPending.set(id, { resolve, reject, timeout });
+    proc.stdin.write(`${command}:${id}\n`);
+  });
+}
+
+async function setToCurrentActiveBottom() {
+  if (process.platform !== "win32") return;
+  if (!mainWindow) return;
+  try {
+    await sendWinZOrderCommand("set-below-foreground", 800);
+  } catch (error) {
+    logPinDebug("setToCurrentActiveBottom failed", error);
+  }
+}
+
+let isWinPreIsTarget = false;
 function startPinByAppWatcherWin32() {
-  const ourHwnd = getOurHwndInt();
+  const ourHwnd = getOurHwndForPowerShell();
   if (!ourHwnd) return;
 
   logPinDebug("startPinByAppWatcherWin32 start", { pinTargetApp });
@@ -451,12 +618,32 @@ function startPinByAppWatcherWin32() {
       syncWindowShadow();
     }
 
+    const isOurApp =
+      normalizeAppIdentifier(activeAppName) ===
+      normalizeAppIdentifier(app.getName());
+
+    console.log(
+      normalizeAppIdentifier(activeAppName),
+      normalizeAppIdentifier(app.getName()),
+    );
+
     if (isTarget) {
+      console.log("set to top");
       mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
-      mainWindow.setAlwaysOnTop(false);
-      mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      mainWindow.setVisibleOnAllWorkspaces(false);
+      // 这里直接设置 false，在 win 上多次点击会有 bug
+    } else {
+      if (!isOurApp) {
+        console.log("set setAlwaysOnTop to false");
+        mainWindow.setAlwaysOnTop(false);
+      }
     }
+
+    if (isWinPreIsTarget === true && isTarget === false && !isOurApp) {
+      console.log("set to current active bottom");
+      void setToCurrentActiveBottom();
+    }
+
+    isWinPreIsTarget = isTarget;
   });
 
   const resetState = () => {
@@ -1364,11 +1551,13 @@ ipcMain.on("settings-open-changed", (_event, open: boolean) => {
 
 app.on("will-quit", () => {
   stopPinByAppWatcher();
+  stopWinZOrderHelper();
   unregisterGlobalShortcuts();
 });
 
 app.on("window-all-closed", () => {
   stopPinByAppWatcher();
+  stopWinZOrderHelper();
   unregisterGlobalShortcuts();
   requestAppQuit();
 });
