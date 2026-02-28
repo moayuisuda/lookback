@@ -38,95 +38,10 @@ jobs:
           name: lookback-win
           path: app/dist/**
 
-  build-mac:
-    runs-on: macos-latest
-    timeout-minutes: 1440
-    defaults:
-      run:
-        working-directory: app
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: app/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build macOS artifacts
-        run: npm run build:mac -- --publish never
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-
-      - name: Notarize macOS artifacts
-        run: |
-          ZIP_FILE=$(find dist -name "*-mac.zip" | head -n 1)
-          echo "Notarizing: $ZIP_FILE"
-          # 最多重试 3 次，应对 runner 网络抖动
-          for ATTEMPT in 1 2 3; do
-            echo "=== Attempt $ATTEMPT ==="
-            RESULT=$(xcrun notarytool submit "$ZIP_FILE" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait \
-              --timeout 86400 \
-              --output-format json 2>&1) && SUBMIT_EXIT=$? || SUBMIT_EXIT=$?
-            echo "$RESULT"
-            STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
-            SUBMISSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-            if [ -n "$SUBMISSION_ID" ]; then
-              echo "Fetching notarization log for $SUBMISSION_ID..."
-              xcrun notarytool log "$SUBMISSION_ID" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" || true
-            fi
-            if [ "$STATUS" = "Accepted" ]; then
-              echo "Notarization accepted!"
-              break
-            elif echo "$RESULT" | grep -q "offline\|network\|timeout\|HTTPError"; then
-              echo "Network error, retrying in 60s..."
-              sleep 60
-              continue
-            else
-              echo "Notarization failed: $STATUS"
-              exit 1
-            fi
-          done
-          if [ "$STATUS" != "Accepted" ]; then
-            echo "All attempts failed."
-            exit 1
-          fi
-          DMG_FILE=$(find dist -name "*.dmg" | head -n 1)
-          echo "Stapling: $DMG_FILE"
-          xcrun stapler staple "$DMG_FILE"
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: lookback-mac
-          path: app/dist/**
-
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - build-win
-      - build-mac
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows artifacts
@@ -135,13 +50,7 @@ jobs:
           name: lookback-win
           path: release-assets/win
 
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: lookback-mac
-          path: release-assets/mac
-
-      - name: Publish GitHub Release assets
+      - name: Publish GitHub Release (Windows only)
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GH_TOKEN }}
@@ -151,10 +60,6 @@ jobs:
             release-assets/win/*.exe
             release-assets/win/*.exe.blockmap
             release-assets/win/latest.yml
-            release-assets/mac/*.dmg
-            release-assets/mac/*.dmg.blockmap
-            release-assets/mac/*-mac.zip
-            release-assets/mac/latest-mac.yml
           overwrite_files: true
           generate_release_notes: true
           fail_on_unmatched_files: false
