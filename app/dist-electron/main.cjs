@@ -2847,7 +2847,10 @@ async function createWindow(options) {
     transparent: true,
     backgroundColor: "#00000000",
     alwaysOnTop: false,
-    hasShadow: true
+    hasShadow: true,
+    // 延迟显示：等置顶属性设置完毕后再决定 show/showInactive，
+    // 避免 macOS 在置顶模式下创建窗口时激活 app 导致退出全屏 Space。
+    show: false
   });
   mainWindow.on("resize", debouncedSaveWindowBounds);
   mainWindow.on("move", debouncedSaveWindowBounds);
@@ -3046,8 +3049,12 @@ function restoreMainWindowVisibility() {
     mainWindow.setIgnoreMouseEvents(false);
     mainWindow.webContents.send("renderer-event", "app-visibility", true);
   }
-  mainWindow.show();
-  mainWindow.focus();
+  if (isPinMode) {
+    mainWindow.showInactive();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
 }
 function registerShortcut(accelerator, currentVar, updateVar, action, checkSettingsOpen = false) {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
@@ -3267,6 +3274,11 @@ import_electron2.app.whenReady().then(async () => {
   const taskLoadShortcuts = loadShortcuts();
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
   applyPinStateToWindow();
+  if (isPinMode) {
+    mainWindow == null ? void 0 : mainWindow.showInactive();
+  } else {
+    mainWindow == null ? void 0 : mainWindow.show();
+  }
   await flushPendingDeepLinks();
   registerGlobalShortcuts();
   if (mainWindow) {

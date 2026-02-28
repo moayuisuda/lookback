@@ -935,6 +935,9 @@ async function createWindow(options?: { load?: boolean }) {
     backgroundColor: "#00000000",
     alwaysOnTop: false,
     hasShadow: true,
+    // 延迟显示：等置顶属性设置完毕后再决定 show/showInactive，
+    // 避免 macOS 在置顶模式下创建窗口时激活 app 导致退出全屏 Space。
+    show: false,
   });
 
   mainWindow.on("resize", debouncedSaveWindowBounds);
@@ -1161,8 +1164,13 @@ function restoreMainWindowVisibility() {
     mainWindow.setIgnoreMouseEvents(false);
     mainWindow.webContents.send("renderer-event", "app-visibility", true);
   }
-  mainWindow.show();
-  mainWindow.focus();
+  // 置顶模式下用 showInactive，不激活 app，避免 macOS 退出全屏 Space。
+  if (isPinMode) {
+    mainWindow.showInactive();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
 }
 
 function registerShortcut(
@@ -1435,6 +1443,13 @@ app.whenReady().then(async () => {
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
 
   applyPinStateToWindow();
+  // 置顶模式下用 showInactive 显示窗口，不激活 app，避免 macOS 退出全屏 Space。
+  // 非置顶模式正常 show() 激活窗口。
+  if (isPinMode) {
+    mainWindow?.showInactive();
+  } else {
+    mainWindow?.show();
+  }
   await flushPendingDeepLinks();
 
   registerGlobalShortcuts();
