@@ -2223,7 +2223,9 @@ async function importCommandFromRemoteUrl(remoteUrl) {
     controller.abort();
   }, DEEP_LINK_DOWNLOAD_TIMEOUT_MS);
   try {
-    const response = await fetch(parsed.toString(), { signal: controller.signal });
+    const response = await fetch(parsed.toString(), {
+      signal: controller.signal
+    });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -2405,27 +2407,18 @@ function startPinByAppWatcherWin32() {
     '$sig = @"',
     "using System;",
     "using System.Runtime.InteropServices;",
-    "public static class WinZOrder {",
+    "public static class WinTools {",
     '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
     '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
-    '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);',
-    '  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
     "}",
     '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
     `$ourHwnd = [IntPtr]${ourHwnd};`,
-    `$target = "${pinTargetApp}";`,
-    "$TOPMOST = [IntPtr](-1);",
-    "$NOTOPMOST = [IntPtr](-2);",
-    "$GW_HWNDPREV = 3;",
-    "$SWP = 0x0013;",
     "$lastName = '';",
-    "$isTopmost = $false;",
-    "$restoreAfter = [IntPtr]::Zero;",
     "while ($true) {",
-    "  $fgHwnd = [WinZOrder]::GetForegroundWindow();",
+    "  $fgHwnd = [WinTools]::GetForegroundWindow();",
     "  if ($fgHwnd -ne [IntPtr]::Zero) {",
     "    [uint32]$procId = 0;",
-    "    [WinZOrder]::GetWindowThreadProcessId($fgHwnd, [ref]$procId) | Out-Null;",
+    "    [WinTools]::GetWindowThreadProcessId($fgHwnd, [ref]$procId) | Out-Null;",
     "    $name = '';",
     "    if ($procId -ne 0) {",
     "      $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue;",
@@ -2433,41 +2426,26 @@ function startPinByAppWatcherWin32() {
     "        $name = $proc.ProcessName;",
     "      }",
     "    }",
-    "    $isSelf = $fgHwnd -eq $ourHwnd;",
-    "    $isTarget = $name -ne '' -and $name.ToLower() -eq $target.ToLower();",
-    "    if (-not $isSelf) {",
-    "      $shouldPin = $isTarget;",
-    "      if ($shouldPin -and -not $isTopmost) {",
-    "        $restoreAfter = [WinZOrder]::GetWindow($ourHwnd, $GW_HWNDPREV);",
-    "        [WinZOrder]::SetWindowPos($ourHwnd, $TOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "        $isTopmost = $true;",
-    "      } elseif (-not $shouldPin -and $isTopmost) {",
-    "        [WinZOrder]::SetWindowPos($ourHwnd, $NOTOPMOST, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "        $isTopmost = $false;",
-    "        if ($fgHwnd -ne $ourHwnd -and $fgHwnd -ne [IntPtr]::Zero) {",
-    "          [WinZOrder]::SetWindowPos($ourHwnd, $fgHwnd, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "        } elseif ($restoreAfter -ne [IntPtr]::Zero) {",
-    "          [WinZOrder]::SetWindowPos($ourHwnd, $restoreAfter, 0, 0, 0, 0, $SWP) | Out-Null;",
-    "        }",
-    "        $restoreAfter = [IntPtr]::Zero;",
-    "      }",
-    "    }",
     "    if ($name -ne '' -and $name -ne $lastName) {",
     "      $lastName = $name;",
     "      [Console]::WriteLine($name);",
     "    }",
     "  }",
-    "  Start-Sleep -Milliseconds 80",
+    "  Start-Sleep -Milliseconds 100",
     "}"
   ].join("\n");
-  activeAppWatcherProcess = (0, import_node_child_process2.spawn)("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    script
-  ], { windowsHide: true });
+  activeAppWatcherProcess = (0, import_node_child_process2.spawn)(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script
+    ],
+    { windowsHide: true }
+  );
   const rl = readline.createInterface({
     input: activeAppWatcherProcess.stdout,
     terminal: false
@@ -2475,11 +2453,16 @@ function startPinByAppWatcherWin32() {
   rl.on("line", (line) => {
     const activeAppName = line.trim();
     if (!activeAppName || !mainWindow) return;
-    const shouldPin = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(pinTargetApp);
-    if (shouldPin !== isPinByAppActive) {
-      isPinByAppActive = shouldPin;
-      mainWindow.setVisibleOnAllWorkspaces(false);
+    const isTarget = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(pinTargetApp);
+    if (isTarget !== isPinByAppActive) {
+      isPinByAppActive = isTarget;
       syncWindowShadow();
+    }
+    if (isTarget) {
+      mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
+      mainWindow.setAlwaysOnTop(false);
+      mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      mainWindow.setVisibleOnAllWorkspaces(false);
     }
   });
   const resetState = () => {
@@ -2521,16 +2504,24 @@ function startPinByAppWatcherDarwin() {
     const activeAppName = line.trim();
     if (!activeAppName || !mainWindow) return;
     const shouldPin = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(pinTargetApp);
-    if (shouldPin !== isPinByAppActive) {
-      isPinByAppActive = shouldPin;
-      setWindowPinnedToTargetApp(shouldPin);
-      syncWindowShadow();
+    if (shouldPin === isPinByAppActive) return;
+    isPinByAppActive = shouldPin;
+    syncWindowShadow();
+    if (shouldPin) {
+      mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
+    } else {
+      mainWindow.setAlwaysOnTop(false);
+      mainWindow.setVisibleOnAllWorkspaces(false);
     }
   });
   const resetState = () => {
     if (isPinByAppActive) {
       isPinByAppActive = false;
-      setWindowPinnedToTargetApp(false);
+      if (mainWindow) {
+        mainWindow.setAlwaysOnTop(false);
+        mainWindow.setVisibleOnAllWorkspaces(false);
+      }
       syncWindowShadow();
     }
   };
@@ -2978,7 +2969,11 @@ function registerCanvasOpacityUpShortcut(accelerator) {
       canvasOpacityUpShortcut = v;
     },
     () => {
-      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "adjust-canvas-opacity", 0.05);
+      mainWindow == null ? void 0 : mainWindow.webContents.send(
+        "renderer-event",
+        "adjust-canvas-opacity",
+        0.05
+      );
     },
     true
   );
@@ -2991,7 +2986,11 @@ function registerCanvasOpacityDownShortcut(accelerator) {
       canvasOpacityDownShortcut = v;
     },
     () => {
-      mainWindow == null ? void 0 : mainWindow.webContents.send("renderer-event", "adjust-canvas-opacity", -0.05);
+      mainWindow == null ? void 0 : mainWindow.webContents.send(
+        "renderer-event",
+        "adjust-canvas-opacity",
+        -0.05
+      );
     },
     true
   );
@@ -3059,10 +3058,7 @@ import_electron2.ipcMain.handle("choose-storage-dir", async () => {
 });
 import_electron2.ipcMain.handle(
   "save-image-file",
-  async (_event, {
-    dataUrl,
-    defaultName
-  }) => {
+  async (_event, { dataUrl, defaultName }) => {
     try {
       if (typeof dataUrl !== "string") {
         return { success: false, error: "Invalid data" };
@@ -3090,7 +3086,10 @@ import_electron2.ipcMain.handle(
       await import_fs_extra7.default.outputFile(filePath, buffer);
       return { success: true, path: filePath };
     } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) };
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e)
+      };
     }
   }
 );
@@ -3164,7 +3163,9 @@ import_electron2.ipcMain.handle("import-command", async () => {
   const result = await import_electron2.dialog.showOpenDialog({
     title: t(locale, "dialog.importCommandTitle"),
     properties: ["openFile", "multiSelections"],
-    filters: [{ name: "JavaScript/TypeScript", extensions: ["js", "jsx", "ts", "tsx"] }]
+    filters: [
+      { name: "JavaScript/TypeScript", extensions: ["js", "jsx", "ts", "tsx"] }
+    ]
   });
   if (result.canceled || result.filePaths.length === 0) {
     return { success: false, canceled: true };
@@ -3179,7 +3180,11 @@ import_electron2.ipcMain.handle("import-command", async () => {
       await import_fs_extra7.default.copy(srcPath, destPath);
       results.push({ success: true, path: destPath });
     } catch (e) {
-      results.push({ success: false, error: e instanceof Error ? e.message : String(e), path: srcPath });
+      results.push({
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+        path: srcPath
+      });
     }
   }
   const failures = results.filter((r) => !r.success);

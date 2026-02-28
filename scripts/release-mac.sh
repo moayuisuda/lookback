@@ -23,20 +23,26 @@ fi
 : "${APPLE_ID:?请设置 APPLE_ID 环境变量（或写入 .env.local）}"
 : "${APPLE_APP_SPECIFIC_PASSWORD:?请设置 APPLE_APP_SPECIFIC_PASSWORD 环境变量}"
 : "${APPLE_TEAM_ID:?请设置 APPLE_TEAM_ID 环境变量}"
-# CSC_LINK / CSC_KEY_PASSWORD 可选，未设置时使用 Keychain 中已安装的证书
-export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+# 明确指定 Keychain 中的 Developer ID Application 证书（避免 electron-builder 找不到或选错）
+# 若使用 .p12 文件，改为设置 CSC_LINK=<路径> 和 CSC_KEY_PASSWORD=<密码>
+CSC_NAME="Haohui An (7Q2D6L77XF)"
+export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID CSC_NAME
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/app"
 cd "$APP_DIR"
 
-# ── 步骤 1: 构建（签名，不公证）──────────────────────────────────────────────
-echo "▶ 构建 macOS 应用..."
+# ── 步骤 1: 清理旧产物 + 构建（签名，不公证）────────────────────────────────
+# 先删旧 zip/dmg，防止多版本文件导致后续步骤提交错误产物
+rm -f dist/*.zip dist/*.dmg dist/*.blockmap dist/latest-mac.yml
+echo "▶ 构建 macOS 应用 (证书: ${CSC_NAME})..."
 npm run build:mac -- --publish never
 
 # ── 步骤 2: 公证 ─────────────────────────────────────────────────────────────
-ZIP_FILE=$(find dist -name "*-mac.zip" | head -n 1)
-DMG_FILE=$(find dist -name "*.dmg" | head -n 1)
+# 从 package.json 读版本号精确定位产物（彻底避免多版本文件混淆）
+VERSION=$(node -p "require('./package.json').version")
+ZIP_FILE="dist/LookBack-${VERSION}-arm64-mac.zip"
+DMG_FILE="dist/LookBack-${VERSION}-arm64.dmg"
 echo "▶ 提交公证: $ZIP_FILE"
 
 RESULT=$(xcrun notarytool submit "$ZIP_FILE" \
