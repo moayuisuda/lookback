@@ -3,7 +3,7 @@ export const DEFAULT_COMMAND_FILES = [
   "canvasImportExport.jsx",
   "imageSearch.jsx",
   "stitchExport.jsx",
-  // "clip.jsx",
+  "clip.jsx",
   // "imageGene.jsx",
   // "multiSearch.jsx",
   // "copySelectedImageToClipboard.jsx",

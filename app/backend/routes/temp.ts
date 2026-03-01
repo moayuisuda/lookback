@@ -13,6 +13,31 @@ type TempRouteDeps = {
 
 export const createTempRouter = (deps: TempRouteDeps) => {
   const router = express.Router();
+  const MIME_EXTENSION_MAP: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "image/svg+xml": ".svg",
+    "image/avif": ".avif",
+    "image/tiff": ".tiff",
+  };
+  const readQueryString = (value: unknown): string | undefined => {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  };
+  const toSafeExtension = (ext: string): string => {
+    const normalized = ext.trim().toLowerCase();
+    if (!normalized) return "";
+    return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : "";
+  };
+  const inferExtensionFromMime = (contentType: string): string => {
+    const mime = contentType.split(";")[0]?.trim().toLowerCase();
+    if (!mime) return ".png";
+    return MIME_EXTENSION_MAP[mime] || ".png";
+  };
   const getAssetsDir = (canvasName?: string) =>
     deps.getCanvasAssetsDir(canvasName || "Default");
   const createRequestId = (): string =>
@@ -177,65 +202,71 @@ export const createTempRouter = (deps: TempRouteDeps) => {
     }
   });
 
-  router.post("/api/upload-temp", async (req, res) => {
-    try {
-      const { imageBase64, filename: providedFilename, canvasName } =
-        req.body as {
-          imageBase64?: string;
-          filename?: string;
-          canvasName?: string;
-        };
-      if (!imageBase64) {
-        res.status(400).json({ error: "No image data" });
-        return;
-      }
-
-      let filename = "temp.png";
-      if (providedFilename) {
-        const ext = path.extname(providedFilename) || ".png";
-        const name = path.basename(providedFilename, ext);
-        const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-        filename = `${safeName}${ext}`;
-      }
-
-      const assetsDir = getAssetsDir(canvasName);
-      await fs.ensureDir(assetsDir);
-      const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
-      const filepath = path.join(assetsDir, uniqueFilename);
-      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-
-      let width = 0;
-      let height = 0;
-      let dominantColor: string | null = null;
-      let tone: string | null = null;
-
-      await withFileLocks([assetsDir, filepath], async () => {
-        await fs.writeFile(filepath, base64Data, "base64");
-        try {
-          const metadata = await sharp(filepath).metadata();
-          width = metadata.width || 0;
-          height = metadata.height || 0;
-        } catch (e) {
-          console.error("Failed to read image metadata", e);
+  router.post(
+    "/api/upload-temp",
+    express.raw({ type: "*/*", limit: "500mb" }),
+    async (req, res) => {
+      try {
+        const fileBuffer = req.body;
+        if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
+          res.status(400).json({ error: "No image binary data" });
+          return;
         }
-        dominantColor = await deps.getDominantColor(filepath);
-        tone = await deps.getTone(filepath);
-      });
 
-      res.json({
-        success: true,
-        filename: uniqueFilename,
-        path: `assets/${uniqueFilename}`,
-        width,
-        height,
-        dominantColor,
-        tone,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+        const providedFilename = readQueryString(req.query.filename);
+        const canvasName = readQueryString(req.query.canvasName);
+        const contentType = typeof req.headers["content-type"] === "string"
+          ? req.headers["content-type"]
+          : "";
+        const extFromMime = inferExtensionFromMime(contentType);
+
+        let filename = `temp${extFromMime}`;
+        if (providedFilename) {
+          const rawExt = path.extname(providedFilename);
+          const safeExt = toSafeExtension(rawExt) || extFromMime;
+          const name = path.basename(providedFilename, rawExt);
+          const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "temp";
+          filename = `${safeName}${safeExt}`;
+        }
+
+        const assetsDir = getAssetsDir(canvasName);
+        await fs.ensureDir(assetsDir);
+        const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
+        const filepath = path.join(assetsDir, uniqueFilename);
+
+        let width = 0;
+        let height = 0;
+        let dominantColor: string | null = null;
+        let tone: string | null = null;
+
+        await withFileLocks([assetsDir, filepath], async () => {
+          await fs.writeFile(filepath, fileBuffer);
+          try {
+            const metadata = await sharp(filepath).metadata();
+            width = metadata.width || 0;
+            height = metadata.height || 0;
+          } catch (e) {
+            console.error("Failed to read image metadata", e);
+          }
+          dominantColor = await deps.getDominantColor(filepath);
+          tone = await deps.getTone(filepath);
+        });
+
+        res.json({
+          success: true,
+          filename: uniqueFilename,
+          path: `assets/${uniqueFilename}`,
+          width,
+          height,
+          dominantColor,
+          tone,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ error: message });
+      }
     }
-  });
+  );
 
   router.post("/api/delete-temp-file", async (req, res) => {
     try {

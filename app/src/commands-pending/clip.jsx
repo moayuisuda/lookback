@@ -27,22 +27,44 @@ const loadImage = (src) =>
     img.src = src;
   });
 
-// 将裁剪区域从图片中提取为 base64 png
-const cropImage = (img, crop) => {
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(crop.w));
-  canvas.height = Math.max(1, Math.round(crop.h));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas context unavailable");
-  ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
-  return canvas.toDataURL("image/png");
-};
+// 将裁剪区域从图片中提取为 PNG 二进制，避免 base64 额外开销
+const cropImage = (img, crop) =>
+  new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(crop.w));
+    canvas.height = Math.max(1, Math.round(crop.h));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      reject(new Error("Canvas context unavailable"));
+      return;
+    }
+    ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Canvas toBlob failed"));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
 
-const uploadScreenshot = async (dataUrl, filename, canvasName, apiBaseUrl) => {
-  const res = await fetch(`${apiBaseUrl}/api/upload-temp`, {
+const uploadScreenshot = async (blob, filename, canvasName, apiBaseUrl) => {
+  const params = new URLSearchParams();
+  if (filename) {
+    params.set("filename", filename);
+  }
+  if (canvasName) {
+    params.set("canvasName", canvasName);
+  }
+  const query = params.toString();
+  const endpoint = query
+    ? `${apiBaseUrl}/api/upload-temp?${query}`
+    : `${apiBaseUrl}/api/upload-temp`;
+  const headers = blob.type ? { "Content-Type": blob.type } : undefined;
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64: dataUrl, filename, canvasName }),
+    headers,
+    body: blob,
   });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
@@ -354,11 +376,11 @@ export const ui = ({ context }) => {
 
     setSaving(true);
     try {
-      const dataUrl = cropImage(imgEl, crop);
+      const imageBlob = await cropImage(imgEl, crop);
       const timestamp = Date.now();
       const filename = `screenshot_${timestamp}.png`;
       const uploaded = await uploadScreenshot(
-        dataUrl, filename, canvasSnap.currentCanvasName, API_BASE_URL
+        imageBlob, filename, canvasSnap.currentCanvasName, API_BASE_URL
       );
 
       if (mode === "overwrite") {

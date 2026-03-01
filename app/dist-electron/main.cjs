@@ -474,6 +474,32 @@ var import_fs_extra5 = __toESM(require("fs-extra"), 1);
 var import_sharp = __toESM(require("sharp"), 1);
 var createTempRouter = (deps) => {
   const router = import_express5.default.Router();
+  const MIME_EXTENSION_MAP = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "image/svg+xml": ".svg",
+    "image/avif": ".avif",
+    "image/tiff": ".tiff"
+  };
+  const readQueryString = (value) => {
+    if (typeof value !== "string") return void 0;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : void 0;
+  };
+  const toSafeExtension = (ext) => {
+    const normalized = ext.trim().toLowerCase();
+    if (!normalized) return "";
+    return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : "";
+  };
+  const inferExtensionFromMime = (contentType) => {
+    var _a2;
+    const mime = (_a2 = contentType.split(";")[0]) == null ? void 0 : _a2.trim().toLowerCase();
+    if (!mime) return ".png";
+    return MIME_EXTENSION_MAP[mime] || ".png";
+  };
   const getAssetsDir = (canvasName) => deps.getCanvasAssetsDir(canvasName || "Default");
   const createRequestId = () => `durl_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
   const normalizeLogUrl = (rawUrl) => {
@@ -612,55 +638,63 @@ var createTempRouter = (deps) => {
       res.status(500).json({ error: message });
     }
   });
-  router.post("/api/upload-temp", async (req, res) => {
-    try {
-      const { imageBase64, filename: providedFilename, canvasName } = req.body;
-      if (!imageBase64) {
-        res.status(400).json({ error: "No image data" });
-        return;
-      }
-      let filename = "temp.png";
-      if (providedFilename) {
-        const ext = import_path5.default.extname(providedFilename) || ".png";
-        const name = import_path5.default.basename(providedFilename, ext);
-        const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-        filename = `${safeName}${ext}`;
-      }
-      const assetsDir = getAssetsDir(canvasName);
-      await import_fs_extra5.default.ensureDir(assetsDir);
-      const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
-      const filepath = import_path5.default.join(assetsDir, uniqueFilename);
-      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-      let width = 0;
-      let height = 0;
-      let dominantColor = null;
-      let tone = null;
-      await withFileLocks([assetsDir, filepath], async () => {
-        await import_fs_extra5.default.writeFile(filepath, base64Data, "base64");
-        try {
-          const metadata = await (0, import_sharp.default)(filepath).metadata();
-          width = metadata.width || 0;
-          height = metadata.height || 0;
-        } catch (e) {
-          console.error("Failed to read image metadata", e);
+  router.post(
+    "/api/upload-temp",
+    import_express5.default.raw({ type: "*/*", limit: "500mb" }),
+    async (req, res) => {
+      try {
+        const fileBuffer = req.body;
+        if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
+          res.status(400).json({ error: "No image binary data" });
+          return;
         }
-        dominantColor = await deps.getDominantColor(filepath);
-        tone = await deps.getTone(filepath);
-      });
-      res.json({
-        success: true,
-        filename: uniqueFilename,
-        path: `assets/${uniqueFilename}`,
-        width,
-        height,
-        dominantColor,
-        tone
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+        const providedFilename = readQueryString(req.query.filename);
+        const canvasName = readQueryString(req.query.canvasName);
+        const contentType = typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "";
+        const extFromMime = inferExtensionFromMime(contentType);
+        let filename = `temp${extFromMime}`;
+        if (providedFilename) {
+          const rawExt = import_path5.default.extname(providedFilename);
+          const safeExt = toSafeExtension(rawExt) || extFromMime;
+          const name = import_path5.default.basename(providedFilename, rawExt);
+          const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_") || "temp";
+          filename = `${safeName}${safeExt}`;
+        }
+        const assetsDir = getAssetsDir(canvasName);
+        await import_fs_extra5.default.ensureDir(assetsDir);
+        const uniqueFilename = await resolveUniqueFilename(assetsDir, filename);
+        const filepath = import_path5.default.join(assetsDir, uniqueFilename);
+        let width = 0;
+        let height = 0;
+        let dominantColor = null;
+        let tone = null;
+        await withFileLocks([assetsDir, filepath], async () => {
+          await import_fs_extra5.default.writeFile(filepath, fileBuffer);
+          try {
+            const metadata = await (0, import_sharp.default)(filepath).metadata();
+            width = metadata.width || 0;
+            height = metadata.height || 0;
+          } catch (e) {
+            console.error("Failed to read image metadata", e);
+          }
+          dominantColor = await deps.getDominantColor(filepath);
+          tone = await deps.getTone(filepath);
+        });
+        res.json({
+          success: true,
+          filename: uniqueFilename,
+          path: `assets/${uniqueFilename}`,
+          width,
+          height,
+          dominantColor,
+          tone
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ error: message });
+      }
     }
-  });
+  );
   router.post("/api/delete-temp-file", async (req, res) => {
     try {
       const { filePath, canvasName } = req.body;
@@ -1029,8 +1063,8 @@ var DEFAULT_COMMAND_FILES = [
   "addText.jsx",
   "canvasImportExport.jsx",
   "imageSearch.jsx",
-  "stitchExport.jsx"
-  // "clip.jsx",
+  "stitchExport.jsx",
+  "clip.jsx"
   // "imageGene.jsx",
   // "multiSearch.jsx",
   // "copySelectedImageToClipboard.jsx",

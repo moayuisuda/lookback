@@ -175,6 +175,44 @@ export async function deleteCanvas(name: string): Promise<void> {
   await localApi("/api/canvases/delete", { name });
 }
 
+export type UploadTempImageResponse = {
+  success?: boolean;
+  filename?: string;
+  path?: string;
+  width?: number;
+  height?: number;
+  dominantColor?: string | null;
+  tone?: string | null;
+};
+
+export async function uploadTempImageBinary(
+  file: File,
+  canvasName?: string
+): Promise<UploadTempImageResponse> {
+  const params = new URLSearchParams();
+  const fileName = file.name.trim();
+  if (fileName) {
+    params.set("filename", fileName);
+  }
+  const safeCanvasName = canvasName?.trim();
+  if (safeCanvasName) {
+    params.set("canvasName", safeCanvasName);
+  }
+  const endpoint = params.size > 0
+    ? `/api/upload-temp?${params.toString()}`
+    : "/api/upload-temp";
+  const headers = file.type ? { "Content-Type": file.type } : undefined;
+  const res = await apiFetch(endpoint, {
+    method: "POST",
+    headers,
+    body: file,
+  });
+  if (!res.ok) {
+    throw new Error(`Request failed with status ${res.status}`);
+  }
+  return (await res.json()) as UploadTempImageResponse;
+}
+
 export async function getTempDominantColor(
   filePath: string,
   canvasName?: string

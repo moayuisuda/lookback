@@ -1,5 +1,5 @@
 import { type ImageMeta } from '../store/canvasStore';
-import { localApi } from '../service';
+import { uploadTempImageBinary } from '../service';
 import { globalActions } from '../store/globalStore';
 
 const MAX_DROP_SCAN_CONCURRENCY = 16;
@@ -50,14 +50,6 @@ const mapWithConcurrency = async <T, R>(
   return results;
 };
 
-const fileToDataUrl = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
 const uploadTempImage = async (
   file: File,
   canvasName?: string
@@ -69,22 +61,7 @@ const uploadTempImage = async (
   dominantColor?: string | null;
   tone?: string | null;
 } | null> => {
-  const imageBase64 = await fileToDataUrl(file);
-  if (!imageBase64) return null;
-
-  const data = await localApi<{
-    success?: boolean;
-    filename?: string;
-    path?: string;
-    width?: number;
-    height?: number;
-    dominantColor?: string | null;
-    tone?: string | null;
-  }>('/api/upload-temp', {
-    imageBase64,
-    filename: file.name,
-    canvasName,
-  });
+  const data = await uploadTempImageBinary(file, canvasName);
   if (
     !data ||
     !data.success ||
