@@ -2592,7 +2592,6 @@ async function setToCurrentActiveBottom() {
     logPinDebug("setToCurrentActiveBottom failed", error);
   }
 }
-var isWinPreIsTarget = false;
 function startPinByAppWatcherWin32() {
   const ourHwnd = getOurHwndForPowerShell();
   if (!ourHwnd) return;
@@ -2604,6 +2603,16 @@ function startPinByAppWatcherWin32() {
     "public static class WinTools {",
     '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
     '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+    '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);',
+    "  public const uint GW_HWNDPREV = 3;",
+    "  public static int GetZOrder(IntPtr hWnd) {",
+    "    int z = 0;",
+    "    IntPtr h = hWnd;",
+    "    while ((h = GetWindow(h, GW_HWNDPREV)) != IntPtr.Zero) {",
+    "      z++;",
+    "    }",
+    "    return z;",
+    "  }",
     "}",
     '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
     `$ourHwnd = [IntPtr]${ourHwnd};`,
@@ -2622,10 +2631,12 @@ function startPinByAppWatcherWin32() {
     "    }",
     "    if ($name -ne '' -and $name -ne $lastName) {",
     "      $lastName = $name;",
-    "      [Console]::WriteLine($name);",
+    "      $z = [WinTools]::GetZOrder($fgHwnd);",
+    "      $ourZ = [WinTools]::GetZOrder($ourHwnd);",
+    '      [Console]::WriteLine("$name|$z|$ourZ");',
     "    }",
     "  }",
-    "  Start-Sleep -Milliseconds 100",
+    "  Start-Sleep -Milliseconds 80",
     "}"
   ].join("\n");
   activeAppWatcherProcess = (0, import_node_child_process2.spawn)(
@@ -2645,7 +2656,10 @@ function startPinByAppWatcherWin32() {
     terminal: false
   });
   rl.on("line", (line) => {
-    const activeAppName = line.trim();
+    const parts = line.trim().split("|");
+    const activeAppName = parts[0];
+    const zOrder = parseInt(parts[1], 10);
+    const ourZOrder = parseInt(parts[2], 10);
     if (!activeAppName || !mainWindow) return;
     const isTarget = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(pinTargetApp);
     if (isTarget !== isPinByAppActive) {
@@ -2653,24 +2667,26 @@ function startPinByAppWatcherWin32() {
       syncWindowShadow();
     }
     const isOurApp = normalizeAppIdentifier(activeAppName) === normalizeAppIdentifier(import_electron2.app.getName());
-    console.log(
-      normalizeAppIdentifier(activeAppName),
-      normalizeAppIdentifier(import_electron2.app.getName())
-    );
+    console.log("change", normalizeAppIdentifier(activeAppName), {
+      zOrder,
+      ourZOrder
+    });
     if (isTarget) {
       console.log("set to top");
       mainWindow.setAlwaysOnTop(true, getPinAlwaysOnTopLevel());
     } else {
       if (!isOurApp) {
-        console.log("set setAlwaysOnTop to false");
+        console.log("set setAlwaysOnTop to false", activeAppName);
         mainWindow.setAlwaysOnTop(false);
+        if (!isNaN(zOrder) && !isNaN(ourZOrder) && ourZOrder < zOrder) {
+          console.log("force set to current active bottom", {
+            zOrder,
+            ourZOrder
+          });
+          void setToCurrentActiveBottom();
+        }
       }
     }
-    if (isWinPreIsTarget === true && isTarget === false && !isOurApp) {
-      console.log("set to current active bottom");
-      void setToCurrentActiveBottom();
-    }
-    isWinPreIsTarget = isTarget;
   });
   const resetState = () => {
     if (isPinByAppActive) {
