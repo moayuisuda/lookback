@@ -573,7 +573,6 @@ async function setToCurrentActiveBottom() {
   }
 }
 
-let isWinPreIsTarget = false;
 function startPinByAppWatcherWin32() {
   const ourHwnd = getOurHwndForPowerShell();
   if (!ourHwnd) return;
@@ -587,6 +586,16 @@ function startPinByAppWatcherWin32() {
     "public static class WinTools {",
     '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
     '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);',
+    '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);',
+    "  public const uint GW_HWNDPREV = 3;",
+    "  public static int GetZOrder(IntPtr hWnd) {",
+    "    int z = 0;",
+    "    IntPtr h = hWnd;",
+    "    while ((h = GetWindow(h, GW_HWNDPREV)) != IntPtr.Zero) {",
+    "      z++;",
+    "    }",
+    "    return z;",
+    "  }",
     "}",
     '"@; Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;',
     `$ourHwnd = [IntPtr]${ourHwnd};`,
@@ -605,10 +614,12 @@ function startPinByAppWatcherWin32() {
     "    }",
     "    if ($name -ne '' -and $name -ne $lastName) {",
     "      $lastName = $name;",
-    "      [Console]::WriteLine($name);",
+    "      $z = [WinTools]::GetZOrder($fgHwnd);",
+    "      $ourZ = [WinTools]::GetZOrder($ourHwnd);",
+    '      [Console]::WriteLine("$name|$z|$ourZ");',
     "    }",
     "  }",
-    "  Start-Sleep -Milliseconds 100",
+    "  Start-Sleep -Milliseconds 80",
     "}",
   ].join("\n");
 
@@ -631,7 +642,11 @@ function startPinByAppWatcherWin32() {
   });
 
   rl.on("line", (line) => {
-    const activeAppName = line.trim();
+    const parts = line.trim().split("|");
+    const activeAppName = parts[0];
+    const zOrder = parseInt(parts[1], 10);
+    const ourZOrder = parseInt(parts[2], 10);
+
     if (!activeAppName || !mainWindow) return;
 
     const isTarget =
@@ -647,10 +662,10 @@ function startPinByAppWatcherWin32() {
       normalizeAppIdentifier(activeAppName) ===
       normalizeAppIdentifier(app.getName());
 
-    console.log(
-      normalizeAppIdentifier(activeAppName),
-      normalizeAppIdentifier(app.getName()),
-    );
+    console.log("change", normalizeAppIdentifier(activeAppName), {
+      zOrder,
+      ourZOrder,
+    });
 
     if (isTarget) {
       console.log("set to top");
@@ -658,17 +673,19 @@ function startPinByAppWatcherWin32() {
       // 这里直接设置 false，在 win 上多次点击会有 bug
     } else {
       if (!isOurApp) {
-        console.log("set setAlwaysOnTop to false");
+        console.log("set setAlwaysOnTop to false", activeAppName);
         mainWindow.setAlwaysOnTop(false);
+
+        // 如果我们的窗口比激活窗口更靠上（Z-order 更小），则下沉
+        if (!isNaN(zOrder) && !isNaN(ourZOrder) && ourZOrder < zOrder) {
+          console.log("force set to current active bottom", {
+            zOrder,
+            ourZOrder,
+          });
+          void setToCurrentActiveBottom();
+        }
       }
     }
-
-    if (isWinPreIsTarget === true && isTarget === false && !isOurApp) {
-      console.log("set to current active bottom");
-      void setToCurrentActiveBottom();
-    }
-
-    isWinPreIsTarget = isTarget;
   });
 
   const resetState = () => {
@@ -763,7 +780,7 @@ function startPinByAppWatcher() {
   stopPinByAppWatcher();
   if (!pinTargetApp) return;
   if (process.platform !== "darwin" && process.platform !== "win32") return;
-  setWindowPinnedToTargetApp(false);
+  setWindowPinnedToTargetApp(true);
   syncWindowShadow();
 
   if (process.platform === "win32") {
