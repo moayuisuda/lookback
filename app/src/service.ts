@@ -128,6 +128,18 @@ export async function loadCanvasImages<T = unknown[]>(canvasName?: string): Prom
   return data as T;
 }
 
+export async function loadCanvasGroups<T = unknown[]>(canvasName?: string): Promise<T> {
+  const endpoint = canvasName
+    ? `/api/load-canvas-groups?canvasName=${encodeURIComponent(canvasName)}`
+    : "/api/load-canvas-groups";
+  const res = await apiFetch(endpoint);
+  if (!res.ok) {
+    throw new Error(`Failed to load canvas groups: ${res.status}`);
+  }
+  const data = (await res.json()) as unknown;
+  return data as T;
+}
+
 export async function getCanvasViewport<T = unknown>(canvasName?: string): Promise<T | null> {
   const endpoint = canvasName
     ? `/api/canvas-viewport?canvasName=${encodeURIComponent(canvasName)}`
@@ -147,6 +159,20 @@ export async function saveCanvasViewport(
 ): Promise<void> {
   try {
     await localApi<{ success?: boolean }>("/api/canvas-viewport", { viewport, canvasName });
+  } catch (error) {
+    void error;
+  }
+}
+
+export async function saveCanvasGroups<T = unknown[]>(
+  groups: T,
+  canvasName?: string
+): Promise<void> {
+  try {
+    await localApi<{ success?: boolean }>("/api/save-canvas-groups", {
+      groups,
+      canvasName,
+    });
   } catch (error) {
     void error;
   }

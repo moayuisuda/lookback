@@ -2,6 +2,7 @@ export const DEFAULT_COMMAND_FILES = [
   "addText.jsx",
   "canvasImportExport.jsx",
   "imageSearch.jsx",
+  "removeNodeFromCurrentGroup.jsx",
   "stitchExport.jsx",
   "clip.jsx",
   // "imageGene.jsx",

@@ -515,6 +515,7 @@ export async function startServer(): Promise<number> {
       const safeName = canvasNameRaw.replace(/[/\\:*?"<>|]/g, "_") || "Default";
       const canvasDir = path.join(CANVASES_DIR, safeName);
       const dataFile = path.join(canvasDir, "canvas.json");
+      const groupFile = path.join(canvasDir, "group.json");
       const viewportFile = path.join(canvasDir, "canvas_viewport.json");
       const assetsDir = path.join(canvasDir, "assets");
 
@@ -525,6 +526,10 @@ export async function startServer(): Promise<number> {
       const viewport = await withFileLock(viewportFile, async () => {
         if (await fs.pathExists(viewportFile)) return fs.readJson(viewportFile);
         return null;
+      });
+      const groups = await withFileLock(groupFile, async () => {
+        if (await fs.pathExists(groupFile)) return fs.readJson(groupFile);
+        return [];
       });
 
       const imageItems = Array.isArray(items)
@@ -545,6 +550,7 @@ export async function startServer(): Promise<number> {
         name: safeName,
         timestamp: Date.now(),
         items,
+        groups,
         viewport,
       };
       zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"));
@@ -594,6 +600,7 @@ export async function startServer(): Promise<number> {
           version?: number;
           name?: string;
           items?: unknown[];
+          groups?: unknown[];
           viewport?: unknown;
         };
         const desiredName = (manifest.name || "Imported").toString();
@@ -614,6 +621,7 @@ export async function startServer(): Promise<number> {
         const finalName = await resolveUniqueCanvasName(baseName);
         const canvasDir = path.join(CANVASES_DIR, finalName);
         const dataFile = path.join(canvasDir, "canvas.json");
+        const groupFile = path.join(canvasDir, "group.json");
         const viewportFile = path.join(canvasDir, "canvas_viewport.json");
         const assetsDir = path.join(canvasDir, "assets");
 
@@ -644,9 +652,11 @@ export async function startServer(): Promise<number> {
         }
 
         // Write items and viewport
-        await withFileLocks([dataFile, viewportFile], async () => {
+        await withFileLocks([dataFile, groupFile, viewportFile], async () => {
           const items = Array.isArray(manifest.items) ? manifest.items : [];
+          const groups = Array.isArray(manifest.groups) ? manifest.groups : [];
           await fs.writeJson(dataFile, items);
+          await fs.writeJson(groupFile, groups);
           if (manifest.viewport) {
             await fs.writeJson(viewportFile, manifest.viewport);
           }

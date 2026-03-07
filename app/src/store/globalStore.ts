@@ -44,6 +44,7 @@ export interface GlobalState {
   canvasOpacityUpShortcut: string;
   canvasOpacityDownShortcut: string;
   toggleMouseThroughShortcut: string;
+  canvasAutoLayoutShortcut: string;
   canvasGroupShortcut: string;
   zoomToFitShortcut: string;
   commandPaletteShortcut: string;
@@ -92,7 +93,8 @@ const DEFAULT_TOGGLE_WINDOW_SHORTCUT = isMac ? 'Command+L' : 'Ctrl+L';
 const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
-const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
+const DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
+const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+Shift+G' : 'Ctrl+Shift+G';
 const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
 
 export const globalState = proxy<GlobalState>({
@@ -116,6 +118,7 @@ export const globalState = proxy<GlobalState>({
   canvasOpacityUpShortcut: DEFAULT_CANVAS_OPACITY_UP_SHORTCUT,
   canvasOpacityDownShortcut: DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT,
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+  canvasAutoLayoutShortcut: DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
   zoomToFitShortcut: '',
   commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
@@ -158,6 +161,11 @@ export const globalActions = {
         settings,
         'toggleMouseThroughShortcut',
         DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
+      );
+      const rawCanvasAutoLayoutShortcut = readSetting<unknown>(
+        settings,
+        'canvasAutoLayoutShortcut',
+        DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT,
       );
       const rawCanvasGroupShortcut = readSetting<unknown>(
         settings,
@@ -232,6 +240,13 @@ export const globalActions = {
 
       if (typeof rawToggleMouseThroughShortcut === 'string' && rawToggleMouseThroughShortcut.trim()) {
         globalState.toggleMouseThroughShortcut = rawToggleMouseThroughShortcut.trim();
+      }
+
+      if (
+        typeof rawCanvasAutoLayoutShortcut === 'string' &&
+        rawCanvasAutoLayoutShortcut.trim()
+      ) {
+        globalState.canvasAutoLayoutShortcut = rawCanvasAutoLayoutShortcut.trim();
       }
 
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
@@ -473,6 +488,14 @@ export const globalActions = {
       );
       return false;
     }
+    return true;
+  },
+
+  setCanvasAutoLayoutShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.canvasAutoLayoutShortcut = next;
+    await settingStorage.set('canvasAutoLayoutShortcut', next);
     return true;
   },
 

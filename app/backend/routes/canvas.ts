@@ -13,6 +13,7 @@ const getCanvasPaths = (dir: string, name: string) => {
   return {
     dir: canvasDir,
     dataFile: path.join(canvasDir, "canvas.json"),
+    groupFile: path.join(canvasDir, "group.json"),
     viewportFile: path.join(canvasDir, "canvas_viewport.json"),
   };
 };
@@ -142,6 +143,24 @@ export const createCanvasRouter = (deps: CanvasRouteDeps) => {
     }
   });
 
+  router.post("/api/save-canvas-groups", async (req, res) => {
+    try {
+      const { groups, canvasName } = req.body as {
+        groups?: unknown;
+        canvasName?: string;
+      };
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+      await withFileLocks([paths.dir, paths.groupFile], async () => {
+        await fs.ensureDir(paths.dir);
+        await fs.writeJson(paths.groupFile, groups);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+
   router.post("/api/canvas-viewport", async (req, res) => {
     try {
       const { viewport, canvasName } = req.body as {
@@ -191,6 +210,25 @@ export const createCanvasRouter = (deps: CanvasRouteDeps) => {
       });
 
       res.json(images);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.get("/api/load-canvas-groups", async (req, res) => {
+    try {
+      const canvasName = req.query.canvasName as string;
+      const paths = getCanvasPaths(deps.getCanvasesDir(), canvasName || "Default");
+
+      let groups: unknown = [];
+      await withFileLock(paths.groupFile, async () => {
+        if (await fs.pathExists(paths.groupFile)) {
+          groups = await fs.readJson(paths.groupFile);
+        }
+      });
+
+      res.json(groups);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });

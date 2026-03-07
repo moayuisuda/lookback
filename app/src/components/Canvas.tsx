@@ -20,6 +20,7 @@ import { Minimap } from "./canvas/Minimap";
 import { CanvasText } from "./canvas/CanvasText";
 import { CanvasImage } from "./canvas/CanvasImage";
 import { CanvasToolbar } from "./canvas/CanvasToolbar";
+import { CanvasGroupsLayer } from "./canvas/CanvasGroupsLayer";
 import { SelectOverlay } from "./canvas/SelectOverlay";
 import {
   SelectionRect,
@@ -210,10 +211,13 @@ export const Canvas: React.FC = () => {
     selectionBox,
     selectionMode,
     canvasItems,
+    canvasGroups,
     canvasFilters,
     showMinimap,
     isCanvasToolbarExpanded,
     contextMenu,
+    activeCanvasGroupId,
+    activeCanvasGroupColorPickerId,
   } = canvasSnap;
 
   const { t } = useT();
@@ -255,6 +259,15 @@ export const Canvas: React.FC = () => {
     startUnion: null,
     startDistance: 1,
     scale: 1,
+    snapshots: new Map(),
+  });
+  const groupDragRef = useRef<{
+    active: boolean;
+    groupId: string | null;
+    snapshots: Map<string, { x: number; y: number }>;
+  }>({
+    active: false,
+    groupId: null,
     snapshots: new Map(),
   });
 
@@ -320,6 +333,65 @@ export const Canvas: React.FC = () => {
   const getSelectedItems = useMemoizedFn(() =>
     canvasState.canvasItems.filter((item) => item.isSelected),
   );
+
+  const getActiveCanvasGroupItems = useMemoizedFn(() => {
+    const activeGroupId = canvasState.activeCanvasGroupId;
+    if (!activeGroupId) return [];
+    const group = canvasState.canvasGroups.find(
+      (item) => item.groupId === activeGroupId,
+    );
+    if (!group) return [];
+    const itemIds = new Set(group.items);
+    return canvasState.canvasItems.filter((item) => itemIds.has(item.itemId));
+  });
+
+  const getContainLayoutTargetItems = useMemoizedFn(() => {
+    const selectedItems = getSelectedItems();
+    const activeGroupItems = getActiveCanvasGroupItems();
+    if (activeGroupItems.length === 0) return selectedItems;
+    if (selectedItems.length === 0) return activeGroupItems;
+
+    // active group 作为“虚拟多选”，仅在当前选择仍落在该组内时接管 contain/layout。
+    const activeGroupItemIds = new Set(
+      activeGroupItems.map((item) => item.itemId),
+    );
+    const selectionIsInsideActiveGroup = selectedItems.every((item) =>
+      activeGroupItemIds.has(item.itemId),
+    );
+    return selectionIsInsideActiveGroup ? activeGroupItems : selectedItems;
+  });
+
+  const collapsedGroupItemIds = useMemo(() => {
+    const ids = new Set<string>();
+    canvasGroups.forEach((group) => {
+      if (!group.collapse) return;
+      group.items.forEach((itemId) => ids.add(itemId));
+    });
+    return ids;
+  }, [canvasGroups]);
+
+  const visibleCanvasItems = useMemo(() => {
+    return canvasItems.filter((item) => !collapsedGroupItemIds.has(item.itemId));
+  }, [canvasItems, collapsedGroupItemIds]);
+
+  useEffect(() => {
+    let didChange = false;
+    canvasState.canvasItems.forEach((item) => {
+      if (!item.isSelected) return;
+      if (!collapsedGroupItemIds.has(item.itemId)) return;
+      item.isSelected = false;
+      didChange = true;
+    });
+    if (!didChange) return;
+
+    if (
+      canvasState.primaryId &&
+      collapsedGroupItemIds.has(canvasState.primaryId)
+    ) {
+      canvasState.primaryId = null;
+    }
+    canvasState.multiSelectUnion = null;
+  }, [collapsedGroupItemIds]);
 
   const setSelectionByIds = useMemoizedFn((ids: Set<string>) => {
     canvasState.canvasItems.forEach((item) => {
@@ -779,11 +851,13 @@ export const Canvas: React.FC = () => {
         setIsSpaceDown(false);
         isSpaceContainBlockedRef.current = false;
         if (shouldContain) {
+          const targetItems = getContainLayoutTargetItems();
           const currentPrimaryId = canvasState.primaryId;
-          const selectedItems = getSelectedItems();
-          if (selectedItems.length > 1) {
-            const bbox = getItemsBoundingBox(selectedItems);
+          if (targetItems.length > 1) {
+            const bbox = getItemsBoundingBox(targetItems);
             if (bbox) zoomToBounds(bbox, 0);
+          } else if (targetItems.length === 1) {
+            handleContainItem(targetItems[0].itemId);
           } else if (currentPrimaryId) {
             handleContainItem(currentPrimaryId);
           } else {
@@ -814,8 +888,8 @@ export const Canvas: React.FC = () => {
     };
   }, [
     closeContextMenu,
+    getContainLayoutTargetItems,
     getItemsBoundingBox,
-    getSelectedItems,
     handleContainItem,
     handleZoomToFit,
     setIsSpaceDown,
@@ -882,6 +956,7 @@ export const Canvas: React.FC = () => {
       const isRightButton = e.button === 2;
       if (isRightButton) {
         e.preventDefault();
+        canvasActions.setActiveCanvasGroup(null);
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
 
@@ -897,6 +972,7 @@ export const Canvas: React.FC = () => {
         target === e.currentTarget || target.id === "canvas-content-layer";
 
       if (isLeftButton && isBackground) {
+        canvasActions.setActiveCanvasGroup(null);
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
         const pos = localToWorldPoint(local);
@@ -1072,7 +1148,7 @@ export const Canvas: React.FC = () => {
           ? getSelectedIds()
           : new Set<string>();
         let lastHitId: string | null = null;
-        (canvasItems || []).forEach((item) => {
+        visibleCanvasItems.forEach((item) => {
           const scale = item.scale || 1;
           const rawW = (item.width || 0) * scale;
           const rawH = (item.height || 0) * scale;
@@ -1159,19 +1235,15 @@ export const Canvas: React.FC = () => {
   }, [computeMultiSelectUnion, getSelectedIds, setMultiSelectUnion]);
 
   const handleAutoLayout = useMemoizedFn(() => {
-    const selectedItems = getSelectedItems();
-    if (selectedItems.length > 0) {
-      const selectedImages = selectedItems.filter(
-        (item) => item.type === "image",
-      );
-
-      if (selectedImages.length >= 2) {
-        const bbox = getItemsBoundingBox(selectedImages);
+    const targetItems = getContainLayoutTargetItems();
+    if (targetItems.length > 0) {
+      if (targetItems.length >= 2) {
+        const bbox = getItemsBoundingBox(targetItems);
         const minX = bbox?.x ?? 0;
         const minY = bbox?.y ?? 0;
 
         canvasActions.autoLayoutCanvas(
-          selectedImages.map((item) => item.itemId),
+          targetItems.map((item) => item.itemId),
           {
             startX: minX,
             startY: minY,
@@ -1485,6 +1557,9 @@ export const Canvas: React.FC = () => {
           y: start.y + dy,
         });
       });
+      canvasActions.attachItemsToContainingGroups(
+        Array.from(multi.snapshots.keys()),
+      );
       canvasActions.commitCanvasChange();
       multiDragRef.current = {
         active: false,
@@ -1493,6 +1568,95 @@ export const Canvas: React.FC = () => {
         snapshots: new Map(),
       };
       setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    },
+  );
+
+  const handleGroupSelect = useMemoizedFn((groupId: string) => {
+    canvasActions.setActiveCanvasGroup(groupId);
+  });
+
+  const handleGroupDragStart = useMemoizedFn(
+    (groupId: string, client: { clientX: number; clientY: number }) => {
+      void client;
+      const group = canvasState.canvasGroups.find((item) => item.groupId === groupId);
+      if (!group) return;
+      const snapshots = new Map<string, { x: number; y: number }>();
+      group.items.forEach((itemId) => {
+        const item = canvasState.canvasItems.find((entry) => entry.itemId === itemId);
+        if (!item) return;
+        snapshots.set(itemId, { x: item.x, y: item.y });
+      });
+      if (snapshots.size === 0) return;
+      groupDragRef.current = {
+        active: true,
+        groupId,
+        snapshots,
+      };
+      canvasActions.setActiveCanvasGroup(groupId);
+    },
+  );
+
+  const handleGroupDragMove = useMemoizedFn(
+    (groupId: string, delta: { dx: number; dy: number }) => {
+      const drag = groupDragRef.current;
+      if (!drag.active || drag.groupId !== groupId) return;
+      const scale = canvasState.canvasViewport.scale || 1;
+      const dx = delta.dx / scale;
+      const dy = delta.dy / scale;
+      drag.snapshots.forEach((start, itemId) => {
+        canvasActions.updateCanvasImageTransient(itemId, {
+          x: start.x + dx,
+          y: start.y + dy,
+        });
+      });
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    },
+  );
+
+  const handleGroupDragEnd = useMemoizedFn(
+    (groupId: string, delta: { dx: number; dy: number }) => {
+      const drag = groupDragRef.current;
+      if (!drag.active || drag.groupId !== groupId) return;
+      const scale = canvasState.canvasViewport.scale || 1;
+      const dx = delta.dx / scale;
+      const dy = delta.dy / scale;
+
+      if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+        drag.snapshots.forEach((start, itemId) => {
+          canvasActions.updateCanvasImageSilent(itemId, {
+            x: start.x + dx,
+            y: start.y + dy,
+          });
+        });
+        canvasActions.commitCanvasChange();
+      }
+
+      groupDragRef.current = {
+        active: false,
+        groupId: null,
+        snapshots: new Map(),
+      };
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    },
+  );
+
+  const handleCanvasGroupCollapseToggle = useMemoizedFn((groupId: string) => {
+    canvasActions.toggleCanvasGroupCollapse(groupId);
+    setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  });
+
+  const handleCanvasGroupUngroup = useMemoizedFn((groupId: string) => {
+    canvasActions.ungroupCanvasGroup(groupId);
+    setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  });
+
+  const handleCanvasGroupColorPickerToggle = useMemoizedFn((groupId: string) => {
+    canvasActions.toggleCanvasGroupColorPicker(groupId);
+  });
+
+  const handleCanvasGroupColorChange = useMemoizedFn(
+    (groupId: string, color: string) => {
+      canvasActions.setCanvasGroupColor(groupId, color);
     },
   );
 
@@ -1509,6 +1673,10 @@ export const Canvas: React.FC = () => {
         canvasActions.bringToFront(id);
         if (target.isSelected) {
           setPrimaryId(id);
+          const parentGroup = canvasState.canvasGroups.find((group) =>
+            group.items.includes(id),
+          );
+          canvasActions.setActiveCanvasGroup(parentGroup?.groupId ?? null);
           return;
         }
         canvasState.canvasItems.forEach((item) => {
@@ -1516,6 +1684,10 @@ export const Canvas: React.FC = () => {
         });
         setPrimaryId(id);
         setMultiSelectUnion(null);
+        const parentGroup = canvasState.canvasGroups.find((group) =>
+          group.items.includes(id),
+        );
+        canvasActions.setActiveCanvasGroup(parentGroup?.groupId ?? null);
         return;
       }
 
@@ -1527,6 +1699,10 @@ export const Canvas: React.FC = () => {
         setPrimaryId(nextPrimary);
       }
       setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+      const parentGroup = canvasState.canvasGroups.find((group) =>
+        group.items.includes(id),
+      );
+      canvasActions.setActiveCanvasGroup(parentGroup?.groupId ?? null);
     },
   );
 
@@ -1717,8 +1893,25 @@ export const Canvas: React.FC = () => {
             opacity: globalSnap.canvasOpacity,
           }}
         >
-          <CanvasItemsLayer
+          <CanvasGroupsLayer
+            groups={canvasGroups}
             items={canvasItems}
+            stageScale={stageScale}
+            colorSwatches={appSnap.colorSwatches}
+            activeGroupId={activeCanvasGroupId}
+            activeColorPickerGroupId={activeCanvasGroupColorPickerId}
+            onGroupSelect={handleGroupSelect}
+            onGroupDragStart={handleGroupDragStart}
+            onGroupDragMove={handleGroupDragMove}
+            onGroupDragEnd={handleGroupDragEnd}
+            onGroupCollapseToggle={handleCanvasGroupCollapseToggle}
+            onGroupUngroup={handleCanvasGroupUngroup}
+            onGroupColorPickerToggle={handleCanvasGroupColorPickerToggle}
+            onGroupColorChange={handleCanvasGroupColorChange}
+            renderMode="rects"
+          />
+          <CanvasItemsLayer
+            items={visibleCanvasItems}
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
@@ -1740,6 +1933,23 @@ export const Canvas: React.FC = () => {
             onRotateItemStart={handleRotateItemStart}
             onScaleStartItem={handleItemScaleStart}
             onCommitItem={handleCommitItem}
+          />
+          <CanvasGroupsLayer
+            groups={canvasGroups}
+            items={canvasItems}
+            stageScale={stageScale}
+            colorSwatches={appSnap.colorSwatches}
+            activeGroupId={activeCanvasGroupId}
+            activeColorPickerGroupId={activeCanvasGroupColorPickerId}
+            onGroupSelect={handleGroupSelect}
+            onGroupDragStart={handleGroupDragStart}
+            onGroupDragMove={handleGroupDragMove}
+            onGroupDragEnd={handleGroupDragEnd}
+            onGroupCollapseToggle={handleCanvasGroupCollapseToggle}
+            onGroupUngroup={handleCanvasGroupUngroup}
+            onGroupColorPickerToggle={handleCanvasGroupColorPickerToggle}
+            onGroupColorChange={handleCanvasGroupColorChange}
+            renderMode="controls"
           />
           {!shouldEnableMouseThrough && (
             <SelectionRect

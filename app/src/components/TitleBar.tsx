@@ -308,6 +308,10 @@ export const TitleBar: React.FC = () => {
     await globalActions.setToggleMouseThroughShortcut(accelerator);
   };
 
+  const handleSetCanvasAutoLayoutShortcut = async (accelerator: string) => {
+    await globalActions.setCanvasAutoLayoutShortcut(accelerator);
+  };
+
   const handleSetCanvasGroupShortcut = async (accelerator: string) => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
@@ -965,6 +969,18 @@ export const TitleBar: React.FC = () => {
                     value={snap.canvasOpacityDownShortcut}
                     onChange={(accel) =>
                       void handleSetCanvasOpacityDownShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.canvasAutoLayout")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.canvasAutoLayoutShortcut}
+                    onChange={(accel) =>
+                      void handleSetCanvasAutoLayoutShortcut(accel)
                     }
                     onInvalid={handleShortcutInvalid}
                   />

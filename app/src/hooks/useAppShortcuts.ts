@@ -20,15 +20,26 @@ export const useAppShortcuts = () => {
   const externalCommands = commandSnap.externalCommands;
   const externalCommandShortcuts = commandSnap.externalCommandShortcuts;
 
+  const canvasAutoLayoutHotkey = acceleratorToHotkey(snap.canvasAutoLayoutShortcut);
   const canvasGroupHotkey = acceleratorToHotkey(snap.canvasGroupShortcut);
   const zoomToFitHotkey = acceleratorToHotkey(snap.zoomToFitShortcut);
   const commandPaletteShortcut = snap.commandPaletteShortcut;
 
   useHotkeys(
-    canvasGroupHotkey ?? "",
+    canvasAutoLayoutHotkey ?? "",
     (e) => {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent(CANVAS_AUTO_LAYOUT));
+    },
+    { preventDefault: true, enabled: Boolean(canvasAutoLayoutHotkey) },
+    [canvasAutoLayoutHotkey],
+  );
+
+  useHotkeys(
+    canvasGroupHotkey ?? "",
+    (e) => {
+      e.preventDefault();
+      canvasActions.groupSelectedItems();
     },
     { preventDefault: true, enabled: Boolean(canvasGroupHotkey) },
     [canvasGroupHotkey],

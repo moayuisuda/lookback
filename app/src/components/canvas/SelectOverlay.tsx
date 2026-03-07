@@ -95,7 +95,15 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
 
   if (isSelectionBoxActive) return null;
 
-  const selectedItems = canvasSnap.canvasItems.filter((item) => item.isSelected);
+  const collapsedItemIds = new Set<string>();
+  canvasSnap.canvasGroups.forEach((group) => {
+    if (!group.collapse) return;
+    group.items.forEach((itemId) => collapsedItemIds.add(itemId));
+  });
+
+  const selectedItems = canvasSnap.canvasItems.filter(
+    (item) => item.isSelected && !collapsedItemIds.has(item.itemId),
+  );
   if (selectedItems.length === 0) return null;
 
   const btnScale = 1 / stageScale;
