@@ -82,8 +82,7 @@ export const en = {
     "v{{version}} is ready. Restart to install",
   "titleBar.version.restartToInstall": "Restart to install",
   "titleBar.version.error": "Update failed: {{error}}",
-  "titleBar.version.inAppUnavailable":
-    "In-app updates are only available in installed macOS / Windows builds",
+  "titleBar.version.inAppUnavailable": "In-app updates are unavailable on this platform",
   "titleBar.version.upToDate": "You are on the latest version",
   "titleBar.version.updateAvailable": "Update available: v{{version}}",
   "titleBar.window": "Window",

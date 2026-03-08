@@ -383,10 +383,7 @@ export const TitleBar: React.FC = () => {
     };
 
     if (lastMousePosRef.current) {
-      checkAndSetIgnore(
-        lastMousePosRef.current.x,
-        lastMousePosRef.current.y,
-      );
+      checkAndSetIgnore(lastMousePosRef.current.x, lastMousePosRef.current.y);
     }
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
@@ -413,7 +410,10 @@ export const TitleBar: React.FC = () => {
 
     const handleMouseDown = (e: MouseEvent) => {
       // If clicking inside titlebar, let it function.
-      if (e.target instanceof Element && e.target.closest('.title-bar-container')) {
+      if (
+        e.target instanceof Element &&
+        e.target.closest(".title-bar-container")
+      ) {
         return;
       }
       isMouseDownRef.current = true;
@@ -449,7 +449,7 @@ export const TitleBar: React.FC = () => {
     versionSnap.updateStatus === "downloaded";
 
   const versionStatusText = (() => {
-    if (!versionSnap.updateEnabled) {
+    if (versionSnap.updateStatus === "unsupported") {
       return t("titleBar.version.inAppUnavailable");
     }
 
@@ -803,8 +803,8 @@ export const TitleBar: React.FC = () => {
                         className={clsx(
                           "w-full flex items-center justify-between rounded px-2 py-1 text-[10px] hover:bg-neutral-800",
                           snap.pinMode &&
-                          snap.pinTargetApp === appName &&
-                          "text-white",
+                            snap.pinTargetApp === appName &&
+                            "text-white",
                         )}
                       >
                         <span className="truncate">{appName}</span>
@@ -985,7 +985,10 @@ export const TitleBar: React.FC = () => {
                 {t("titleBar.shortcuts")}
                 <Tooltip content={t("titleBar.shortcuts.hint")} delay={150}>
                   <span className="flex items-center">
-                    <Info size={12} className="text-neutral-500 hover:text-neutral-300 transition-colors" />
+                    <Info
+                      size={12}
+                      className="text-neutral-500 hover:text-neutral-300 transition-colors"
+                    />
                   </span>
                 </Tooltip>
               </div>

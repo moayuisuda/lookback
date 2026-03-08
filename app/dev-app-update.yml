@@ -1,0 +1,3 @@
+provider: generic
+url: https://github.com/moayuisuda/lookback-release/releases/latest/download
+updaterCacheDirName: lookback-updater

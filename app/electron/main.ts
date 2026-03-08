@@ -117,7 +117,9 @@ const LOOKBACK_IMPORT_QUERY_KEY = "url";
 const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 const DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15000;
 const UPDATE_FEED_URL =
-  "https://mirror.ghproxy.com/https://github.com/moayuisuda/lookback-release/releases/latest/download";
+  "https://github.com/moayuisuda/lookback-release/releases/latest/download";
+const DEV_APP_UPDATE_CONFIG_FILE = "dev-app-update.yml";
+const DEV_UPDATER_CACHE_DIR_NAME = "lookback-updater";
 const pendingDeepLinkUrls: string[] = [];
 
 type UpdaterStatus =
@@ -219,8 +221,35 @@ function normalizeVersion(version: string) {
 }
 
 function isAutoUpdateSupported() {
-  if (!app.isPackaged) return false;
   return process.platform === "darwin" || process.platform === "win32";
+}
+
+function getDevAppUpdateConfigPath() {
+  return path.join(app.getAppPath(), DEV_APP_UPDATE_CONFIG_FILE);
+}
+
+function buildDevAppUpdateConfig() {
+  return [
+    "provider: generic",
+    `url: ${UPDATE_FEED_URL}`,
+    `updaterCacheDirName: ${DEV_UPDATER_CACHE_DIR_NAME}`,
+    "",
+  ].join("\n");
+}
+
+async function ensureDevAppUpdateConfig() {
+  if (app.isPackaged) return;
+  const configPath = getDevAppUpdateConfigPath();
+  const nextConfig = buildDevAppUpdateConfig();
+  const currentConfig = await lockedFs
+    .readFile(configPath, "utf-8")
+    .then((content) => String(content))
+    .catch(() => "");
+
+  if (currentConfig === nextConfig) return;
+
+  // electron-updater 在开发模式会强制读取 app 根目录下的 dev-app-update.yml。
+  await lockedFs.writeFile(configPath, nextConfig, "utf-8");
 }
 
 function syncUpdaterCurrentVersion() {
@@ -277,6 +306,7 @@ function initializeAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.disableWebInstaller = true;
+  autoUpdater.forceDevUpdateConfig = !app.isPackaged;
   autoUpdater.setFeedURL({
     provider: "generic",
     url: UPDATE_FEED_URL,
@@ -330,8 +360,14 @@ function initializeAutoUpdater() {
   emitUpdaterState();
 }
 
-async function checkForAppUpdates() {
+async function prepareAutoUpdater() {
   initializeAutoUpdater();
+  if (!updaterState.enabled) return;
+  await ensureDevAppUpdateConfig();
+}
+
+async function checkForAppUpdates() {
+  await prepareAutoUpdater();
   if (!updaterState.enabled) {
     return { success: false, error: "Auto update is unavailable" };
   }
@@ -350,7 +386,7 @@ async function checkForAppUpdates() {
 }
 
 async function downloadAppUpdate() {
-  initializeAutoUpdater();
+  await prepareAutoUpdater();
   if (!updaterState.enabled) {
     return { success: false, error: "Auto update is unavailable" };
   }
@@ -374,8 +410,8 @@ async function downloadAppUpdate() {
   }
 }
 
-function quitAndInstallAppUpdate() {
-  initializeAutoUpdater();
+async function quitAndInstallAppUpdate() {
+  await prepareAutoUpdater();
   if (!updaterState.enabled) {
     return { success: false, error: "Auto update is unavailable" };
   }
@@ -1596,7 +1632,7 @@ app.whenReady().then(async () => {
   log.info("App path:", app.getAppPath());
   log.info("User data:", app.getPath("userData"));
   registerLookBackProtocol();
-  initializeAutoUpdater();
+  await prepareAutoUpdater();
 
   const taskInitStorage = ensureStorageInitialized();
 

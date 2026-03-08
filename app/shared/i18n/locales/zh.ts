@@ -78,7 +78,7 @@ export const zh = {
   "titleBar.version.readyToInstall": "v{{version}} 已下载完成，重启后安装",
   "titleBar.version.restartToInstall": "重启安装",
   "titleBar.version.error": "更新失败：{{error}}",
-  "titleBar.version.inAppUnavailable": "应用内更新仅在已安装的 macOS / Windows 版本可用",
+  "titleBar.version.inAppUnavailable": "当前平台不支持应用内更新",
   "titleBar.version.upToDate": "已是最新版本",
   "titleBar.version.updateAvailable": "可更新至 v{{version}}",
   "titleBar.window": "窗口",

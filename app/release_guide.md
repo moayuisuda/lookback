@@ -71,10 +71,10 @@ npm run build:mac
 
 ## 4. 自动更新原理说明
 
-应用内自动更新通过国内镜像加速源（`mirror.ghproxy.com`）读取 `moayuisuda/lookback-release` 的最新 Release，流程如下：
+应用内自动更新直接读取 GitHub 原始 Release 下载地址，流程如下：
 
-1. 应用启动，请求 `https://mirror.ghproxy.com/https://github.com/moayuisuda/lookback-release/releases/latest/download/latest.yml`。
-2. 即使你在 GitHub 还没有标记 `latest`，只要 Release 链接正确，镜像源通常能通过重定向找到最新版。
+1. 应用启动，请求 `https://github.com/moayuisuda/lookback-release/releases/latest/download/latest.yml`。
+2. GitHub 会通过重定向返回当前 latest Release 对应的更新元数据。
 3. **最佳实践**：在 GitHub Release 页面发布时，勾选 **"Set as the latest release"**。
 
 ## 5. 常见问题
