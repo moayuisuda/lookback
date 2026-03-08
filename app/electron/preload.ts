@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('electron', {
   getServerPort: () => ipcRenderer.invoke('get-server-port'),
   getApiAuthToken: () => ipcRenderer.invoke('get-api-auth-token'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getUpdaterState: () => ipcRenderer.invoke('get-updater-state'),
+  checkAppUpdate: () => ipcRenderer.invoke('check-app-update'),
+  downloadAppUpdate: () => ipcRenderer.invoke('download-app-update'),
+  quitAndInstallAppUpdate: () => ipcRenderer.invoke('quit-and-install-app-update'),
   getStorageDir: () => ipcRenderer.invoke('get-storage-dir'),
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>
@@ -66,6 +70,11 @@ contextBridge.exposeInMainWorld('electron', {
     const handler = (_: unknown, data: unknown) => callback(data);
     ipcRenderer.on('toast', handler);
     return () => ipcRenderer.off('toast', handler);
+  },
+  onUpdaterState: (callback: (data: unknown) => void) => {
+    const handler = (_: unknown, data: unknown) => callback(data);
+    ipcRenderer.on('updater-state', handler);
+    return () => ipcRenderer.off('updater-state', handler);
   },
   log: (level: string, ...args: unknown[]) => ipcRenderer.send('log-message', level, ...args),
   getLogContent: () => ipcRenderer.invoke('get-log-content'),

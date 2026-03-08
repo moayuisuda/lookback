@@ -24,13 +24,13 @@ npm run build:win
 
 ### macOS 签名与公证 (必须)
 
-为了避免 macOS 提示“无法验证开发者”或“恶意软件”风险，**必须**在具有 Apple Developer 证书的 Mac 上进行构建，并设置以下环境变量：
+为了避免 macOS 提示“无法验证开发者”或“恶意软件”风险，**必须**在具有 Apple Developer 证书的 Mac 上进行构建，并设置以下环境变量。当前项目使用 `electron-builder` 内置的 `@electron/notarize` 流程完成公证：
 
 ```bash
 # 你的 Apple ID 邮箱
 export APPLE_ID="your-email@example.com"
 # 你的 App 专用密码 (在 appleid.apple.com 开启)
-export APPLE_ID_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
 # 你的 Team ID (在 Apple Developer 后台查看)
 export APPLE_TEAM_ID="YOUR_TEAM_ID"
 ```
@@ -41,7 +41,7 @@ export APPLE_TEAM_ID="YOUR_TEAM_ID"
 npm run build:mac
 ```
 
-构建过程中，`electron-builder` 会自动完成签名并上传至 Apple 进行公证。
+构建过程中，`electron-builder` 会自动完成签名、公证，并对 `.app` 执行 staple。
 
 构建完成后，产物会生成在 `app/dist/` 目录下。
 
@@ -64,15 +64,16 @@ npm run build:mac
 | `LookBack-x.x.x.dmg`          | 安装包             | ✅ 必须 |
 | `LookBack-x.x.x.dmg.blockmap` | 增量更新校验文件   | ✅ 必须 |
 | `LookBack-x.x.x-mac.zip`      | 自动更新替换包     | ✅ 必须 |
+| `LookBack-x.x.x-mac.zip.blockmap` | 增量更新校验文件 | ✅ 必须 |
 | `latest-mac.yml`              | macOS 版本索引文件 | ✅ 必须 |
 
 > **注意**：请直接上传构建生成的原文件名，不要手动修改文件名。
 
 ## 4. 自动更新原理说明
 
-我们配置了国内镜像加速源（`mirror.ghproxy.com`），更新流程如下：
+应用内自动更新通过国内镜像加速源（`mirror.ghproxy.com`）读取 `moayuisuda/lookback-release` 的最新 Release，流程如下：
 
-1. 应用启动，请求 `https://mirror.ghproxy.com/https://github.com/anhaohui/RroRef/releases/latest/download/latest.yml`。
+1. 应用启动，请求 `https://mirror.ghproxy.com/https://github.com/moayuisuda/lookback-release/releases/latest/download/latest.yml`。
 2. 即使你在 GitHub 还没有标记 `latest`，只要 Release 链接正确，镜像源通常能通过重定向找到最新版。
 3. **最佳实践**：在 GitHub Release 页面发布时，勾选 **"Set as the latest release"**。
 

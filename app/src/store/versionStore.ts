@@ -1,71 +1,129 @@
 import { proxy } from "valtio";
 
-type LatestReleaseApi = {
-  tag_name: string;
+export type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error"
+  | "unsupported";
+
+type UpdaterPayload = {
+  enabled: boolean;
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion: string;
+  downloadProgress: number;
+  errorMessage: string;
 };
 
 type VersionState = {
   currentVersion: string;
   latestVersion: string;
-  loadingLatestVersion: boolean;
-  latestVersionLoadFailed: boolean;
+  updateEnabled: boolean;
+  updateStatus: UpdateStatus;
+  downloadProgress: number;
+  errorMessage: string;
 };
 
-const LATEST_RELEASE_API =
-  "https://api.github.com/repos/moayuisuda/lookback-release/releases/latest";
+function normalizeVersion(version: string) {
+  return version.trim().replace(/^v/i, "");
+}
 
-function normalizeVersion(tagName: string) {
-  return tagName.replace(/^v/i, "");
+function applyUpdaterState(payload: Partial<UpdaterPayload>) {
+  if (typeof payload.enabled === "boolean") {
+    versionState.updateEnabled = payload.enabled;
+  }
+
+  if (typeof payload.status === "string") {
+    versionState.updateStatus = payload.status;
+  }
+
+  if (typeof payload.currentVersion === "string") {
+    versionState.currentVersion = normalizeVersion(payload.currentVersion);
+  }
+
+  if (typeof payload.latestVersion === "string") {
+    versionState.latestVersion = normalizeVersion(payload.latestVersion);
+  }
+
+  if (typeof payload.downloadProgress === "number") {
+    versionState.downloadProgress = Math.max(
+      0,
+      Math.min(100, payload.downloadProgress),
+    );
+  }
+
+  if (typeof payload.errorMessage === "string") {
+    versionState.errorMessage = payload.errorMessage.trim();
+  }
 }
 
 export const versionState = proxy<VersionState>({
   currentVersion: "",
   latestVersion: "",
-  loadingLatestVersion: false,
-  latestVersionLoadFailed: false,
+  updateEnabled: false,
+  updateStatus: "idle",
+  downloadProgress: 0,
+  errorMessage: "",
 });
 
+let initTask: Promise<void> | null = null;
+let hasUpdaterSubscription = false;
+
+async function syncUpdaterState() {
+  const payload = await window.electron?.getUpdaterState?.();
+  if (!payload) return;
+  applyUpdaterState(payload);
+}
+
 export const versionActions = {
-  async loadCurrentVersion() {
-    const rawVersion = await window.electron?.getAppVersion?.();
-    if (typeof rawVersion !== "string") return;
-    const version = rawVersion.trim();
-    if (!version) return;
-    versionState.currentVersion = normalizeVersion(version);
-  },
+  async init() {
+    if (!initTask) {
+      initTask = (async () => {
+        if (!hasUpdaterSubscription && window.electron?.onUpdaterState) {
+          hasUpdaterSubscription = true;
+          window.electron.onUpdaterState((payload) => {
+            applyUpdaterState(payload);
+          });
+        }
 
-  async loadLatestVersion() {
-    if (versionState.loadingLatestVersion) return;
-    versionState.loadingLatestVersion = true;
-    versionState.latestVersionLoadFailed = false;
-    try {
-      // 直接读取 GitHub latest release，确保设置页展示的是实时最新版本。
-      const response = await fetch(LATEST_RELEASE_API);
-      if (!response.ok) {
-        versionState.latestVersionLoadFailed = true;
-        return;
-      }
-      const payload = (await response.json()) as LatestReleaseApi;
-      if (typeof payload.tag_name !== "string") {
-        versionState.latestVersionLoadFailed = true;
-        return;
-      }
-      const latestVersion = normalizeVersion(payload.tag_name.trim());
-      if (!latestVersion) {
-        versionState.latestVersionLoadFailed = true;
-        return;
-      }
-      versionState.latestVersion = latestVersion;
-      versionState.latestVersionLoadFailed = false;
-    } catch {
-      versionState.latestVersionLoadFailed = true;
-    } finally {
-      versionState.loadingLatestVersion = false;
+        await syncUpdaterState();
+      })();
     }
+
+    await initTask;
   },
 
-  async refreshVersionInfo() {
-    await versionActions.loadCurrentVersion();
-    await versionActions.loadLatestVersion();
+  async checkForUpdates() {
+    await versionActions.init();
+    const result = await window.electron?.checkAppUpdate?.();
+    if (!result) return;
+    if (result.success) return;
+
+    versionState.updateStatus = "error";
+    versionState.errorMessage = result.error?.trim() || "";
+  },
+
+  async downloadUpdate() {
+    await versionActions.init();
+    const result = await window.electron?.downloadAppUpdate?.();
+    if (!result) return;
+    if (result.success) return;
+
+    versionState.updateStatus = "error";
+    versionState.errorMessage = result.error?.trim() || "";
+  },
+
+  async quitAndInstallUpdate() {
+    await versionActions.init();
+    const result = await window.electron?.quitAndInstallAppUpdate?.();
+    if (!result) return;
+    if (result.success) return;
+
+    versionState.updateStatus = "error";
+    versionState.errorMessage = result.error?.trim() || "";
   },
 };

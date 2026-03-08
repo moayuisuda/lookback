@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mac 本地构建 + 公证 + 上传 GitHub Release 脚本
+# Mac 本地构建 + 上传 GitHub Release 脚本
 # 用法: ./scripts/release-mac.sh <版本tag>  例如: ./scripts/release-mac.sh v0.1.26
 set -euo pipefail
 
@@ -32,54 +32,42 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/app"
 cd "$APP_DIR"
 
-# ── 步骤 1: 清理旧产物 + 构建（签名，不公证）────────────────────────────────
+# ── 步骤 1: 清理旧产物 + 构建（签名 + electron-builder 内置公证）────────────
 # 先删旧 zip/dmg，防止多版本文件导致后续步骤提交错误产物
 rm -f dist/*.zip dist/*.dmg dist/*.blockmap dist/latest-mac.yml
 echo "▶ 构建 macOS 应用 (证书: ${CSC_NAME})..."
 npm run build:mac -- --publish never
 
-# ── 步骤 2: 公证 ─────────────────────────────────────────────────────────────
-# 从 package.json 读版本号精确定位产物（彻底避免多版本文件混淆）
+# ── 步骤 2: 上传到 GitHub Release ────────────────────────────────────────────
+# electron-builder 会在构建过程中调用 @electron/notarize 完成公证并 staple .app
+# 这里从 package.json 读版本号，确保后续上传的产物版本正确
 VERSION=$(node -p "require('./package.json').version")
-ZIP_FILE="dist/LookBack-${VERSION}-arm64-mac.zip"
 DMG_FILE="dist/LookBack-${VERSION}-arm64.dmg"
-echo "▶ 提交公证: $ZIP_FILE"
+ZIP_FILE="dist/LookBack-${VERSION}-arm64-mac.zip"
+APP_BUNDLE="dist/mac-arm64/LookBack.app"
 
-RESULT=$(xcrun notarytool submit "$ZIP_FILE" \
-  --apple-id "$APPLE_ID" \
-  --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-  --team-id "$APPLE_TEAM_ID" \
-  --wait \
-  --output-format json)
-echo "$RESULT"
-
-SUBMISSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
-
-# 打印 Apple 日志（无论成功失败）
-if [[ -n "$SUBMISSION_ID" ]]; then
-  echo "▶ Apple 公证日志:"
-  xcrun notarytool log "$SUBMISSION_ID" \
-    --apple-id "$APPLE_ID" \
-    --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" || true
-fi
-
-if [[ "$STATUS" != "Accepted" ]]; then
-  echo "✗ 公证失败，状态: $STATUS" >&2
+if [[ ! -f "$DMG_FILE" || ! -f "$ZIP_FILE" || ! -d "$APP_BUNDLE" ]]; then
+  echo "✗ 构建产物缺失，请检查 build:mac 输出。" >&2
   exit 1
 fi
 
-# ── 步骤 3: Staple ────────────────────────────────────────────────────────────
-echo "▶ Stapling: $DMG_FILE"
-xcrun stapler staple "$DMG_FILE"
+# ── 步骤 2: 自动校验签名 / 公证 / staple ────────────────────────────────────
+echo "▶ 校验代码签名..."
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
-# ── 步骤 4: 上传到 GitHub Release ─────────────────────────────────────────────
+echo "▶ 校验 Gatekeeper 认可状态..."
+spctl -a -vvv --type execute "$APP_BUNDLE"
+
+echo "▶ 校验 stapler 票据..."
+xcrun stapler validate "$APP_BUNDLE"
+
+# ── 步骤 3: 上传到 GitHub Release ────────────────────────────────────────────
 echo "▶ 上传 Mac 产物到 GitHub Release $TAG ..."
 gh release upload "$TAG" \
   dist/*.dmg \
   dist/*.dmg.blockmap \
   dist/*-mac.zip \
+  dist/*-mac.zip.blockmap \
   dist/latest-mac.yml \
   --repo moayuisuda/lookback-release \
   --clobber

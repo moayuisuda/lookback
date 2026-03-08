@@ -16,6 +16,7 @@ import { createTempMetasFromFiles } from "./utils/import";
 import { useT } from "./i18n/useT";
 import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
+import { versionActions } from "./store/versionStore";
 
 import { WindowResizer } from "./components/WindowResizer";
 import { CommandPalette } from "./components/CommandPalette";
@@ -89,6 +90,7 @@ function App() {
     
     // 初始化加载
     anchorActions.loadAnchors();
+    void versionActions.init();
 
     const cleanupVisibility = window.electron?.onRendererEvent?.(
       (event: string, ...args: unknown[]) => {

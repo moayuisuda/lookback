@@ -80,12 +80,8 @@ export const TitleBar: React.FC = () => {
   useEffect(() => {
     if (!settingsOpen) return;
     void loadStorageDir();
-    void versionActions.refreshVersionInfo();
+    void versionActions.init();
   }, [settingsOpen]);
-
-  useEffect(() => {
-    void versionActions.refreshVersionInfo();
-  }, []);
 
   useEffect(() => {
     window.electron?.setSettingsOpen?.(settingsOpen);
@@ -254,8 +250,20 @@ export const TitleBar: React.FC = () => {
       setUpdatingStorageDir(false);
     }
   };
-  const handleOpenUpdatePage = () => {
-    void window.electron?.openExternal("https://lookback.top/");
+  const handleVersionAction = async () => {
+    if (!versionSnap.updateEnabled) return;
+
+    if (versionSnap.updateStatus === "available") {
+      await versionActions.downloadUpdate();
+      return;
+    }
+
+    if (versionSnap.updateStatus === "downloaded") {
+      await versionActions.quitAndInstallUpdate();
+      return;
+    }
+
+    await versionActions.checkForUpdates();
   };
 
   const handleToggleMouseThrough = () => {
@@ -436,9 +444,73 @@ export const TitleBar: React.FC = () => {
     !!editingCanvas ||
     !!deleteConfirmCanvas;
   const hasVersionUpdate =
-    !!versionSnap.currentVersion &&
-    !!versionSnap.latestVersion &&
-    versionSnap.currentVersion !== versionSnap.latestVersion;
+    versionSnap.updateStatus === "available" ||
+    versionSnap.updateStatus === "downloading" ||
+    versionSnap.updateStatus === "downloaded";
+
+  const versionStatusText = (() => {
+    if (!versionSnap.updateEnabled) {
+      return t("titleBar.version.inAppUnavailable");
+    }
+
+    if (versionSnap.updateStatus === "checking") {
+      return t("titleBar.version.checking");
+    }
+
+    if (versionSnap.updateStatus === "available") {
+      return t("titleBar.version.updateAvailable", {
+        version: versionSnap.latestVersion || versionSnap.currentVersion,
+      });
+    }
+
+    if (versionSnap.updateStatus === "downloading") {
+      return t("titleBar.version.downloading", {
+        progress: Math.round(versionSnap.downloadProgress),
+      });
+    }
+
+    if (versionSnap.updateStatus === "downloaded") {
+      return t("titleBar.version.readyToInstall", {
+        version: versionSnap.latestVersion || versionSnap.currentVersion,
+      });
+    }
+
+    if (versionSnap.updateStatus === "error") {
+      return t("titleBar.version.error", {
+        error: versionSnap.errorMessage || t("common.notSet"),
+      });
+    }
+
+    if (versionSnap.updateStatus === "not-available") {
+      return t("titleBar.version.upToDate");
+    }
+
+    return t("titleBar.version.checkHint");
+  })();
+
+  const versionActionLabel = (() => {
+    if (!versionSnap.updateEnabled) return "";
+    if (versionSnap.updateStatus === "available") {
+      return t("titleBar.version.downloadNow");
+    }
+    if (versionSnap.updateStatus === "downloaded") {
+      return t("titleBar.version.restartToInstall");
+    }
+    if (versionSnap.updateStatus === "downloading") {
+      return t("titleBar.version.downloadingButton", {
+        progress: Math.round(versionSnap.downloadProgress),
+      });
+    }
+    if (versionSnap.updateStatus === "checking") {
+      return t("titleBar.version.checkingButton");
+    }
+    return t("titleBar.version.checkNow");
+  })();
+
+  const versionActionDisabled =
+    !versionSnap.updateEnabled ||
+    versionSnap.updateStatus === "checking" ||
+    versionSnap.updateStatus === "downloading";
 
   useEffect(() => {
     globalActions.setTitleBarVisible(shouldShow);
@@ -849,38 +921,33 @@ export const TitleBar: React.FC = () => {
                     current: versionSnap.currentVersion
                       ? `v${versionSnap.currentVersion}`
                       : t("common.notSet"),
-                    latest: versionSnap.loadingLatestVersion
-                      ? t("common.loading")
-                      : versionSnap.latestVersion
-                        ? `v${versionSnap.latestVersion}`
-                        : t("common.notSet"),
+                    latest: versionSnap.latestVersion
+                      ? `v${versionSnap.latestVersion}`
+                      : t("common.notSet"),
                   })}
                 </span>
-                {hasVersionUpdate && (
+                {versionActionLabel && (
                   <button
                     type="button"
-                    onClick={handleOpenUpdatePage}
-                    className="shrink-0 text-[10px] transition-colors hover:opacity-85"
+                    onClick={() => void handleVersionAction()}
+                    disabled={versionActionDisabled}
+                    className="shrink-0 text-[10px] transition-colors hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
                     style={{ color: THEME.primary }}
                   >
-                    {t("titleBar.version.updateNow")}
+                    {versionActionLabel}
                   </button>
                 )}
               </div>
-              {versionSnap.latestVersionLoadFailed && (
-                <div className="text-[10px] text-amber-300">
-                  {t("titleBar.version.fetchFailed")}
-                </div>
-              )}
-              {!versionSnap.loadingLatestVersion &&
-                !versionSnap.latestVersionLoadFailed &&
-                versionSnap.currentVersion &&
-                versionSnap.latestVersion &&
-                versionSnap.currentVersion === versionSnap.latestVersion && (
-                  <div className="text-[10px] text-neutral-400">
-                    {t("titleBar.version.upToDate")}
-                  </div>
+              <div
+                className={clsx(
+                  "text-[10px]",
+                  versionSnap.updateStatus === "error"
+                    ? "text-amber-300"
+                    : "text-neutral-400",
                 )}
+              >
+                {versionStatusText}
+              </div>
             </div>
 
             <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800 space-y-2">

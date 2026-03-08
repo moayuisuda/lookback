@@ -12,6 +12,12 @@ permissions:
 jobs:
   build-mac:
     runs-on: macos-latest
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
     defaults:
       run:
         working-directory: app
@@ -31,6 +37,13 @@ jobs:
 
       - name: Build macOS artifacts
         run: npm run build:mac -- --publish never
+
+      - name: Validate macOS signing and notarization
+        run: |
+          APP_BUNDLE="dist/mac-arm64/LookBack.app"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          spctl -a -vvv --type execute "$APP_BUNDLE"
+          xcrun stapler validate "$APP_BUNDLE"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -58,6 +71,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             release-assets/mac/*.dmg
+            release-assets/mac/*.dmg.blockmap
+            release-assets/mac/*-mac.zip
+            release-assets/mac/*-mac.zip.blockmap
+            release-assets/mac/latest-mac.yml
           overwrite_files: true
           generate_release_notes: true
           fail_on_unmatched_files: false

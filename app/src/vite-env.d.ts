@@ -1,5 +1,24 @@
 /// <reference types="vite/client" />
 
+type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'unsupported';
+
+type UpdaterState = {
+  enabled: boolean;
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion: string;
+  downloadProgress: number;
+  errorMessage: string;
+};
+
 interface Window {
   electron?: {
     min: () => void;
@@ -31,6 +50,7 @@ interface Window {
     onEnvInitProgress: (callback: (data: unknown) => void) => () => void;
     onIndexingProgress: (callback: (data: unknown) => void) => () => void;
     onToast: (callback: (data: unknown) => void) => () => void;
+    onUpdaterState: (callback: (data: UpdaterState) => void) => () => void;
     onRendererEvent: (callback: (channel: string, data: unknown) => void) => () => void;
     listRunningApps: () => Promise<{
       success: boolean;
@@ -40,6 +60,10 @@ interface Window {
     getServerPort: () => Promise<number>;
     getApiAuthToken: () => Promise<string>;
     getAppVersion: () => Promise<string>;
+    getUpdaterState: () => Promise<UpdaterState>;
+    checkAppUpdate: () => Promise<{ success: boolean; error?: string }>;
+    downloadAppUpdate: () => Promise<{ success: boolean; error?: string }>;
+    quitAndInstallAppUpdate: () => Promise<{ success: boolean; error?: string }>;
     getStorageDir: () => Promise<string>;
     chooseStorageDir: () => Promise<string | null>;
     saveImageFile: (

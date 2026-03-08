@@ -10,6 +10,12 @@ import {
 import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
+import {
+  autoUpdater,
+  type ProgressInfo,
+  type UpdateDownloadedEvent,
+  type UpdateInfo,
+} from "electron-updater";
 import { execFile, spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { lockedFs, withFileLock } from "../backend/fileLock";
@@ -110,7 +116,40 @@ const LOOKBACK_IMPORT_HOST = "import-command";
 const LOOKBACK_IMPORT_QUERY_KEY = "url";
 const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 const DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15000;
+const UPDATE_FEED_URL =
+  "https://mirror.ghproxy.com/https://github.com/moayuisuda/lookback-release/releases/latest/download";
 const pendingDeepLinkUrls: string[] = [];
+
+type UpdaterStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error"
+  | "unsupported";
+
+type UpdaterState = {
+  enabled: boolean;
+  status: UpdaterStatus;
+  currentVersion: string;
+  latestVersion: string;
+  downloadProgress: number;
+  errorMessage: string;
+};
+
+const updaterState: UpdaterState = {
+  enabled: false,
+  status: "idle",
+  currentVersion: "",
+  latestVersion: "",
+  downloadProgress: 0,
+  errorMessage: "",
+};
+
+let isUpdaterInitialized = false;
+let hasTriggeredStartupUpdateCheck = false;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -173,6 +212,180 @@ function requestAppQuit() {
   if (isQuitting) return;
   isQuitting = true;
   app.quit();
+}
+
+function normalizeVersion(version: string) {
+  return version.trim().replace(/^v/i, "");
+}
+
+function isAutoUpdateSupported() {
+  if (!app.isPackaged) return false;
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+function syncUpdaterCurrentVersion() {
+  updaterState.currentVersion = normalizeVersion(app.getVersion());
+}
+
+function emitToast(
+  key: string,
+  type: "success" | "error" | "warning" | "info",
+  params?: Record<string, string | number>,
+) {
+  mainWindow?.webContents.send("toast", { key, type, params });
+}
+
+function emitUpdaterState() {
+  syncUpdaterCurrentVersion();
+  mainWindow?.webContents.send("updater-state", { ...updaterState });
+}
+
+function setUpdaterState(next: Partial<UpdaterState>) {
+  Object.assign(updaterState, next);
+  emitUpdaterState();
+}
+
+function applyUpdateInfoStatus(status: UpdaterStatus, info?: UpdateInfo) {
+  const nextVersion =
+    info && typeof info.version === "string" ? normalizeVersion(info.version) : "";
+  setUpdaterState({
+    enabled: true,
+    status,
+    latestVersion: nextVersion || updaterState.latestVersion,
+    errorMessage: "",
+  });
+}
+
+function initializeAutoUpdater() {
+  if (isUpdaterInitialized) {
+    emitUpdaterState();
+    return;
+  }
+
+  syncUpdaterCurrentVersion();
+  const enabled = isAutoUpdateSupported();
+  updaterState.enabled = enabled;
+  updaterState.status = enabled ? "idle" : "unsupported";
+
+  if (!enabled) {
+    emitUpdaterState();
+    return;
+  }
+
+  isUpdaterInitialized = true;
+  autoUpdater.logger = log;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.disableWebInstaller = true;
+  autoUpdater.setFeedURL({
+    provider: "generic",
+    url: UPDATE_FEED_URL,
+  });
+
+  autoUpdater.on("checking-for-update", () => {
+    setUpdaterState({
+      enabled: true,
+      status: "checking",
+      errorMessage: "",
+      downloadProgress: 0,
+    });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    applyUpdateInfoStatus("available", info);
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    applyUpdateInfoStatus("not-available", info);
+    setUpdaterState({ downloadProgress: 0 });
+  });
+
+  autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+    setUpdaterState({
+      enabled: true,
+      status: "downloading",
+      downloadProgress: Math.max(0, Math.min(100, progress.percent || 0)),
+      errorMessage: "",
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    applyUpdateInfoStatus("downloaded", info);
+    setUpdaterState({ downloadProgress: 100 });
+    emitToast("toast.updateDownloaded", "success", {
+      version: normalizeVersion(info.version),
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error("[updater] error", message);
+    setUpdaterState({
+      enabled: true,
+      status: "error",
+      errorMessage: message,
+    });
+  });
+
+  emitUpdaterState();
+}
+
+async function checkForAppUpdates() {
+  initializeAutoUpdater();
+  if (!updaterState.enabled) {
+    return { success: false, error: "Auto update is unavailable" };
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setUpdaterState({
+      enabled: true,
+      status: "error",
+      errorMessage: message,
+    });
+    return { success: false, error: message };
+  }
+}
+
+async function downloadAppUpdate() {
+  initializeAutoUpdater();
+  if (!updaterState.enabled) {
+    return { success: false, error: "Auto update is unavailable" };
+  }
+  if (updaterState.status === "downloaded") {
+    return { success: true };
+  }
+  if (updaterState.status !== "available" && updaterState.status !== "downloading") {
+    return { success: false, error: "No update is ready to download" };
+  }
+  try {
+    await autoUpdater.downloadUpdate();
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setUpdaterState({
+      enabled: true,
+      status: "error",
+      errorMessage: message,
+    });
+    return { success: false, error: message };
+  }
+}
+
+function quitAndInstallAppUpdate() {
+  initializeAutoUpdater();
+  if (!updaterState.enabled) {
+    return { success: false, error: "Auto update is unavailable" };
+  }
+  if (updaterState.status !== "downloaded") {
+    return { success: false, error: "Downloaded update is unavailable" };
+  }
+  setImmediate(() => {
+    autoUpdater.quitAndInstall(false, true);
+  });
+  return { success: true };
 }
 
 function registerLookBackProtocol() {
@@ -890,6 +1103,7 @@ async function createWindow(options?: { load?: boolean }) {
 
   mainWindow.webContents.on("did-finish-load", () => {
     log.info("Renderer process finished loading");
+    emitUpdaterState();
   });
 
   // Open DevTools in development
@@ -1298,6 +1512,23 @@ ipcMain.handle("get-app-version", async () => {
   return app.getVersion();
 });
 
+ipcMain.handle("get-updater-state", async () => {
+  initializeAutoUpdater();
+  return { ...updaterState };
+});
+
+ipcMain.handle("check-app-update", async () => {
+  return checkForAppUpdates();
+});
+
+ipcMain.handle("download-app-update", async () => {
+  return downloadAppUpdate();
+});
+
+ipcMain.handle("quit-and-install-app-update", async () => {
+  return quitAndInstallAppUpdate();
+});
+
 ipcMain.handle("choose-storage-dir", async () => {
   const locale = await getLocale();
   const result = await dialog.showOpenDialog({
@@ -1365,6 +1596,7 @@ app.whenReady().then(async () => {
   log.info("App path:", app.getAppPath());
   log.info("User data:", app.getPath("userData"));
   registerLookBackProtocol();
+  initializeAutoUpdater();
 
   const taskInitStorage = ensureStorageInitialized();
 
@@ -1408,11 +1640,17 @@ app.whenReady().then(async () => {
     }
   }
 
+  if (!hasTriggeredStartupUpdateCheck) {
+    hasTriggeredStartupUpdateCheck = true;
+    void checkForAppUpdates();
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow().then(() => {
         applyPinStateToWindow();
         registerGlobalShortcuts();
+        emitUpdaterState();
       });
       return;
     }
