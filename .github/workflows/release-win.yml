@@ -50,6 +50,45 @@ jobs:
           name: lookback-win
           path: release-assets/win
 
+      - name: Normalize Windows asset names
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_DIR="release-assets/win"
+          LATEST_YML="$RELEASE_DIR/latest.yml"
+
+          if [[ ! -f "$LATEST_YML" ]]; then
+            echo "latest.yml not found: $LATEST_YML" >&2
+            exit 1
+          fi
+
+          EXPECTED_EXE="$(sed -n 's/^path: //p' "$LATEST_YML" | head -n 1)"
+          if [[ -z "$EXPECTED_EXE" ]]; then
+            echo "path missing in latest.yml" >&2
+            exit 1
+          fi
+
+          EXPECTED_BLOCKMAP="${EXPECTED_EXE}.blockmap"
+          ACTUAL_EXE="$(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+          ACTUAL_BLOCKMAP="$(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.exe.blockmap' | head -n 1)"
+
+          if [[ -z "$ACTUAL_EXE" || -z "$ACTUAL_BLOCKMAP" ]]; then
+            echo "Windows artifacts are incomplete" >&2
+            exit 1
+          fi
+
+          ACTUAL_EXE_NAME="$(basename "$ACTUAL_EXE")"
+          ACTUAL_BLOCKMAP_NAME="$(basename "$ACTUAL_BLOCKMAP")"
+
+          if [[ "$ACTUAL_EXE_NAME" != "$EXPECTED_EXE" ]]; then
+            mv "$ACTUAL_EXE" "$RELEASE_DIR/$EXPECTED_EXE"
+          fi
+
+          if [[ "$ACTUAL_BLOCKMAP_NAME" != "$EXPECTED_BLOCKMAP" ]]; then
+            mv "$ACTUAL_BLOCKMAP" "$RELEASE_DIR/$EXPECTED_BLOCKMAP"
+          fi
+
       - name: Publish GitHub Release (Windows only)
         uses: softprops/action-gh-release@v2
         with:

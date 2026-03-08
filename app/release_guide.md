@@ -67,7 +67,7 @@ npm run build:mac
 | `LookBack-x.x.x-mac.zip.blockmap` | 增量更新校验文件 | ✅ 必须 |
 | `latest-mac.yml`              | macOS 版本索引文件 | ✅ 必须 |
 
-> **注意**：请直接上传构建生成的原文件名，不要手动修改文件名。
+> **注意**：Windows 自动更新严格依赖 `latest.yml` 中的文件名。发布前必须确保 `.exe` / `.blockmap` 的实际文件名与 `latest.yml` 的 `path` 字段完全一致，不要手动改名。
 
 ## 4. 自动更新原理说明
 
