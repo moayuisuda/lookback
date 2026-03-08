@@ -12,10 +12,13 @@ import { hexToRgba, THEME } from "../../theme";
 
 const TOOLBAR_OFFSET_Y = 16;
 const TOOLBAR_GAP_PX = 22;
-const COLLAPSED_LABEL_GAP_PX = 8;
+const COLLAPSED_LABEL_GAP_PX = 0;
 const COLLAPSED_PILL_PADDING_X_PX = 8;
 const COLLAPSED_PILL_PADDING_Y_PX = 4;
 const CONTROL_BUTTON_SIZE_PX = 18;
+const COLLAPSED_LABEL_MAX_WIDTH_PX = 220;
+const COLLAPSED_LABEL_PADDING_LEFT_PX = 6;
+const COLLAPSED_LABEL_PADDING_RIGHT_PX = 3;
 const SWATCH_GAP_PX = 22;
 const SWATCH_PANEL_PADDING_PX = 4;
 const SWATCH_RADIUS_PX = 5;
@@ -73,7 +76,71 @@ type CanvasGroupsLayerProps = {
   onGroupUngroup: (groupId: string) => void;
   onGroupColorPickerToggle: (groupId: string) => void;
   onGroupColorChange: (groupId: string, color: string) => void;
+  onGroupContain: (groupId: string) => void;
   renderMode: "rects" | "controls";
+};
+
+let textMeasureContext: CanvasRenderingContext2D | null = null;
+
+const getTextMeasureContext = () => {
+  if (textMeasureContext) return textMeasureContext;
+  if (typeof document === "undefined") return null;
+  textMeasureContext = document.createElement("canvas").getContext("2d");
+  return textMeasureContext;
+};
+
+const getMeasureFont = (fontSize: number) => {
+  const fontFamily =
+    typeof window === "undefined"
+      ? "sans-serif"
+      : window.getComputedStyle(document.body).fontFamily || "sans-serif";
+  return `${fontSize}px ${fontFamily}`;
+};
+
+const measureTextWidth = (text: string, fontSize: number) => {
+  if (!text) return 0;
+  const context = getTextMeasureContext();
+  if (!context) return text.length * fontSize * 0.6;
+  context.font = getMeasureFont(fontSize);
+  return context.measureText(text).width;
+};
+
+const getCollapsedLabelMetrics = (
+  text: string | null,
+  fontSize: number,
+  maxWidth: number,
+) => {
+  if (!text) {
+    return { text: "", width: 0 };
+  }
+
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    return { text: "", width: 0 };
+  }
+
+  const fullWidth = measureTextWidth(trimmedText, fontSize);
+  if (fullWidth <= maxWidth) {
+    return { text: trimmedText, width: fullWidth };
+  }
+
+  const ellipsis = "...";
+  const ellipsisWidth = measureTextWidth(ellipsis, fontSize);
+  if (ellipsisWidth >= maxWidth) {
+    return { text: ellipsis, width: Math.min(ellipsisWidth, maxWidth) };
+  }
+
+  let end = trimmedText.length;
+  while (end > 0) {
+    const nextText = `${trimmedText.slice(0, end)}${ellipsis}`;
+    const nextWidth = measureTextWidth(nextText, fontSize);
+    if (nextWidth <= maxWidth) {
+      return { text: nextText, width: nextWidth };
+    }
+    end -= 1;
+  }
+
+  return { text: ellipsis, width: ellipsisWidth };
 };
 
 const getGroupLayout = (
@@ -95,7 +162,10 @@ const getGroupLayout = (
     const itemBounds = getCanvasItemBounds(item);
     if (!itemBounds) return;
     const fontSize = item.fontSize || 0;
-    const distance = Math.hypot(itemBounds.x - bounds.x, itemBounds.y - bounds.y);
+    const distance = Math.hypot(
+      itemBounds.x - bounds.x,
+      itemBounds.y - bounds.y,
+    );
     if (fontSize < largestFontSize) return;
     if (fontSize === largestFontSize && distance >= nearestDistance) return;
     largestFontSize = fontSize;
@@ -129,6 +199,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
   onGroupUngroup,
   onGroupColorPickerToggle,
   onGroupColorChange,
+  onGroupContain,
   renderMode,
 }) => {
   const dragRef = useRef<{
@@ -195,37 +266,40 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
         const { group, bounds, toolbar, collapsedLabel } = layout;
         const isActive = activeGroupId === group.groupId;
         const isColorPickerOpen = activeColorPickerGroupId === group.groupId;
-        const strokeColor = hexToRgba(group.backgroundColor, 0.9) || THEME.primary;
+        const strokeColor =
+          hexToRgba(group.backgroundColor, 0.9) || THEME.primary;
         const fillColor =
           hexToRgba(group.backgroundColor, group.collapse ? 0.24 : 0.14) ||
           THEME.canvas.selectionFill;
-        const toolbarY = group.collapse ? bounds.y - TOOLBAR_OFFSET_Y : toolbar.y;
+        const toolbarY = group.collapse
+          ? bounds.y - TOOLBAR_OFFSET_Y
+          : toolbar.y;
         const buttonSize = CONTROL_BUTTON_SIZE_PX * controlScale;
-        const collapsedLabelText = collapsedLabel
-          ? collapsedLabel.length > 18
-            ? `${collapsedLabel.slice(0, 18)}...`
-            : collapsedLabel
-          : "";
         const collapsedLabelFontSize = 14 * controlScale;
-        const collapsedLabelPaddingX = 6 * controlScale;
+        const collapsedLabelMaxWidth =
+          COLLAPSED_LABEL_MAX_WIDTH_PX * controlScale;
+        const collapsedLabelMetrics = getCollapsedLabelMetrics(
+          collapsedLabel,
+          collapsedLabelFontSize,
+          collapsedLabelMaxWidth,
+        );
+        const collapsedLabelText = collapsedLabelMetrics.text;
+        const collapsedLabelPaddingLeft =
+          COLLAPSED_LABEL_PADDING_LEFT_PX * controlScale;
+        const collapsedLabelPaddingRight =
+          COLLAPSED_LABEL_PADDING_RIGHT_PX * controlScale;
         const collapsedLabelGap = COLLAPSED_LABEL_GAP_PX * controlScale;
         const collapsedLabelWidth = collapsedLabelText
-          ? Math.max(
-              40 * controlScale,
-              Math.min(
-                220 * controlScale,
-                collapsedLabelText.length * 7 * controlScale +
-                  collapsedLabelPaddingX * 2,
-              ),
-            )
+          ? collapsedLabelMetrics.width +
+            collapsedLabelPaddingLeft +
+            collapsedLabelPaddingRight
           : 0;
-        const collapsedPillPaddingX = COLLAPSED_PILL_PADDING_X_PX * controlScale;
-        const collapsedPillPaddingY = COLLAPSED_PILL_PADDING_Y_PX * controlScale;
-        const collapsedButtonCenters = isActive
-          ? [toolbar.x - toolbarGap, toolbar.x, toolbar.x + toolbarGap]
-          : [toolbar.x, toolbar.x + toolbarGap];
-        const collapsedButtonsLeft =
-          collapsedButtonCenters[0] - buttonSize / 2;
+        const collapsedPillPaddingX =
+          COLLAPSED_PILL_PADDING_X_PX * controlScale;
+        const collapsedPillPaddingY =
+          COLLAPSED_PILL_PADDING_Y_PX * controlScale;
+        const collapsedButtonCenters = [toolbar.x, toolbar.x + toolbarGap];
+        const collapsedButtonsLeft = collapsedButtonCenters[0] - buttonSize / 2;
         const collapsedButtonsRight =
           collapsedButtonCenters[collapsedButtonCenters.length - 1] +
           buttonSize / 2;
@@ -233,21 +307,18 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
         const collapsedWrapperWidth =
           buttonsWidth +
           collapsedPillPaddingX * 2 +
-          (collapsedLabelWidth > 0 ? collapsedLabelGap + collapsedLabelWidth : 0);
-        const collapsedWrapperHeight =
-          buttonSize + collapsedPillPaddingY * 2;
+          (collapsedLabelWidth > 0
+            ? collapsedLabelGap + collapsedLabelWidth
+            : 0);
+        const collapsedWrapperHeight = buttonSize + collapsedPillPaddingY * 2;
         const collapsedWrapperX = collapsedButtonsLeft - collapsedPillPaddingX;
-        const collapsedWrapperY = toolbarY - buttonSize / 2 - collapsedPillPaddingY;
-        const collapsedUngroupX = collapsedButtonCenters[0];
-        const collapsedColorX = isActive
-          ? collapsedButtonCenters[1]
-          : collapsedButtonCenters[0];
+        const collapsedWrapperY =
+          toolbarY - buttonSize / 2 - collapsedPillPaddingY;
+        const collapsedColorX = collapsedButtonCenters[0];
         const collapsedCollapseX =
           collapsedButtonCenters[collapsedButtonCenters.length - 1];
         const collapsedLabelX =
-          collapsedButtonsRight +
-          collapsedLabelGap +
-          collapsedLabelPaddingX;
+          collapsedButtonsRight + collapsedLabelGap + collapsedLabelPaddingLeft;
         const swatchPanelPadding = SWATCH_PANEL_PADDING_PX * controlScale;
         const swatchRadius = SWATCH_RADIUS_PX * controlScale;
         const swatchActiveRingRadius =
@@ -279,6 +350,10 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                 strokeWidth={isActive ? 2 : 1}
                 vectorEffect="non-scaling-stroke"
                 onPointerDown={bindGroupPointerDown(group.groupId)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onGroupContain(group.groupId);
+                }}
               />
             ) : null}
 
@@ -296,76 +371,83 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                   strokeWidth={isActive ? 2 : 1}
                   vectorEffect="non-scaling-stroke"
                   onPointerDown={bindGroupPointerDown(group.groupId)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    onGroupContain(group.groupId);
+                  }}
                 />
               </>
             ) : null}
 
-            {renderMode === "controls" &&
-              (group.collapse || isActive) && (
-                <>
-                  {isActive ? (
-                    <CanvasControlButton
-                      x={group.collapse ? collapsedUngroupX : toolbar.x - toolbarGap}
-                      y={toolbarY}
-                      scale={controlScale}
-                      size={18}
-                      fill="#0f172a"
-                      stroke={strokeColor}
-                      strokeWidth={1.5}
-                      iconPath={GROUP_ICONS.ungroup.path}
-                      iconScale={0.5}
-                      iconOffsetX={GROUP_ICONS.ungroup.offsetX}
-                      iconOffsetY={GROUP_ICONS.ungroup.offsetY}
-                      onClick={() => onGroupUngroup(group.groupId)}
-                    />
-                  ) : null}
+            {renderMode === "controls" && (group.collapse || isActive) && (
+              <>
+                {isActive && !group.collapse ? (
                   <CanvasControlButton
-                    x={group.collapse ? collapsedColorX : toolbar.x}
+                    x={toolbar.x - toolbarGap}
                     y={toolbarY}
                     scale={controlScale}
                     size={18}
                     fill="#0f172a"
                     stroke={strokeColor}
                     strokeWidth={1.5}
-                    onClick={() => onGroupColorPickerToggle(group.groupId)}
+                    iconPath={GROUP_ICONS.ungroup.path}
+                    iconScale={0.5}
+                    iconOffsetX={GROUP_ICONS.ungroup.offsetX}
+                    iconOffsetY={GROUP_ICONS.ungroup.offsetY}
+                    onClick={() => onGroupUngroup(group.groupId)}
                   />
-                  <circle
-                    cx={group.collapse ? collapsedColorX : toolbar.x}
-                    cy={toolbarY}
-                    r={5 * controlScale}
-                    fill={group.backgroundColor}
-                    pointerEvents="none"
-                  />
-                  <CanvasControlButton
-                    x={group.collapse ? collapsedCollapseX : toolbar.x + toolbarGap}
-                    y={toolbarY}
-                    scale={controlScale}
-                    size={18}
-                    fill="#0f172a"
-                    stroke={strokeColor}
-                      strokeWidth={1.5}
-                      iconPath={
-                        group.collapse
-                          ? GROUP_ICONS.expand.path
-                          : GROUP_ICONS.collapse.path
-                      }
-                      iconScale={0.5}
-                      iconOffsetX={
-                        group.collapse
-                          ? GROUP_ICONS.expand.offsetX
-                          : GROUP_ICONS.collapse.offsetX
-                      }
-                      iconOffsetY={
-                        group.collapse
-                          ? GROUP_ICONS.expand.offsetY
-                          : GROUP_ICONS.collapse.offsetY
-                      }
-                      onClick={() => onGroupCollapseToggle(group.groupId)}
-                    />
-                </>
-              )}
+                ) : null}
+                <CanvasControlButton
+                  x={group.collapse ? collapsedColorX : toolbar.x}
+                  y={toolbarY}
+                  scale={controlScale}
+                  size={18}
+                  fill="#0f172a"
+                  stroke={strokeColor}
+                  strokeWidth={1.5}
+                  onClick={() => onGroupColorPickerToggle(group.groupId)}
+                />
+                <circle
+                  cx={group.collapse ? collapsedColorX : toolbar.x}
+                  cy={toolbarY}
+                  r={5 * controlScale}
+                  fill={group.backgroundColor}
+                  pointerEvents="none"
+                />
+                <CanvasControlButton
+                  x={
+                    group.collapse ? collapsedCollapseX : toolbar.x + toolbarGap
+                  }
+                  y={toolbarY}
+                  scale={controlScale}
+                  size={18}
+                  fill="#0f172a"
+                  stroke={strokeColor}
+                  strokeWidth={1.5}
+                  iconPath={
+                    group.collapse
+                      ? GROUP_ICONS.expand.path
+                      : GROUP_ICONS.collapse.path
+                  }
+                  iconScale={0.5}
+                  iconOffsetX={
+                    group.collapse
+                      ? GROUP_ICONS.expand.offsetX
+                      : GROUP_ICONS.collapse.offsetX
+                  }
+                  iconOffsetY={
+                    group.collapse
+                      ? GROUP_ICONS.expand.offsetY
+                      : GROUP_ICONS.collapse.offsetY
+                  }
+                  onClick={() => onGroupCollapseToggle(group.groupId)}
+                />
+              </>
+            )}
 
-            {renderMode === "controls" && group.collapse && collapsedLabelText ? (
+            {renderMode === "controls" &&
+            group.collapse &&
+            collapsedLabelText ? (
               <g style={{ cursor: "pointer" }}>
                 <text
                   x={collapsedLabelX}

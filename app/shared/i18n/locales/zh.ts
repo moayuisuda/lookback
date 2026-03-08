@@ -228,6 +228,7 @@ export const zh = {
   "canvas.empty.dragHint": "拖拽图片或文件夹到此处开始",
   "canvas.empty.panHint": "中键或空格拖拽平移",
   "canvas.empty.zoomHint": "滚轮缩放",
+  "canvas.text.openLinkHint": "cmd/ctrl + 点击打开链接：{{url}}",
 
   "swatch.replaceHint": "{{color}}（长按替换）",
 

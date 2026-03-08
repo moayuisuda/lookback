@@ -62,8 +62,8 @@ export interface CanvasImage extends ImageMeta {
 
 const GROUP_GAP = 40;
 const DEFAULT_CANVAS_GROUP_COLOR = "#39c5bb";
-export const CANVAS_GROUP_PADDING_X = 24;
-export const CANVAS_GROUP_PADDING_Y = 24;
+export const CANVAS_GROUP_PADDING_X = 64;
+export const CANVAS_GROUP_PADDING_Y = 64;
 
 export type CanvasItem = CanvasImage | CanvasText;
 
@@ -242,6 +242,38 @@ export const getCanvasGroupBounds = (
     width: maxX - minX + CANVAS_GROUP_PADDING_X * 2,
     height: maxY - minY + CANVAS_GROUP_PADDING_Y * 2,
   };
+};
+
+const containCanvasBounds = (bounds: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) => {
+  const { width, height, x, y } = bounds;
+  const padding = 0;
+  const { width: containerWidth, height: containerHeight } =
+    canvasState.dimensions;
+
+  if (containerWidth <= 0 || containerHeight <= 0) return false;
+  if (width <= 0 || height <= 0) return false;
+
+  const scaleByWidth = (containerWidth - padding * 2) / width;
+  const scaleByHeight = (containerHeight - padding * 2) / height;
+  const newScale = Math.min(scaleByWidth, scaleByHeight);
+
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+
+  canvasActions.setCanvasViewport({
+    x: containerWidth / 2 - centerX * newScale,
+    y: containerHeight / 2 - centerY * newScale,
+    width: containerWidth,
+    height: containerHeight,
+    scale: newScale,
+  });
+
+  return true;
 };
 
 const normalizePath = (value: string) => value.replace(/\\/g, "/");
@@ -587,7 +619,11 @@ const mergeToItems = (nextItemsInput: CanvasItem[]) => {
     return current;
   });
 
-  canvasState.canvasItems.splice(0, canvasState.canvasItems.length, ...nextItems);
+  canvasState.canvasItems.splice(
+    0,
+    canvasState.canvasItems.length,
+    ...nextItems,
+  );
 };
 
 const mergeToGroups = (nextGroupsInput: CanvasGroup[]) => {
@@ -617,7 +653,9 @@ const cleanupCanvasGroups = (items: CanvasItem[]) => {
   mergeToGroups(normalized);
   if (
     canvasState.activeCanvasGroupId &&
-    !normalized.some((group) => group.groupId === canvasState.activeCanvasGroupId)
+    !normalized.some(
+      (group) => group.groupId === canvasState.activeCanvasGroupId,
+    )
   ) {
     canvasState.activeCanvasGroupId = null;
   }
@@ -710,7 +748,9 @@ export const canvasActions = {
         loadCanvasImages<CanvasPersistedItem[]>(lastActive).catch(
           () => [] as CanvasPersistedItem[],
         ),
-        loadCanvasGroups<CanvasGroup[]>(lastActive).catch(() => [] as CanvasGroup[]),
+        loadCanvasGroups<CanvasGroup[]>(lastActive).catch(
+          () => [] as CanvasGroup[],
+        ),
         getCanvasViewport<CanvasViewport | null>(lastActive).catch(() => null),
       ]);
 
@@ -885,7 +925,8 @@ export const canvasActions = {
   undoCanvas: () => {
     if (canvasState.canvasHistoryIndex > 0) {
       canvasState.canvasHistoryIndex--;
-      const historyEntry = canvasState.canvasHistory[canvasState.canvasHistoryIndex];
+      const historyEntry =
+        canvasState.canvasHistory[canvasState.canvasHistoryIndex];
       mergeToItems(historyEntry.canvasItems);
       mergeToGroups(historyEntry.canvasGroups);
       canvasState.activeCanvasGroupId = null;
@@ -898,7 +939,8 @@ export const canvasActions = {
   redoCanvas: () => {
     if (canvasState.canvasHistoryIndex < canvasState.canvasHistory.length - 1) {
       canvasState.canvasHistoryIndex++;
-      const historyEntry = canvasState.canvasHistory[canvasState.canvasHistoryIndex];
+      const historyEntry =
+        canvasState.canvasHistory[canvasState.canvasHistoryIndex];
       mergeToItems(historyEntry.canvasItems);
       mergeToGroups(historyEntry.canvasGroups);
       canvasState.activeCanvasGroupId = null;
@@ -938,21 +980,26 @@ export const canvasActions = {
     const nextFontSize = fontSize || 96;
     const defaultText = "Double click to edit";
     const textSize = measureCanvasTextSize(defaultText, nextFontSize);
-    appendCanvasItems([{
-      type: "text",
-      itemId: id,
-      x,
-      y,
-      rotation: 0,
-      scale: 1,
-      text: defaultText,
-      fontSize: nextFontSize,
-      fill: "#ffffff",
-      width: textSize.width,
-      height: textSize.height,
-      isSelected: false,
-      isAutoEdit: false,
-    }], { x, y });
+    appendCanvasItems(
+      [
+        {
+          type: "text",
+          itemId: id,
+          x,
+          y,
+          rotation: 0,
+          scale: 1,
+          text: defaultText,
+          fontSize: nextFontSize,
+          fill: "#ffffff",
+          width: textSize.width,
+          height: textSize.height,
+          isSelected: false,
+          isAutoEdit: false,
+        },
+      ],
+      { x, y },
+    );
     return id;
   },
 
@@ -1025,7 +1072,9 @@ export const canvasActions = {
   },
 
   setCanvasGroupColor: (groupId: string, color: string) => {
-    const group = canvasState.canvasGroups.find((item) => item.groupId === groupId);
+    const group = canvasState.canvasGroups.find(
+      (item) => item.groupId === groupId,
+    );
     if (!group) return;
     const nextColor = normalizeGroupColor(color);
     if (group.backgroundColor === nextColor) return;
@@ -1036,7 +1085,9 @@ export const canvasActions = {
   },
 
   toggleCanvasGroupCollapse: (groupId: string) => {
-    const group = canvasState.canvasGroups.find((item) => item.groupId === groupId);
+    const group = canvasState.canvasGroups.find(
+      (item) => item.groupId === groupId,
+    );
     if (!group) return;
     group.collapse = !group.collapse;
     canvasState.activeCanvasGroupId = groupId;
@@ -1114,7 +1165,9 @@ export const canvasActions = {
     let didChange = false;
 
     targetItemIds.forEach((itemId) => {
-      const item = canvasState.canvasItems.find((entry) => entry.itemId === itemId);
+      const item = canvasState.canvasItems.find(
+        (entry) => entry.itemId === itemId,
+      );
       if (!item) return;
 
       const itemBounds = getCanvasItemBounds(item);
@@ -1129,7 +1182,10 @@ export const canvasActions = {
         .filter(
           (
             candidate,
-          ): candidate is { group: CanvasGroup; bounds: NonNullable<ReturnType<typeof getCanvasGroupBounds>> } =>
+          ): candidate is {
+            group: CanvasGroup;
+            bounds: NonNullable<ReturnType<typeof getCanvasGroupBounds>>;
+          } =>
             candidate.bounds !== null &&
             itemBounds.x >= candidate.bounds.x &&
             itemBounds.y >= candidate.bounds.y &&
@@ -1148,7 +1204,9 @@ export const canvasActions = {
 
       currentGroups.forEach((group) => {
         if (!group.items.includes(itemId)) return;
-        group.items = group.items.filter((groupItemId) => groupItemId !== itemId);
+        group.items = group.items.filter(
+          (groupItemId) => groupItemId !== itemId,
+        );
       });
       targetGroup.items.push(itemId);
       didChange = true;
@@ -1156,7 +1214,9 @@ export const canvasActions = {
 
     if (!didChange) return false;
 
-    mergeToGroups(normalizeCanvasGroups(currentGroups, canvasState.canvasItems));
+    mergeToGroups(
+      normalizeCanvasGroups(currentGroups, canvasState.canvasItems),
+    );
     canvasState.activeCanvasGroupColorPickerId = null;
     return true;
   },
@@ -1208,11 +1268,15 @@ export const canvasActions = {
     if (!targetGroup) return false;
 
     currentGroups.forEach((group) => {
-      group.items = group.items.filter((itemId) => !targetItemIds.includes(itemId));
+      group.items = group.items.filter(
+        (itemId) => !targetItemIds.includes(itemId),
+      );
     });
     targetGroup.items.push(...targetItemIds);
 
-    mergeToGroups(normalizeCanvasGroups(currentGroups, canvasState.canvasItems));
+    mergeToGroups(
+      normalizeCanvasGroups(currentGroups, canvasState.canvasItems),
+    );
     canvasState.activeCanvasGroupColorPickerId = null;
     return true;
   },
@@ -1273,16 +1337,23 @@ export const canvasActions = {
     }
 
     const itemId = `img_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    appendCanvasItems([{
-      type: "image",
-      ...image,
-      itemId,
-      x: targetX,
-      y: targetY,
-      scale: 1,
-      rotation: 0,
-      isSelected: false,
-    }], typeof x === "number" && typeof y === "number" ? { x: targetX, y: targetY } : undefined);
+    appendCanvasItems(
+      [
+        {
+          type: "image",
+          ...image,
+          itemId,
+          x: targetX,
+          y: targetY,
+          scale: 1,
+          rotation: 0,
+          isSelected: false,
+        },
+      ],
+      typeof x === "number" && typeof y === "number"
+        ? { x: targetX, y: targetY }
+        : undefined,
+    );
     return itemId;
   },
 
@@ -1523,32 +1594,13 @@ export const canvasActions = {
     const rawH = (item.height || 0) * scale;
     const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
 
-    const width = bbox.width;
-    const height = bbox.height;
-    const padding = 0;
-
-    const { width: containerWidth, height: containerHeight } =
-      canvasState.dimensions;
-
-    if (containerWidth <= 0 || containerHeight <= 0) return;
-
-    const scaleByWidth = (containerWidth - padding * 2) / width;
-    const scaleByHeight = (containerHeight - padding * 2) / height;
-    const newScale = Math.min(scaleByWidth, scaleByHeight);
-
-    const centerX = item.x + bbox.offsetX + width / 2;
-    const centerY = item.y + bbox.offsetY + height / 2;
-
-    const newX = containerWidth / 2 - centerX * newScale;
-    const newY = containerHeight / 2 - centerY * newScale;
-
-    canvasActions.setCanvasViewport({
-      x: newX,
-      y: newY,
-      width: containerWidth,
-      height: containerHeight,
-      scale: newScale,
+    const contained = containCanvasBounds({
+      x: item.x + bbox.offsetX,
+      y: item.y + bbox.offsetY,
+      width: bbox.width,
+      height: bbox.height,
     });
+    if (!contained) return;
 
     canvasState.primaryId = null;
     canvasState.multiSelectUnion = null;

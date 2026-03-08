@@ -371,7 +371,9 @@ export const Canvas: React.FC = () => {
   }, [canvasGroups]);
 
   const visibleCanvasItems = useMemo(() => {
-    return canvasItems.filter((item) => !collapsedGroupItemIds.has(item.itemId));
+    return canvasItems.filter(
+      (item) => !collapsedGroupItemIds.has(item.itemId),
+    );
   }, [canvasItems, collapsedGroupItemIds]);
 
   useEffect(() => {
@@ -779,6 +781,33 @@ export const Canvas: React.FC = () => {
     );
   });
 
+  const containCanvasItems = useMemoizedFn(
+    (
+      targetItems: readonly Snapshot<CanvasItem>[],
+      fallbackItemId?: string | null,
+    ) => {
+      if (targetItems.length > 1) {
+        const bbox = getItemsBoundingBox(targetItems);
+        if (bbox) {
+          zoomToBounds(bbox, 0);
+          return true;
+        }
+      }
+
+      if (targetItems.length === 1) {
+        handleContainItem(targetItems[0].itemId);
+        return true;
+      }
+
+      if (fallbackItemId) {
+        handleContainItem(fallbackItemId);
+        return true;
+      }
+
+      return false;
+    },
+  );
+
   const getItemsBoundingBox = useMemoizedFn((items: typeof canvasItems) => {
     if (!items || items.length === 0) return null;
 
@@ -852,15 +881,11 @@ export const Canvas: React.FC = () => {
         isSpaceContainBlockedRef.current = false;
         if (shouldContain) {
           const targetItems = getContainLayoutTargetItems();
-          const currentPrimaryId = canvasState.primaryId;
-          if (targetItems.length > 1) {
-            const bbox = getItemsBoundingBox(targetItems);
-            if (bbox) zoomToBounds(bbox, 0);
-          } else if (targetItems.length === 1) {
-            handleContainItem(targetItems[0].itemId);
-          } else if (currentPrimaryId) {
-            handleContainItem(currentPrimaryId);
-          } else {
+          const contained = containCanvasItems(
+            targetItems,
+            canvasState.primaryId,
+          );
+          if (!contained) {
             handleZoomToFit();
           }
         }
@@ -888,8 +913,8 @@ export const Canvas: React.FC = () => {
     };
   }, [
     closeContextMenu,
+    containCanvasItems,
     getContainLayoutTargetItems,
-    getItemsBoundingBox,
     handleContainItem,
     handleZoomToFit,
     setIsSpaceDown,
@@ -1572,17 +1597,23 @@ export const Canvas: React.FC = () => {
   );
 
   const handleGroupSelect = useMemoizedFn((groupId: string) => {
+    // 点击编组空白区域时，切换到编组态并清空节点选中，避免 group / node 选中态并存。
+    clearSelection();
     canvasActions.setActiveCanvasGroup(groupId);
   });
 
   const handleGroupDragStart = useMemoizedFn(
     (groupId: string, client: { clientX: number; clientY: number }) => {
       void client;
-      const group = canvasState.canvasGroups.find((item) => item.groupId === groupId);
+      const group = canvasState.canvasGroups.find(
+        (item) => item.groupId === groupId,
+      );
       if (!group) return;
       const snapshots = new Map<string, { x: number; y: number }>();
       group.items.forEach((itemId) => {
-        const item = canvasState.canvasItems.find((entry) => entry.itemId === itemId);
+        const item = canvasState.canvasItems.find(
+          (entry) => entry.itemId === itemId,
+        );
         if (!item) return;
         snapshots.set(itemId, { x: item.x, y: item.y });
       });
@@ -1650,15 +1681,34 @@ export const Canvas: React.FC = () => {
     setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
   });
 
-  const handleCanvasGroupColorPickerToggle = useMemoizedFn((groupId: string) => {
-    canvasActions.toggleCanvasGroupColorPicker(groupId);
-  });
+  const handleCanvasGroupColorPickerToggle = useMemoizedFn(
+    (groupId: string) => {
+      canvasActions.toggleCanvasGroupColorPicker(groupId);
+    },
+  );
 
   const handleCanvasGroupColorChange = useMemoizedFn(
     (groupId: string, color: string) => {
       canvasActions.setCanvasGroupColor(groupId, color);
     },
   );
+
+  const handleCanvasGroupContain = useMemoizedFn((groupId: string) => {
+    const group = canvasState.canvasGroups.find(
+      (item) => item.groupId === groupId,
+    );
+    if (!group) return;
+
+    if (group.collapse) {
+      canvasActions.toggleCanvasGroupCollapse(groupId);
+    }
+
+    const itemIds = new Set(group.items);
+    const targetItems = canvasState.canvasItems.filter((item) =>
+      itemIds.has(item.itemId),
+    );
+    containCanvasItems(targetItems);
+  });
 
   const handleItemSelect = useMemoizedFn(
     (
@@ -1908,6 +1958,7 @@ export const Canvas: React.FC = () => {
             onGroupUngroup={handleCanvasGroupUngroup}
             onGroupColorPickerToggle={handleCanvasGroupColorPickerToggle}
             onGroupColorChange={handleCanvasGroupColorChange}
+            onGroupContain={handleCanvasGroupContain}
             renderMode="rects"
           />
           <CanvasItemsLayer
@@ -1949,6 +2000,7 @@ export const Canvas: React.FC = () => {
             onGroupUngroup={handleCanvasGroupUngroup}
             onGroupColorPickerToggle={handleCanvasGroupColorPickerToggle}
             onGroupColorChange={handleCanvasGroupColorChange}
+            onGroupContain={handleCanvasGroupContain}
             renderMode="controls"
           />
           {!shouldEnableMouseThrough && (

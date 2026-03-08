@@ -82,7 +82,8 @@ export const en = {
     "v{{version}} is ready. Restart to install",
   "titleBar.version.restartToInstall": "Restart to install",
   "titleBar.version.error": "Update failed: {{error}}",
-  "titleBar.version.inAppUnavailable": "In-app updates are unavailable on this platform",
+  "titleBar.version.inAppUnavailable":
+    "In-app updates are unavailable on this platform",
   "titleBar.version.upToDate": "You are on the latest version",
   "titleBar.version.updateAvailable": "Update available: v{{version}}",
   "titleBar.window": "Window",
@@ -216,6 +217,7 @@ export const en = {
   "canvas.empty.dragHint": "Drag images or folders here to begin",
   "canvas.empty.panHint": "Middle Click or Space + Drag to Pan",
   "canvas.empty.zoomHint": "Wheel to Zoom",
+  "canvas.text.openLinkHint": "cmd/ctrl + Click to open link: {{url}}",
 
   "swatch.replaceHint": "{{color}} (long press to replace)",
 

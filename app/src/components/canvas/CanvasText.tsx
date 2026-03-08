@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { useSnapshot } from "valtio";
 import { CanvasNode } from "./CanvasNode";
 import { useMemoizedFn } from "ahooks";
+import { useT } from "../../i18n/useT";
+import { THEME } from "../../theme";
 
 interface CanvasTextProps {
   item: CanvasTextState;
@@ -23,6 +25,30 @@ interface CanvasTextProps {
 
 import { useVisualRenderCheck } from "../../hooks/useVisualRenderCheck";
 
+const getTextUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+};
+
+const isModClick = (
+  event:
+    | React.MouseEvent<SVGGElement>
+    | React.PointerEvent<SVGGElement>
+    | React.MouseEvent<SVGTextElement>,
+) => event.metaKey || event.ctrlKey;
+
 export const CanvasText = ({
   item,
   onDragStart,
@@ -33,10 +59,26 @@ export const CanvasText = ({
   onCommitEnter,
 }: CanvasTextProps) => {
   useVisualRenderCheck(`CanvasText:${item.itemId}`);
+  const { t } = useT();
   const itemSnap = useSnapshot(item);
   const textRef = useRef<SVGTextElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const textUrl = getTextUrl(itemSnap.text);
+  const linkTitle = textUrl
+    ? t("canvas.text.openLinkHint", { url: textUrl })
+    : undefined;
+  const textFill = textUrl ? THEME.primary : itemSnap.fill;
+
+  const openTextUrl = useMemoizedFn(async () => {
+    if (!textUrl) return;
+    if (window.electron?.openExternal) {
+      await window.electron.openExternal(textUrl);
+      return;
+    }
+    window.open(textUrl, "_blank", "noopener,noreferrer");
+  });
+
   useEffect(() => {
     const node = textRef.current;
     if (!node) return;
@@ -92,10 +134,7 @@ export const CanvasText = ({
     input.style.textAlign = "center";
     input.style.zIndex = "50";
 
-    const fill = itemSnap.fill;
-    if (typeof fill === "string") {
-      input.style.color = fill;
-    }
+    input.style.color = getTextUrl(input.value) ? THEME.primary : itemSnap.fill;
 
     const visualScale = canvasState.canvasViewport.scale || 1;
     const screenFontSize = itemSnap.fontSize * visualScale;
@@ -124,6 +163,9 @@ export const CanvasText = ({
       input.style.width = `${measuredWidth}px`;
       currentWidth = measuredWidth;
       updatePosition();
+      input.style.color = getTextUrl(input.value)
+        ? THEME.primary
+        : itemSnap.fill;
 
       onCommit({
         text: input.value,
@@ -217,25 +259,18 @@ export const CanvasText = ({
     canvasActions.bringToFront(itemSnap.itemId);
   };
 
-  const handlePointerDown = (
-    e: React.PointerEvent<SVGGElement> | React.MouseEvent<SVGGElement>,
-  ) => {
-    if (isEditing) return;
-    if (e.button !== 0) return;
-    if ("pointerId" in e) {
-      handleSelect(e);
-    } else {
-      // Fallback for non-pointer events if necessary, though onMouseDown is usually PointerEvent in React
-      handleSelect(e as unknown as React.MouseEvent<SVGGElement>);
-    }
-    // Custom logic to prevent drag if editing, handled by isEditing check above
-  };
-
   const handleDoubleClick = (e: React.MouseEvent<SVGGElement>) => {
     if (isEditing) return;
     const target = e.target as Element | null;
     if (target && target.closest("[data-control]")) return;
     startEditing("end");
+  };
+
+  const handleClick = (e: React.MouseEvent<SVGGElement>) => {
+    if (!textUrl || !isModClick(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void openTextUrl();
   };
 
   return (
@@ -250,7 +285,7 @@ export const CanvasText = ({
       onDragMove={onDragMove}
       onDragEnd={onDragEnd}
       onSelect={handleSelect}
-      onMouseDown={handlePointerDown}
+      onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
       <g
@@ -266,10 +301,12 @@ export const CanvasText = ({
           x={0}
           y={0}
           fontSize={itemSnap.fontSize}
-          fill={itemSnap.fill}
+          fill={textFill}
           textAnchor="middle"
           dominantBaseline="central"
+          style={textUrl ? { cursor: "alias" } : undefined}
         >
+          {linkTitle ? <title>{linkTitle}</title> : null}
           {itemSnap.text}
         </text>
       </g>
