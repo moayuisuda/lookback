@@ -5,6 +5,7 @@ type UpdateStatus =
   | 'checking'
   | 'available'
   | 'not-available'
+  | 'not-published'
   | 'downloading'
   | 'downloaded'
   | 'error'

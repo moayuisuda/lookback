@@ -127,6 +127,7 @@ type UpdaterStatus =
   | "checking"
   | "available"
   | "not-available"
+  | "not-published"
   | "downloading"
   | "downloaded"
   | "error"
@@ -256,6 +257,16 @@ function syncUpdaterCurrentVersion() {
   updaterState.currentVersion = normalizeVersion(app.getVersion());
 }
 
+function getUpdaterErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingMacUpdateChannelError(message: string) {
+  if (process.platform !== "darwin") return false;
+  const normalizedMessage = message.toLowerCase();
+  return normalizedMessage.includes("404") && normalizedMessage.includes("latest-mac.yml");
+}
+
 function emitToast(
   key: string,
   type: "success" | "error" | "warning" | "info",
@@ -283,6 +294,30 @@ function applyUpdateInfoStatus(status: UpdaterStatus, info?: UpdateInfo) {
     latestVersion: nextVersion || updaterState.latestVersion,
     errorMessage: "",
   });
+}
+
+function applyUpdaterError(error: unknown) {
+  const message = getUpdaterErrorMessage(error);
+
+  if (isMissingMacUpdateChannelError(message)) {
+    log.info("[updater] latest-mac.yml is not published yet");
+    setUpdaterState({
+      enabled: true,
+      status: "not-published",
+      latestVersion: "",
+      downloadProgress: 0,
+      errorMessage: "",
+    });
+    return { handled: true, message: "" };
+  }
+
+  log.error("[updater] error", message);
+  setUpdaterState({
+    enabled: true,
+    status: "error",
+    errorMessage: message,
+  });
+  return { handled: false, message };
 }
 
 function initializeAutoUpdater() {
@@ -348,13 +383,7 @@ function initializeAutoUpdater() {
   });
 
   autoUpdater.on("error", (error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    log.error("[updater] error", message);
-    setUpdaterState({
-      enabled: true,
-      status: "error",
-      errorMessage: message,
-    });
+    applyUpdaterError(error);
   });
 
   emitUpdaterState();
@@ -375,13 +404,11 @@ async function checkForAppUpdates() {
     await autoUpdater.checkForUpdates();
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setUpdaterState({
-      enabled: true,
-      status: "error",
-      errorMessage: message,
-    });
-    return { success: false, error: message };
+    const result = applyUpdaterError(error);
+    if (result.handled) {
+      return { success: true };
+    }
+    return { success: false, error: result.message };
   }
 }
 
@@ -400,13 +427,8 @@ async function downloadAppUpdate() {
     await autoUpdater.downloadUpdate();
     return { success: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setUpdaterState({
-      enabled: true,
-      status: "error",
-      errorMessage: message,
-    });
-    return { success: false, error: message };
+    const result = applyUpdaterError(error);
+    return { success: false, error: result.message };
   }
 }
 

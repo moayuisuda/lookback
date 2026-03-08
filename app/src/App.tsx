@@ -151,7 +151,10 @@ function App() {
 
         const metas = await createTempMetasFromFiles(
           files,
-          canvasState.currentCanvasName
+          {
+            canvasName: canvasState.currentCanvasName,
+            source: "paste",
+          },
         );
         if (metas.length === 0) return;
 

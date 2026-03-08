@@ -485,6 +485,10 @@ export const TitleBar: React.FC = () => {
       return t("titleBar.version.upToDate");
     }
 
+    if (versionSnap.updateStatus === "not-published") {
+      return t("titleBar.version.notPublished");
+    }
+
     return t("titleBar.version.checkHint");
   })();
 

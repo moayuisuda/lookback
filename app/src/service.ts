@@ -205,6 +205,7 @@ export type UploadTempImageResponse = {
   success?: boolean;
   filename?: string;
   path?: string;
+  diskPath?: string;
   width?: number;
   height?: number;
   dominantColor?: string | null;

@@ -85,6 +85,7 @@ export const en = {
   "titleBar.version.inAppUnavailable":
     "In-app updates are unavailable on this platform",
   "titleBar.version.upToDate": "You are on the latest version",
+  "titleBar.version.notPublished": "No update has been published for this platform yet",
   "titleBar.version.updateAvailable": "Update available: v{{version}}",
   "titleBar.window": "Window",
   "titleBar.pinTransparent": "Pin transparent",

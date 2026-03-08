@@ -80,6 +80,7 @@ export const zh = {
   "titleBar.version.error": "更新失败：{{error}}",
   "titleBar.version.inAppUnavailable": "当前平台不支持应用内更新",
   "titleBar.version.upToDate": "已是最新版本",
+  "titleBar.version.notPublished": "当前平台暂未发布更新",
   "titleBar.version.updateAvailable": "可更新至 v{{version}}",
   "titleBar.window": "窗口",
   "titleBar.pinTransparent": "置顶透明",

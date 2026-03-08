@@ -28,7 +28,11 @@ import {
   MIN_ZOOM_AREA,
 } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
-import { createTempMetasFromFiles, scanDroppedItems } from "../utils/import";
+import {
+  createTempMetasFromFiles,
+  logImageImport,
+  scanDroppedItems,
+} from "../utils/import";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { getCssFilters } from "../utils/imageFilters";
 import { ImagePlus, Upload, MousePointer2 } from "lucide-react";
@@ -67,6 +71,7 @@ type DownloadUrlResponse = {
   success?: boolean;
   filename?: string;
   path?: string;
+  diskPath?: string;
   width?: number;
   height?: number;
   dominantColor?: string | null;
@@ -84,6 +89,14 @@ const getDownloadUrlErrorMessage = async (resp: Response): Promise<string> => {
     // ignore invalid body and fallback to status code
   }
   return `HTTP ${resp.status}`;
+};
+
+const getImportUrlHost = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
 };
 
 type CanvasItemsLayerProps = {
@@ -585,7 +598,13 @@ export const Canvas: React.FC = () => {
             url &&
             (url.startsWith("http://") || url.startsWith("https://"))
           ) {
+            const urlHost = getImportUrlHost(url);
             try {
+              logImageImport("info", "canvas url import started", {
+                source: "drop-url",
+                canvasName: canvasSnap.currentCanvasName,
+                host: urlHost,
+              });
               const resp = await fetch(`${API_BASE_URL}/api/download-url`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -598,13 +617,27 @@ export const Canvas: React.FC = () => {
                 throw new Error(await getDownloadUrlErrorMessage(resp));
               }
               const result = (await resp.json()) as DownloadUrlResponse;
-              if (result.success && result.filename && result.path) {
+              if (
+                result.success &&
+                result.filename &&
+                result.path
+              ) {
                 const meta = createDroppedImageMeta({
                   path: result.path,
                   storedFilename: result.path,
                   originalName: result.filename,
                   dominantColor: result.dominantColor ?? null,
                   tone: result.tone ?? null,
+                  width: result.width || 0,
+                  height: result.height || 0,
+                });
+                logImageImport("info", "canvas url import succeeded", {
+                  source: "drop-url",
+                  canvasName: canvasSnap.currentCanvasName,
+                  host: urlHost,
+                  filename: result.filename,
+                  imagePath: result.path,
+                  ...(result.diskPath ? { diskPath: result.diskPath } : {}),
                   width: result.width || 0,
                   height: result.height || 0,
                 });
@@ -615,6 +648,12 @@ export const Canvas: React.FC = () => {
             } catch (err) {
               console.error("URL drop error", err);
               const message = err instanceof Error ? err.message : String(err);
+              logImageImport("error", "canvas url import failed", {
+                source: "drop-url",
+                canvasName: canvasSnap.currentCanvasName,
+                host: urlHost,
+                error: message,
+              });
               globalActions.pushToast(
                 {
                   key: "toast.canvasUrlImportFailed",
@@ -632,7 +671,10 @@ export const Canvas: React.FC = () => {
 
         const metas = await createTempMetasFromFiles(
           imageFiles,
-          canvasSnap.currentCanvasName,
+          {
+            canvasName: canvasSnap.currentCanvasName,
+            source: "drop",
+          },
         );
         if (metas.length === 0) return;
 
