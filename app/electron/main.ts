@@ -117,7 +117,7 @@ const LOOKBACK_IMPORT_QUERY_KEY = "url";
 const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 const DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15000;
 const UPDATE_FEED_URL =
-  "https://github.com/moayuisuda/lookback-release/releases/latest/download";
+  "https://xget-5sd.pages.dev/gh/moayuisuda/lookback-release/releases/latest/download";
 const DEV_APP_UPDATE_CONFIG_FILE = "dev-app-update.yml";
 const DEV_UPDATER_CACHE_DIR_NAME = "lookback-updater";
 const pendingDeepLinkUrls: string[] = [];

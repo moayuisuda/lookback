@@ -71,10 +71,10 @@ npm run build:mac
 
 ## 4. 自动更新原理说明
 
-应用内自动更新直接读取 GitHub 原始 Release 下载地址，流程如下：
+应用内自动更新直接读取 `xget` 路由代理的 Release 下载地址，流程如下：
 
-1. 应用启动，请求 `https://github.com/moayuisuda/lookback-release/releases/latest/download/latest.yml`。
-2. GitHub 会通过重定向返回当前 latest Release 对应的更新元数据。
+1. 应用启动，请求 `https://xget-5sd.pages.dev/gh/moayuisuda/lookback-release/releases/latest/download/latest.yml`。
+2. `xget` 会转发到当前 latest Release 对应的 GitHub 更新元数据与安装包资源。
 3. **最佳实践**：在 GitHub Release 页面发布时，勾选 **"Set as the latest release"**。
 
 ## 5. 常见问题
