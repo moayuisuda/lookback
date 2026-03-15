@@ -1,0 +1,791 @@
+你要生成的是 LookBack 外部命令的单文件源码。
+
+你看不到我的仓库，所以这份提示词就是完整 runtime contract。
+你必须只使用这里明确声明的能力，不允许臆造未声明的 API。
+
+你的最终回答必须满足：
+- 只输出一个 `.jsx` 文件的完整源码
+- 不要输出解释
+- 不要输出 Markdown 代码块
+- 不要输出多个文件
+- 不要要求我修改主工程
+
+绝对禁止：
+- `import`
+- `export default`
+- TypeScript 语法
+- TODO / mock / placeholder / 伪代码
+- 臆造未声明的 `actions`、`state`、`hooks`、接口、组件
+
+====================
+一、外部命令固定格式
+====================
+
+必须使用具名导出：
+
+1. 必须有：
+`export const config = { ... }`
+
+2. 按需使用：
+`export const run = (context, helpers) => { ... }`
+`export const ui = ({ context }) => { ... }`
+
+规则：
+- 能只用 `run` 解决，就不要写 `ui`
+- 只有需要输入、表单、预览、设置、结果列表时才写 `ui`
+
+推荐文件头：
+
+// This file is intended to be dynamically loaded.
+// Imports are not allowed. Dependencies are passed via context.
+
+推荐文件顺序：
+1. 常量
+2. 纯函数
+3. `config`
+4. `run`
+5. `ui`
+
+====================
+二、运行时对象
+====================
+
+```js
+context = {
+  React,
+  hooks: {
+    useEnvState,
+    useT,
+  },
+  actions: {
+    canvasActions,
+    globalActions,
+    commandActions,
+  },
+  config: {
+    API_BASE_URL,
+  },
+  shell,
+  components,
+}
+```
+
+```js
+helpers = {
+  openExternal,
+  copyText,
+  toast,
+}
+```
+
+====================
+三、React / hooks 契约
+====================
+
+不能 `import React`，必须这样取：
+
+```js
+const { useState, useEffect, useRef, useMemo, useLayoutEffect } = context.React;
+```
+
+i18n：
+
+```js
+const { t } = context.hooks.useT();
+```
+
+环境状态：
+
+```js
+const { global, command, canvas, i18n } = context.hooks.useEnvState();
+```
+
+这是稳定可用结构，不要改名字。
+
+====================
+四、useEnvState 常用字段
+====================
+
+1. `canvas`
+
+```js
+canvas = {
+  currentCanvasName: string,
+  primaryId: string | null,
+  canvasItems: CanvasItem[],
+}
+```
+
+2. `global`
+
+```js
+global = {
+  colorSwatches: string[],
+}
+```
+
+3. `CanvasItem`
+
+图片项：
+
+```js
+{
+  type: "image",
+  itemId: string,
+  id: string,
+  imagePath: string,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  scale: number,
+  rotation: number,
+  isSelected?: boolean,
+  filename: string,
+  tags: string[],
+  createdAt: number,
+  dominantColor?: string | null,
+  tone?: string | null,
+  pageUrl?: string | null,
+  hasVector: boolean,
+}
+```
+
+文本项：
+
+```js
+{
+  type: "text",
+  itemId: string,
+  x: number,
+  y: number,
+  rotation: number,
+  scale: number,
+  text: string,
+  fontSize: number,
+  fill: string,
+  width?: number,
+  height?: number,
+  align?: string,
+  isSelected?: boolean,
+}
+```
+
+高频选择模式：
+
+```js
+const selectedImages = canvas.canvasItems.filter(
+  (item) => item.type === "image" && item.isSelected,
+);
+
+const firstSelectedImage = selectedImages[0] || null;
+
+const primaryImage = canvas.primaryId
+  ? canvas.canvasItems.find(
+      (item) => item.type === "image" && item.itemId === canvas.primaryId,
+    ) || null
+  : null;
+```
+
+如果需求写“目标图片”，默认优先级：
+1. 当前主图 `primaryImage`
+2. 第一张选中图片 `firstSelectedImage`
+
+====================
+五、稳定可用的 actions
+====================
+
+1. `actions.globalActions.pushToast(message, type?, timeoutMs?)`
+
+推荐：
+
+```js
+actions.globalActions.pushToast(
+  { key: "toast.command.xxx.success" },
+  "success",
+);
+```
+
+支持的 `type`：
+- `"success"`
+- `"error"`
+- `"info"`
+- `"warning"`
+
+`message` 结构：
+
+```js
+{ key: "toast.command.xxx.failed", params: { error: "..." } }
+```
+
+2. `actions.commandActions.close()`
+
+关闭命令面板。
+
+3. `actions.globalActions.setColorSwatch(index, color)`
+
+```js
+actions.globalActions.setColorSwatch(0, "#ff0000");
+```
+
+4. `actions.canvasActions.addTextAtViewportCenter()`
+
+在视口中心新增文字节点。
+
+5. `actions.canvasActions.removeSelectedItemsFromCurrentGroup()`
+
+返回值固定为：
+
+```js
+"no-selection" | "no-group" | "removed"
+```
+
+6. `actions.canvasActions.containCanvasItem(itemId)`
+
+聚焦到指定画布项。
+
+7. `actions.canvasActions.isRemoteImagePath(path)`
+
+判断图片路径是否是远程 URL。
+
+8. `actions.canvasActions.resolveLocalImagePath(rawPath, canvasName?)`
+
+把画布图片路径解析为本地绝对路径。
+
+9. `actions.canvasActions.getPathDirname(path)`
+
+返回目录路径。
+
+10. `actions.canvasActions.updateCanvasImage(itemId, props)`
+
+更新现有图片项。
+
+常用更新字段：
+
+```js
+actions.canvasActions.updateCanvasImage(itemId, {
+  imagePath: nextPath,
+  width: nextWidth,
+  height: nextHeight,
+  dominantColor: nextDominantColor,
+  tone: nextTone,
+});
+```
+
+11. `actions.canvasActions.addToCanvas(imageMeta, x?, y?)`
+
+新增图片到画布，返回新 `itemId`。
+
+`imageMeta` 结构：
+
+```js
+{
+  id: string,
+  filename: string,
+  imagePath: string,
+  tags: string[],
+  createdAt: number,
+  dominantColor?: string | null,
+  tone?: string | null,
+  hasVector: boolean,
+  pageUrl?: string | null,
+  width: number,
+  height: number,
+}
+```
+
+高频新增副本模式：
+
+```js
+actions.canvasActions.addToCanvas(
+  {
+    id: `temp_${Date.now()}`,
+    filename: "result.png",
+    imagePath: uploaded.path,
+    pageUrl: null,
+    tags: [],
+    createdAt: Date.now(),
+    dominantColor: uploaded.dominantColor ?? null,
+    tone: uploaded.tone ?? null,
+    hasVector: false,
+    width: uploaded.width || width,
+    height: uploaded.height || height,
+  },
+  targetItem.x + 20,
+  targetItem.y + 20,
+);
+```
+
+====================
+六、稳定可用的 helpers
+====================
+
+1. `await helpers.openExternal(url)`
+2. `await helpers.copyText(text)`
+3. `helpers.toast(message)`
+
+优先级：
+- 打开链接优先 `helpers.openExternal`
+- 复制文本优先 `helpers.copyText`
+- 若已有 i18n key，toast 优先用 `actions.globalActions.pushToast`
+
+====================
+七、稳定可用的 shell
+====================
+
+执行系统命令必须用：
+
+```js
+await context.shell({
+  command: "open",
+  args: ["-R", "/path/to/file"],
+  cwd: "/optional/path",
+  timeoutMs: 15000,
+});
+```
+
+规则：
+- 参数必须放进 `args`
+- 禁止把整条命令拼成一个字符串
+- 不要使用 shell 管道、重定向、拼接
+
+正确：
+
+```js
+await shell({
+  command: "mkdir",
+  args: ["-p", dirPath],
+});
+```
+
+错误：
+
+```js
+await shell({
+  command: "mkdir -p " + dirPath,
+});
+```
+
+====================
+八、图片 URL 解析规则
+====================
+
+对于 `canvas.canvasItems` 里的图片项，`imagePath` 不能直接假设可用于 `<img src>`。
+必须使用下面这个规则转换：
+
+```js
+const getImageUrl = (imagePath, canvasName, apiBaseUrl) => {
+  let normalized = String(imagePath || "").replace(/\\/g, "/");
+  if (normalized.startsWith("/")) {
+    normalized = normalized.slice(1);
+  }
+  if (normalized.startsWith("assets/")) {
+    const filename = normalized.split("/").pop() || normalized;
+    const safeCanvasName = encodeURIComponent(canvasName || "Default");
+    const safeFilename = encodeURIComponent(filename);
+    return `${apiBaseUrl}/api/assets/${safeCanvasName}/${safeFilename}`;
+  }
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
+  }
+  return `${apiBaseUrl}/${normalized}`;
+};
+```
+
+这是图像处理类命令的标准入口。
+凡是要加载画布图片、复制图片、裁剪、像素化、拼接、分析、导出，都优先复用这个函数。
+
+====================
+九、图片加载标准模式
+====================
+
+```js
+const loadImage = (src) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Image load failed"));
+    img.src = src;
+  });
+```
+
+凡是需要在 Canvas 上重绘图像，优先使用这套模式。
+
+====================
+十、图像处理后的三种标准落地方式
+====================
+
+图像处理类命令通常只允许用下面三种落地方式，不要另起炉灶。
+
+1. 下载到本地
+
+适用于“导出 PNG/JPG/WebP”、“下载结果图”。
+
+标准模式：
+
+```js
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+```
+
+2. 覆盖当前图片
+
+适用于“处理后替换原图”。
+
+流程：
+- 先把处理结果转成 `Blob`
+- 上传到 `/api/upload-temp`
+- 再调用 `updateCanvasImage`
+
+3. 新增副本到画布
+
+适用于“保留原图，再生成一张结果图”。
+
+流程：
+- 先把处理结果转成 `Blob`
+- 上传到 `/api/upload-temp`
+- 再调用 `addToCanvas`
+
+====================
+十一、/api/upload-temp 契约
+====================
+
+图像处理后的结果如果要写回画布，标准上传接口如下：
+
+请求：
+
+```js
+const uploadTempImage = async (blob, filename, canvasName, apiBaseUrl) => {
+  const params = new URLSearchParams();
+  if (filename) params.set("filename", filename);
+  if (canvasName) params.set("canvasName", canvasName);
+  const endpoint = params.size > 0
+    ? `${apiBaseUrl}/api/upload-temp?${params.toString()}`
+    : `${apiBaseUrl}/api/upload-temp`;
+  const headers = blob.type ? { "Content-Type": blob.type } : undefined;
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error(`Upload failed: ${res.status}`);
+  }
+  return res.json();
+};
+```
+
+响应结构：
+
+```js
+{
+  success?: boolean,
+  filename?: string,
+  path?: string,        // 形如 "assets/xxx.png"
+  diskPath?: string,
+  width?: number,
+  height?: number,
+  dominantColor?: string | null,
+  tone?: string | null,
+}
+```
+
+关键点：
+- `path` 可直接写回 `imagePath`
+- `width` / `height` 可直接写回画布图片尺寸
+- `dominantColor` / `tone` 可直接写回图片元数据
+
+====================
+十二、覆盖当前图的标准写法
+====================
+
+```js
+const uploaded = await uploadTempImage(
+  blob,
+  filename,
+  canvas.currentCanvasName,
+  API_BASE_URL,
+);
+
+actions.canvasActions.updateCanvasImage(targetItem.itemId, {
+  imagePath: uploaded.path,
+  width: uploaded.width || targetItem.width,
+  height: uploaded.height || targetItem.height,
+  dominantColor: uploaded.dominantColor ?? targetItem.dominantColor,
+  tone: uploaded.tone ?? targetItem.tone,
+});
+```
+
+====================
+十三、新增副本的标准写法
+====================
+
+```js
+const timestamp = Date.now();
+const uploaded = await uploadTempImage(
+  blob,
+  `result_${timestamp}.png`,
+  canvas.currentCanvasName,
+  API_BASE_URL,
+);
+
+actions.canvasActions.addToCanvas(
+  {
+    id: `temp_result_${timestamp}`,
+    filename: `result_${timestamp}.png`,
+    imagePath: uploaded.path,
+    pageUrl: null,
+    tags: [],
+    createdAt: timestamp,
+    dominantColor: uploaded.dominantColor ?? null,
+    tone: uploaded.tone ?? null,
+    hasVector: false,
+    width: uploaded.width || sourceWidth,
+    height: uploaded.height || sourceHeight,
+  },
+  targetItem.x + 20,
+  targetItem.y + 20,
+);
+```
+
+====================
+十四、前端 Canvas 图像处理标准模式
+====================
+
+当命令需要做：
+- 裁剪
+- 像素化
+- 缩放
+- 拼接
+- 滤镜
+- 导出结果图
+
+优先使用这个流程：
+
+1. 取目标图片
+2. `getImageUrl(...)`
+3. `loadImage(...)`
+4. 新建离屏 `<canvas>`
+5. 用 2D context 重绘
+6. `canvas.toBlob(...)`
+7. 根据需求：
+   - 下载
+   - 覆盖原图
+   - 新增副本
+
+`toBlob` 标准包装：
+
+```js
+const canvasToBlob = (canvasEl, type = "image/png", quality) =>
+  new Promise((resolve, reject) => {
+    canvasEl.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Canvas toBlob failed"));
+        return;
+      }
+      resolve(blob);
+    }, type, quality);
+  });
+```
+
+====================
+十五、像素级图像处理建议
+====================
+
+这是通用图像处理建议，不只针对像素化：
+
+- 不要直接修改原始 `ImageData` 之外的状态
+- 对于像素风 / 马赛克 / 缩略图类命令，优先用“先缩小再关闭平滑放大”的方式
+- 放大像素风结果时要设置：
+
+```js
+ctx.imageSmoothingEnabled = false;
+```
+
+- 生成目标图时保留 alpha
+- 输出尺寸必须可控，避免无上限大图导致卡死
+
+====================
+十六、命令 UI 规则
+====================
+
+外部命令是运行时动态加载，Tailwind 不会扫描这里。
+如果需要样式，必须在命令内部注入 `<style>`。
+
+可以安全使用这些 CSS 变量：
+- `var(--color-primary)`
+- `var(--color-neutral-100)`
+- `var(--color-neutral-300)`
+- `var(--color-neutral-500)`
+- `var(--color-neutral-700)`
+- `var(--color-neutral-900)`
+- `var(--color-white)`
+
+样式注入模板：
+
+```js
+const STYLE_ID = "your-command-style";
+
+const STYLE_TEXT = `
+.your-command-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+`;
+
+const ensureStyle = () => {
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = STYLE_TEXT;
+  document.head.appendChild(style);
+};
+```
+
+在 `ui` 中：
+
+```js
+useEffect(() => {
+  ensureStyle();
+}, []);
+```
+
+====================
+十七、自动副作用命令的防重规则
+====================
+
+如果 `ui` 组件一挂载就自动执行副作用，比如：
+- 打开文件夹
+- 复制图片
+- 直接导出
+- 直接跑 shell 命令
+
+要考虑 React StrictMode 重复挂载。
+
+标准做法：
+
+```js
+const startedRef = useRef(false);
+
+useEffect(() => {
+  if (startedRef.current) return;
+  startedRef.current = true;
+  void runTask();
+}, []);
+```
+
+如果还需要更强防重，可以加时间戳节流。
+
+====================
+十八、config 必填结构
+====================
+
+所有用户可见文案都必须写进命令自己的 `config.i18n`。
+至少提供 `en` 和 `zh`。
+
+固定结构：
+
+```js
+export const config = {
+  id: "yourCommandId",
+  i18n: {
+    en: {
+      "command.yourCommand.title": "Your Command",
+      "command.yourCommand.description": "What this command does",
+      "toast.command.yourCommand.success": "Done",
+      "toast.command.yourCommand.failed": "Failed: {{error}}",
+    },
+    zh: {
+      "command.yourCommand.title": "你的命令",
+      "command.yourCommand.description": "命令作用说明",
+      "toast.command.yourCommand.success": "已完成",
+      "toast.command.yourCommand.failed": "失败：{{error}}",
+    },
+  },
+  titleKey: "command.yourCommand.title",
+  title: "Your Command",
+  descriptionKey: "command.yourCommand.description",
+  description: "What this command does",
+  keywords: ["keyword", "命令关键词"],
+};
+```
+
+要求：
+- `id` 用 camelCase
+- `titleKey` / `descriptionKey` 必须对应 i18n key
+- `title` / `description` 保留英文默认值
+- 所有按钮文案、表单文案、toast 文案都必须在 i18n 中
+
+====================
+十九、生成策略
+====================
+
+根据需求选择最贴近的实现方式：
+
+1. 纯动作命令
+- 优先 `run`
+- 例如：新增文本、移出当前编组、固定 URL 打开
+
+2. UI 配置类命令
+- 使用 `ui`
+- 例如：多站点搜索、颜色筛选、参数表单
+
+3. 图像处理类命令
+- 优先 `ui`
+- 因为通常需要预览、参数、导出模式选择
+- 但如果需求明确且无需配置，也可以自动执行
+
+4. 图像导出类命令
+- 明确输出走哪一种标准落地方式：
+  - 下载
+  - 覆盖原图
+  - 新增副本
+
+====================
+二十、常见命令类型
+====================
+
+基于这份 contract，你可以稳定生成这些命令：
+- 新增文字
+- 移出当前编组
+- 打开固定网站或基于输入拼接网站搜索
+- 选中图片打开所在文件夹
+- 复制选中图片到剪贴板
+- 选中图片裁剪
+- 选中图片像素化
+- 选中图片缩放导出
+- 多图拼接导出
+- 基于色调 / 主色过滤画布图片
+- 处理结果覆盖原图
+- 处理结果新增副本
+- 处理结果直接下载
+
+====================
+二十一、输出前自检
+====================
+
+输出前逐项检查，不满足就重写：
+- 是否只输出了一个 `.jsx` 文件内容？
+- 是否没有 `import`？
+- 是否没有 TypeScript？
+- 是否导出了 `config`？
+- 是否所有可见文案都进入了 `config.i18n`？
+- 是否至少有 `en` 和 `zh`？
+- 是否只使用了本提示词里明确声明的字段和方法？
+- 图像处理类命令是否使用了标准图片 URL 解析规则？
+- 图像处理类命令是否明确了结果落地方式？
+- 是否可以直接保存并导入？
+
+最后强调：
+你的最终回答只能是完整源码本身，不要有任何额外说明。
