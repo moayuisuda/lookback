@@ -23,6 +23,9 @@ const apiFetch = async (endpoint: string, init?: RequestInit): Promise<Response>
   return fetch(`${baseUrl}${endpoint}`, init);
 };
 
+const LLM_TEXT_URL =
+  "https://xget-5sd.pages.dev/gh/moayuisuda/lookback/raw/refs/heads/main/llm.txt";
+
 let apiAuthTokenCache: string | null = null;
 const getApiAuthToken = async (): Promise<string> => {
   if (apiAuthTokenCache) return apiAuthTokenCache;
@@ -292,6 +295,40 @@ export async function loadExternalCommands(): Promise<ExternalCommandRecord[]> {
     return data as ExternalCommandRecord[];
   } catch {
     return [];
+  }
+}
+
+export async function loadRemoteLlmText(): Promise<string> {
+  const res = await fetch(LLM_TEXT_URL, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.text();
+}
+
+export async function saveExternalCommandFromText(
+  script: string,
+): Promise<{ success: boolean; id?: string; entry?: string; error?: string }> {
+  try {
+    const result = await localApi<{
+      success?: boolean;
+      id?: string;
+      entry?: string;
+      error?: string;
+    }>("/api/commands/text-import", { script });
+    if (result?.success) {
+      return {
+        success: true,
+        id: result.id,
+        entry: result.entry,
+      };
+    }
+    return { success: false, error: result?.error || "Import failed" };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

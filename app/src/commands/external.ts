@@ -3,6 +3,7 @@ import { loadCommandScript } from '../service';
 import { transform } from 'sucrase';
 import type { I18nDict, Locale } from '../../shared/i18n/types';
 import { registerI18n } from '../../shared/i18n/t';
+import { writeTextToClipboard } from '../utils/clipboard';
 
 export type ExternalCommandRecord = {
   folder: string;
@@ -33,20 +34,15 @@ type CommandHelpers = {
 
 type CommandI18n = Partial<Record<Locale, I18nDict>>;
 
-const copyText = async (text: string) => {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+const INVALID_CONFIG_ERROR = 'Missing `export const config` or `config.id`.';
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message) return message;
   }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
+  const message = String(error).trim();
+  return message || 'Unknown error';
 };
 
 const buildHelpers = (
@@ -64,7 +60,7 @@ const buildHelpers = (
   copyText: async (text: string) => {
     const value = text ?? '';
     if (!value) return;
-    await copyText(value);
+    await writeTextToClipboard(value);
   },
   toast: (message: string) => {
     const text = message.trim();
@@ -77,20 +73,23 @@ const loadModule = async (
   record: ExternalCommandRecord,
 ): Promise<CommandModule> => {
   const script = await loadCommandScript(record.folder, record.entry);
-  
-  // Transpile JSX to JS
-  const compiled = transform(script, {
-    transforms: ['jsx'],
-    production: true,
-  }).code;
+
+  let compiled = '';
+  try {
+    compiled = transform(script, {
+      transforms: ['jsx'],
+      production: true,
+    }).code;
+  } catch (error) {
+    throw new Error(`Compile failed: ${getErrorMessage(error)}`);
+  }
 
   const blob = new Blob([compiled], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
   try {
-    const module = await import(url);
-    // Return the module namespace object directly, it matches CommandModule shape
-    // (if it exports ui and run)
-    return module as CommandModule;
+    return (await import(url)) as CommandModule;
+  } catch (error) {
+    throw new Error(`Module import failed: ${getErrorMessage(error)}`);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -112,15 +111,21 @@ export const mapExternalCommands = (
       let module: CommandModule | undefined;
       try {
         module = await loadModule(item);
-      } catch {
+      } catch (error) {
         return {
           id: item.id,
+          loadError: getErrorMessage(error),
+          external: {
+            folder: item.folder,
+            entry: item.entry,
+          },
         };
       }
 
       if (!module?.config || !module.config.id) {
         return {
           id: item.id,
+          loadError: INVALID_CONFIG_ERROR,
           external: {
             folder: item.folder,
             entry: item.entry,
@@ -155,9 +160,11 @@ export const mapExternalCommands = (
                   await mod.run(ctx, buildHelpers(ctx));
                 }
               } catch (error) {
-                void error;
                 ctx.actions.globalActions.pushToast(
-                  { key: 'toast.command.scriptFailed' },
+                  {
+                    key: 'toast.command.scriptFailedWithReason',
+                    params: { error: getErrorMessage(error) },
+                  },
                   'error',
                 );
               }

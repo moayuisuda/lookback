@@ -32,6 +32,18 @@ const isScriptFile = (value: string) => {
   return ext === ".js" || ext === ".jsx" || ext === ".mjs";
 };
 
+const COMMAND_ID_PATTERN =
+  /export\s+const\s+config\s*=\s*{[\s\S]*?\bid\s*:\s*['"`]([^'"`]+)['"`]/;
+
+const sanitizeFileBaseName = (value: string) =>
+  value.trim().replace(/[<>:"/\\|?*\s]+/g, "_");
+
+const extractCommandId = (script: string) => {
+  const match = COMMAND_ID_PATTERN.exec(script);
+  if (!match) return "";
+  return match[1]?.trim() || "";
+};
+
 export const createCommandsRouter = (deps: CommandsRouteDeps) => {
   const router = express.Router();
 
@@ -88,6 +100,48 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
         }
         const content = await fs.readFile(scriptPath, "utf-8");
         res.type("application/javascript").send(content);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post("/api/commands/text-import", async (req, res) => {
+    try {
+      const script =
+        typeof req.body?.script === "string" ? req.body.script.trim() : "";
+      if (!script) {
+        res.status(400).json({ error: "Missing script" });
+        return;
+      }
+
+      const commandId = extractCommandId(script);
+      if (!commandId) {
+        res.status(400).json({ error: "Missing config.id" });
+        return;
+      }
+
+      const fileBaseName = sanitizeFileBaseName(commandId);
+      if (!fileBaseName) {
+        res.status(400).json({ error: "Invalid config.id" });
+        return;
+      }
+
+      const commandsDir = getCommandsDir();
+      await fs.ensureDir(commandsDir);
+      const fileName = `${fileBaseName}.jsx`;
+      const scriptPath = path.join(commandsDir, fileName);
+
+      await withFileLock(scriptPath, async () => {
+        await fs.writeFile(scriptPath, script, "utf-8");
+      });
+
+      res.json({
+        success: true,
+        id: commandId,
+        folder: ROOT_FOLDER,
+        entry: fileName,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

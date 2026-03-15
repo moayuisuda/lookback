@@ -1,5 +1,10 @@
 import { proxy } from "valtio";
-import { loadExternalCommands, settingStorage } from "../service";
+import {
+  loadExternalCommands,
+  loadRemoteLlmText,
+  saveExternalCommandFromText,
+  settingStorage,
+} from "../service";
 import {
   mapExternalCommands,
   type ExternalCommandRecord,
@@ -41,6 +46,12 @@ export const commandState = proxy<{
   externalCommands: CommandDefinition[];
   externalCommandShortcuts: Record<string, string>;
   externalCommandContextMenus: Record<string, boolean>;
+  isLlmTextModalOpen: boolean;
+  llmTextContent: string;
+  llmTextLoading: boolean;
+  llmTextError: string;
+  llmTextDraft: string;
+  llmTextSaving: boolean;
   deleteTarget: {
     id: string;
     title: string;
@@ -55,6 +66,12 @@ export const commandState = proxy<{
   externalCommands: [],
   externalCommandShortcuts: {},
   externalCommandContextMenus: {},
+  isLlmTextModalOpen: false,
+  llmTextContent: "",
+  llmTextLoading: false,
+  llmTextError: "",
+  llmTextDraft: "",
+  llmTextSaving: false,
   deleteTarget: null,
 });
 
@@ -78,6 +95,12 @@ export const commandActions = {
     commandState.query = "";
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;
+    commandState.isLlmTextModalOpen = false;
+    commandState.llmTextContent = "";
+    commandState.llmTextLoading = false;
+    commandState.llmTextError = "";
+    commandState.llmTextDraft = "";
+    commandState.llmTextSaving = false;
     commandState.deleteTarget = null;
   },
   close: () => {
@@ -85,6 +108,12 @@ export const commandActions = {
     commandState.query = "";
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;
+    commandState.isLlmTextModalOpen = false;
+    commandState.llmTextContent = "";
+    commandState.llmTextLoading = false;
+    commandState.llmTextError = "";
+    commandState.llmTextDraft = "";
+    commandState.llmTextSaving = false;
     commandState.deleteTarget = null;
   },
   toggle: () => {
@@ -113,6 +142,47 @@ export const commandActions = {
     } | null,
   ) => {
     commandState.deleteTarget = target;
+  },
+  openLlmTextModal: () => {
+    commandState.isLlmTextModalOpen = true;
+    void commandActions.ensureLlmTextLoaded();
+  },
+  closeLlmTextModal: () => {
+    commandState.isLlmTextModalOpen = false;
+    commandState.llmTextDraft = "";
+    commandState.llmTextSaving = false;
+  },
+  ensureLlmTextLoaded: async () => {
+    if (commandState.llmTextLoading) return;
+    if (commandState.llmTextContent) return;
+    commandState.llmTextLoading = true;
+    commandState.llmTextError = "";
+    try {
+      commandState.llmTextContent = await loadRemoteLlmText();
+    } catch (error) {
+      if (error instanceof Error) {
+        commandState.llmTextError = error.message;
+      } else {
+        commandState.llmTextError = String(error);
+      }
+    } finally {
+      commandState.llmTextLoading = false;
+    }
+  },
+  setLlmTextDraft: (value: string) => {
+    commandState.llmTextDraft = value;
+  },
+  saveLlmTextDraft: async () => {
+    const script = commandState.llmTextDraft.trim();
+    if (!script) {
+      return { success: false, error: "Missing script" };
+    }
+    commandState.llmTextSaving = true;
+    try {
+      return await saveExternalCommandFromText(script);
+    } finally {
+      commandState.llmTextSaving = false;
+    }
   },
   setExternalCommandShortcut: async (
     commandId: string,
