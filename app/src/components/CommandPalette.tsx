@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import {
-  Copy,
   FileText,
   FileUp,
   MousePointerClick,
@@ -28,7 +27,6 @@ import { ConfirmModal } from "./ConfirmModal";
 import { deleteExternalCommand } from "../service";
 import { clsx } from "clsx";
 import { ShortcutInput } from "./ShortcutInput";
-import { Tooltip } from "./Tooltip";
 import { writeTextToClipboard } from "../utils/clipboard";
 
 type CommandResult = {
