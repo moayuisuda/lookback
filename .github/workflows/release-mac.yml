@@ -66,8 +66,6 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GH_TOKEN }}
-          repository: moayuisuda/lookback-release
           tag_name: ${{ github.ref_name }}
           files: |
             release-assets/mac/*.dmg
@@ -78,3 +76,5 @@ jobs:
           overwrite_files: true
           generate_release_notes: true
           fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
