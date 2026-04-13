@@ -1,9 +1,10 @@
 import type { I18nKey } from '../../shared/i18n/types';
-import type { canvasActions } from '../store/canvasStore';
-import type { globalActions } from '../store/globalStore';
-import type { commandActions } from '../store/commandStore';
+import type { canvasActions, canvasState } from '../store/canvasStore';
+import type { globalActions, globalState } from '../store/globalStore';
+import type { commandActions, commandState } from '../store/commandStore';
 import type { useEnvState } from '../hooks/useEnvState';
 import type { useT } from '../i18n/useT';
+import type { i18nState } from '../store/i18nStore';
 import type { ShellRequest, ShellResponse } from '../service';
 
 export type CommandContext = {
@@ -16,6 +17,12 @@ export type CommandContext = {
     canvasActions: typeof canvasActions;
     globalActions: typeof globalActions;
     commandActions: typeof commandActions;
+  };
+  store: {
+    canvas: typeof canvasState;
+    global: typeof globalState;
+    command: typeof commandState;
+    i18n: typeof i18nState;
   };
   config: {
     API_BASE_URL: string;

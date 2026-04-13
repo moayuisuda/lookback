@@ -55,126 +55,73 @@ const buildRevealCommand = (filePath, platform) => {
     };
   }
   if (platform === "linux") {
+    const dirname = filePath.substring(0, filePath.lastIndexOf("/")) || ".";
     return {
       command: "xdg-open",
-      args: [filePath],
+      args: [dirname],
     };
   }
   return null;
 };
 
-const pickSelectedImagePath = (items) => {
-  if (!Array.isArray(items)) return "";
-  const selected = items.find(
-    (item) => item && item.type === "image" && item.isSelected,
-  );
-  if (!selected || typeof selected.imagePath !== "string") return "";
-  return selected.imagePath.trim();
+const pickSelectedItem = (items) => {
+  if (!Array.isArray(items)) return null;
+  return items.find((item) => item && item.type === "image" && item.isSelected);
 };
 
-let lastCommandRunAt = 0;
+export const run = async (context, helpers) => {
+  const { store, actions, shell } = context;
+  const { toast } = helpers;
+  const locale = store.i18n.locale || "en";
+  const dict = config.i18n[locale] || config.i18n.en;
 
-export const ui = ({ context }) => {
-  const { React, hooks, actions, shell } = context;
-  const { useEffect, useRef } = React;
-  const { useEnvState, useT } = hooks;
-  const { t } = useT();
-  const { canvas: canvasSnap } = useEnvState();
-  const startedRef = useRef(false);
+  const selectedItem = pickSelectedItem(store.canvas.canvasItems);
+  if (!selectedItem || !selectedItem.imagePath) {
+    toast(dict["toast.command.openInFolder.noSelection"]);
+    actions.commandActions.close();
+    return;
+  }
 
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    const now = Date.now();
-    // StrictMode 下会短时间重复挂载，避免同一次触发重复执行系统命令。
-    if (now - lastCommandRunAt < 300) {
-      actions.commandActions.close();
+  const { imagePath } = selectedItem;
+  const { canvasActions, commandActions } = actions;
+
+  if (canvasActions.isRemoteImagePath(imagePath)) {
+    toast(dict["toast.command.openInFolder.unsupported"]);
+    commandActions.close();
+    return;
+  }
+
+  try {
+    const resolvedPath = await canvasActions.resolveLocalImagePath(
+      imagePath,
+      store.canvas.currentCanvasName,
+    );
+
+    if (!resolvedPath) {
+      throw new Error("Invalid target path");
+    }
+
+    const platform = detectPlatform();
+    const revealTargetPath = platform === "linux" 
+      ? canvasActions.getPathDirname(resolvedPath) 
+      : resolvedPath;
+
+    const command = buildRevealCommand(revealTargetPath, platform);
+    if (!command) {
+      toast(dict["toast.command.openInFolder.unsupported"]);
+      commandActions.close();
       return;
     }
-    lastCommandRunAt = now;
 
-    const openFolder = async () => {
-      const selectedPath = pickSelectedImagePath(canvasSnap.canvasItems);
-      if (!selectedPath) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.noSelection" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-      if (actions.canvasActions.isRemoteImagePath(selectedPath)) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.unsupported" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      const resolvedPath = await actions.canvasActions.resolveLocalImagePath(
-        selectedPath,
-        canvasSnap.currentCanvasName,
-      );
-      const targetPath = resolvedPath;
-      if (!targetPath) {
-        actions.globalActions.pushToast(
-          {
-            key: "toast.command.openInFolder.failed",
-            params: { error: "Invalid target path" },
-          },
-          "error",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      const platform = detectPlatform();
-      const revealTargetPath =
-        platform === "linux"
-          ? actions.canvasActions.getPathDirname(targetPath)
-          : targetPath;
-      const command = buildRevealCommand(revealTargetPath, platform);
-      if (!command) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.unsupported" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      try {
-        const result = await shell(command);
-        if (!result.success) {
-          actions.globalActions.pushToast(
-            {
-              key: "toast.command.openInFolder.failed",
-              params: { error: result.error || result.stderr || "Unknown error" },
-            },
-            "error",
-          );
-        }
-      } catch (error) {
-        actions.globalActions.pushToast(
-          {
-            key: "toast.command.openInFolder.failed",
-            params: {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
-          "error",
-        );
-      }
-      actions.commandActions.close();
-    };
-
-    void openFolder();
-  }, [actions.commandActions, actions.globalActions, canvasSnap, shell]);
-
-  return (
-    <div className="px-4 py-6 text-sm text-neutral-300">
-      {t("command.openSelectedImageInFolder.running")}
-    </div>
-  );
+    const result = await shell(command);
+    if (!result.success) {
+      const errorMsg = result.error || result.stderr || "Unknown error";
+      toast(dict["toast.command.openInFolder.failed"].replace("{{error}}", errorMsg));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    toast(dict["toast.command.openInFolder.failed"].replace("{{error}}", message));
+  } finally {
+    commandActions.close();
+  }
 };

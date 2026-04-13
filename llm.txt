@@ -27,7 +27,7 @@
 `export const config = { ... }`
 
 2. 按需使用：
-`export const run = (context, helpers) => { ... }`
+`export const run = (context, helpers) => { ... }` // run 中严禁使用 context.hooks
 `export const ui = ({ context }) => { ... }`
 
 规则：
@@ -48,6 +48,14 @@
 ```js
 context = {
   React,
+  // store 是原始状态代理 (Valtio proxy)，在 run 函数中读取数据必须使用 store
+  store: {
+    canvas,
+    global,
+    command,
+    i18n,
+  },
+  // hooks 只能在 ui 中用，run 中严禁使用
   hooks: {
     useEnvState,
     useT,
@@ -91,8 +99,14 @@ const { t } = context.hooks.useT();
 
 环境状态：
 
+在 `ui` 组件中获取 valtio 快照（响应式）：
 ```js
 const { global, command, canvas, i18n } = context.hooks.useEnvState();
+```
+
+在 `run` 函数中直接从 `store` 直接获取 valtio 数据：
+```js
+const { global, command, canvas, i18n } = context.store;
 ```
 
 这是稳定可用结构，不要改名字。
@@ -591,23 +605,6 @@ const canvasToBlob = (canvasEl, type = "image/png", quality) =>
     }, type, quality);
   });
 ```
-
-====================
-十五、像素级图像处理建议
-====================
-
-这是通用图像处理建议，不只针对像素化：
-
-- 不要直接修改原始 `ImageData` 之外的状态
-- 对于像素风 / 马赛克 / 缩略图类命令，优先用“先缩小再关闭平滑放大”的方式
-- 放大像素风结果时要设置：
-
-```js
-ctx.imageSmoothingEnabled = false;
-```
-
-- 生成目标图时保留 alpha
-- 输出尺寸必须可控，避免无上限大图导致卡死
 
 ====================
 十六、命令 UI 规则
@@ -1336,129 +1333,77 @@ const buildRevealCommand = (filePath, platform) => {
     };
   }
   if (platform === "linux") {
+    const dirname = filePath.substring(0, filePath.lastIndexOf("/")) || ".";
     return {
       command: "xdg-open",
-      args: [filePath],
+      args: [dirname],
     };
   }
   return null;
 };
 
-const pickSelectedImagePath = (items) => {
-  if (!Array.isArray(items)) return "";
-  const selected = items.find(
-    (item) => item && item.type === "image" && item.isSelected,
-  );
-  if (!selected || typeof selected.imagePath !== "string") return "";
-  return selected.imagePath.trim();
+const pickSelectedItem = (items) => {
+  if (!Array.isArray(items)) return null;
+  return items.find((item) => item && item.type === "image" && item.isSelected);
 };
 
-let lastCommandRunAt = 0;
+export const run = async (context, helpers) => {
+  const { store, actions, shell } = context;
+  const { toast } = helpers;
+  const locale = store.i18n.locale || "en";
+  const dict = config.i18n[locale] || config.i18n.en;
 
-export const ui = ({ context }) => {
-  const { React, hooks, actions, shell } = context;
-  const { useEffect, useRef } = React;
-  const { useEnvState, useT } = hooks;
-  const { t } = useT();
-  const { canvas: canvasSnap } = useEnvState();
-  const startedRef = useRef(false);
+  const selectedItem = pickSelectedItem(store.canvas.canvasItems);
+  if (!selectedItem || !selectedItem.imagePath) {
+    toast(dict["toast.command.openInFolder.noSelection"]);
+    actions.commandActions.close();
+    return;
+  }
 
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    const now = Date.now();
-    // StrictMode 下会短时间重复挂载，避免同一次触发重复执行系统命令。
-    if (now - lastCommandRunAt < 300) {
-      actions.commandActions.close();
+  const { imagePath } = selectedItem;
+  const { canvasActions, commandActions } = actions;
+
+  if (canvasActions.isRemoteImagePath(imagePath)) {
+    toast(dict["toast.command.openInFolder.unsupported"]);
+    commandActions.close();
+    return;
+  }
+
+  try {
+    const resolvedPath = await canvasActions.resolveLocalImagePath(
+      imagePath,
+      store.canvas.currentCanvasName,
+    );
+
+    if (!resolvedPath) {
+      throw new Error("Invalid target path");
+    }
+
+    const platform = detectPlatform();
+    const revealTargetPath = platform === "linux" 
+      ? canvasActions.getPathDirname(resolvedPath) 
+      : resolvedPath;
+
+    const command = buildRevealCommand(revealTargetPath, platform);
+    if (!command) {
+      toast(dict["toast.command.openInFolder.unsupported"]);
+      commandActions.close();
       return;
     }
-    lastCommandRunAt = now;
 
-    const openFolder = async () => {
-      const selectedPath = pickSelectedImagePath(canvasSnap.canvasItems);
-      if (!selectedPath) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.noSelection" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-      if (actions.canvasActions.isRemoteImagePath(selectedPath)) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.unsupported" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      const resolvedPath = await actions.canvasActions.resolveLocalImagePath(
-        selectedPath,
-        canvasSnap.currentCanvasName,
-      );
-      const targetPath = resolvedPath;
-      if (!targetPath) {
-        actions.globalActions.pushToast(
-          {
-            key: "toast.command.openInFolder.failed",
-            params: { error: "Invalid target path" },
-          },
-          "error",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      const platform = detectPlatform();
-      const revealTargetPath =
-        platform === "linux"
-          ? actions.canvasActions.getPathDirname(targetPath)
-          : targetPath;
-      const command = buildRevealCommand(revealTargetPath, platform);
-      if (!command) {
-        actions.globalActions.pushToast(
-          { key: "toast.command.openInFolder.unsupported" },
-          "warning",
-        );
-        actions.commandActions.close();
-        return;
-      }
-
-      try {
-        const result = await shell(command);
-        if (!result.success) {
-          actions.globalActions.pushToast(
-            {
-              key: "toast.command.openInFolder.failed",
-              params: { error: result.error || result.stderr || "Unknown error" },
-            },
-            "error",
-          );
-        }
-      } catch (error) {
-        actions.globalActions.pushToast(
-          {
-            key: "toast.command.openInFolder.failed",
-            params: {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
-          "error",
-        );
-      }
-      actions.commandActions.close();
-    };
-
-    void openFolder();
-  }, [actions.commandActions, actions.globalActions, canvasSnap, shell]);
-
-  return (
-    <div className="px-4 py-6 text-sm text-neutral-300">
-      {t("command.openSelectedImageInFolder.running")}
-    </div>
-  );
+    const result = await shell(command);
+    if (!result.success) {
+      const errorMsg = result.error || result.stderr || "Unknown error";
+      toast(dict["toast.command.openInFolder.failed"].replace("{{error}}", errorMsg));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    toast(dict["toast.command.openInFolder.failed"].replace("{{error}}", message));
+  } finally {
+    commandActions.close();
+  }
 };
+
 
 // 图片基因 imageGene.jsx
 const HISTOGRAM_BINS = 3;
@@ -2036,10 +1981,10 @@ export const config = {
   id: "imageGene",
   i18n: {
     en: {
-...
+      ...
     },
     zh: {
-...
+      ...
     },
   },
   titleKey: "command.imageGene.title",
