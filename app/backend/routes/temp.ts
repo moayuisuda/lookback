@@ -2,7 +2,7 @@ import path from "path";
 import express from "express";
 import fs from "fs-extra";
 import sharp from "sharp";
-import { withFileLock, withFileLocks } from "../fileLock";
+import { withFileLock } from "../fileLock";
 
 type TempRouteDeps = {
   getCanvasAssetsDir: (canvasName: string) => string;
@@ -128,9 +128,9 @@ export const createTempRouter = (deps: TempRouteDeps) => {
       let dominantColor: string | null = null;
       let tone: string | null = null;
 
-      stage = "wait-file-locks";
+      stage = "wait-file-lock";
       const lockRequestedAt = Date.now();
-      await withFileLocks([assetsDir, filepath], async () => {
+      await withFileLock(filepath, async () => {
         // 记录锁等待时长，用于判断是否由文件锁竞争导致慢请求/异常。
         lockWaitMs = Date.now() - lockRequestedAt;
         console.info(`[temp][download-url][${requestId}] lock-acquired`, {
@@ -240,7 +240,7 @@ export const createTempRouter = (deps: TempRouteDeps) => {
         let dominantColor: string | null = null;
         let tone: string | null = null;
 
-        await withFileLocks([assetsDir, filepath], async () => {
+        await withFileLock(filepath, async () => {
           await fs.writeFile(filepath, fileBuffer);
           try {
             const metadata = await sharp(filepath).metadata();

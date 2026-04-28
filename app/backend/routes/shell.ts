@@ -1,5 +1,6 @@
 import path from "path";
 import express from "express";
+import { app } from "electron";
 import { spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 
@@ -25,6 +26,17 @@ type ShellRunResult = {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+};
+
+type ResolvedShellCommand = {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+};
+
+const BUNDLED_NPM_BIN: Record<string, string> = {
+  npm: "npm-cli.js",
+  npx: "npx-cli.js",
 };
 
 const sanitizeCommand = (value: unknown): string | null => {
@@ -78,6 +90,40 @@ const isAuthorized = (actual: string, expected: string): boolean => {
   return timingSafeEqual(a, b);
 };
 
+const normalizeCommandName = (command: string): string => {
+  const normalized = path.basename(command).toLowerCase();
+  return normalized.replace(/\.(cmd|ps1)$/i, "");
+};
+
+const getBundledNpmCliPath = (command: string): string | null => {
+  const binFile = BUNDLED_NPM_BIN[normalizeCommandName(command)];
+  if (!binFile) return null;
+  return path.join(app.getAppPath(), "node_modules", "npm", "bin", binFile);
+};
+
+const resolveShellCommand = (
+  command: string,
+  args: string[],
+): ResolvedShellCommand => {
+  const bundledNpmCli = getBundledNpmCliPath(command);
+  if (!bundledNpmCli) {
+    return {
+      command,
+      args,
+      env: process.env,
+    };
+  }
+
+  return {
+    command: process.execPath,
+    args: [bundledNpmCli, ...args],
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+    },
+  };
+};
+
 const runShellCommand = (
   command: string,
   args: string[],
@@ -85,8 +131,10 @@ const runShellCommand = (
   timeoutMs: number,
 ): Promise<ShellRunResult> =>
   new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const resolved = resolveShellCommand(command, args);
+    const child = spawn(resolved.command, resolved.args, {
       cwd,
+      env: resolved.env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       shell: false,

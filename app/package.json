@@ -5,7 +5,7 @@
   "author": "Haohui An",
   "private": true,
   "license": "AGPL-3.0-only",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "repository": {
     "type": "git",
     "url": "https://github.com/anhaohui/RroRef.git"
@@ -83,6 +83,7 @@
     "fs-extra": "^11.3.3",
     "konva": "^10.2.0",
     "lucide-react": "^0.562.0",
+    "npm": "10.9.0",
     "radash": "^12.1.1",
     "rc-input": "^1.8.0",
     "react": "^19.2.0",

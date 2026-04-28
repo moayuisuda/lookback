@@ -318,7 +318,12 @@ function downloadImage(url: string, dest: string): Promise<void> {
   const requestRemoteOnce = async (targetUrl: string): Promise<void> => {
     const referer = (() => {
       try {
-        return new URL(targetUrl).origin;
+        const { hostname, origin } = new URL(targetUrl);
+        // 小红书 CDN 域名需要使用小红书主站作为 Referer，否则返回 403
+        if (hostname.endsWith("xhscdn.com") || hostname.endsWith("xiaohongshu.com")) {
+          return "https://www.xiaohongshu.com";
+        }
+        return origin;
       } catch {
         return "";
       }
