@@ -11,6 +11,7 @@ const REFRESH_EXPIRE_MS = 12 * 60 * 60 * 1000;
 const SHELL_TIMEOUT_MS = 120000;
 const LOGIN_TIMEOUT_MS = 240000;
 const DETAIL_IMAGE_SCAN_STEPS = 10;
+const NPM_REGISTRY = "https://registry.npmmirror.com";
 
 export const config = {
   id: COMMAND_ID,
@@ -954,7 +955,7 @@ const prepareRuntime = async (shell, state, setStatePatch) => {
   if (!hasPlaywright) {
     const installResult = await runShell(shell, {
       command: "npm",
-      args: ["--prefix", runtimeDir, "install", "playwright"],
+      args: ["--prefix", runtimeDir, "install", "playwright", "--registry", NPM_REGISTRY],
     });
     if (!installResult.success) {
       throw new Error(installResult.error || installResult.stderr || "Playwright install failed");
