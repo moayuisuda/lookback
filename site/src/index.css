@@ -121,7 +121,44 @@ body {
 .topbar-actions {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.llm-copy {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.llm-copy-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(292px, calc(100vw - 32px));
+  border: 1px solid rgba(126, 152, 184, 0.28);
+  border-radius: 12px;
+  background: rgba(6, 11, 20, 0.96);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
+  color: #d7eaff;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.llm-copy:hover .llm-copy-tooltip,
+.llm-copy:focus-within .llm-copy-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .topbar-nav-btn {

@@ -106,6 +106,31 @@ function App() {
           >
             {t("nav.market")}
           </button>
+          <div className="llm-copy">
+            <button
+              type="button"
+              className="topbar-nav-btn"
+              aria-label={t("nav.llmTextAria")}
+              aria-describedby="llm-copy-tooltip"
+              disabled={snap.llmTextCopying}
+              onClick={() => {
+                void siteActions.copyLlmText();
+              }}
+            >
+              llm.txt
+            </button>
+            <span
+              id="llm-copy-tooltip"
+              className="llm-copy-tooltip"
+              role="tooltip"
+            >
+              {snap.llmTextError
+                ? t("nav.llmTextCopyFailed", { error: snap.llmTextError })
+                : snap.llmTextCopied
+                  ? t("nav.llmTextCopied")
+                  : t("nav.llmTextTooltip")}
+            </span>
+          </div>
           <button
             type="button"
             className="topbar-nav-btn"

@@ -5,6 +5,10 @@ export const zh = {
   'nav.language.en': 'EN',
   'nav.download': '下载页',
   'nav.market': '社区命令',
+  'nav.llmTextAria': '复制 llm.txt',
+  'nav.llmTextTooltip': '将复制内容放到任意 AI 中，生成自定义命令。',
+  'nav.llmTextCopied': 'llm.txt 已复制',
+  'nav.llmTextCopyFailed': '复制失败：{{error}}',
 
   'hero.badge': '素材整理画布',
   'hero.title': '在一个画布中整理、参考视觉素材',
@@ -89,6 +93,11 @@ export const en = {
   'nav.language.en': 'EN',
   'nav.download': 'Download',
   'nav.market': 'Community Commands',
+  'nav.llmTextAria': 'Copy llm.txt',
+  'nav.llmTextTooltip':
+    'Put the copied content into any AI chat to generate a custom command.',
+  'nav.llmTextCopied': 'llm.txt copied',
+  'nav.llmTextCopyFailed': 'Copy failed: {{error}}',
 
   'hero.badge': 'Assets Organization Canvas',
   'hero.title': 'Organize visual assets in one canvas',

@@ -13,9 +13,12 @@ const COMMAND_MARKET_TREE_API =
   "https://api.github.com/repos/moayuisuda/lookback-release/git/trees/main?recursive=1";
 const COMMAND_MARKET_RAW_PREFIX =
   "https://raw.githubusercontent.com/moayuisuda/lookback-release/refs/heads/main/";
+const LLM_TEXT_URL =
+  "https://xget-5sd.pages.dev/gh/moayuisuda/lookback/raw/refs/heads/main/llm.txt";
 
 const LOOKBACK_IMPORT_DEEP_LINK = "lookback://import-command";
 const LOOKBACK_IMPORT_FALLBACK_MS = 1800;
+const LLM_TEXT_COPIED_VISIBLE_MS = 1800;
 
 export type Platform = "mac" | "win" | "other";
 export type FaqPlatform = "mac" | "win";
@@ -73,6 +76,9 @@ type SiteState = {
   commandMarketLoading: boolean;
   commandMarketError: string;
   commandMarketDownloadingId: string | null;
+  llmTextCopying: boolean;
+  llmTextCopied: boolean;
+  llmTextError: string;
 };
 
 export const siteState = proxy<SiteState>({
@@ -87,6 +93,9 @@ export const siteState = proxy<SiteState>({
   commandMarketLoading: false,
   commandMarketError: "",
   commandMarketDownloadingId: null,
+  llmTextCopying: false,
+  llmTextCopied: false,
+  llmTextError: "",
 });
 
 function normalizeVersion(tagName: string) {
@@ -190,6 +199,25 @@ async function loadCommandScript(path: string) {
     throw new Error(`HTTP ${response.status}`);
   }
   return response.text();
+}
+
+async function loadLlmText() {
+  const response = await fetch(LLM_TEXT_URL, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
+async function writeTextToClipboard(text: string) {
+  const value = text.trim();
+  if (!value) {
+    throw new Error("Clipboard text is empty");
+  }
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API unavailable");
+  }
+  await navigator.clipboard.writeText(value);
 }
 
 function extractConfigBlock(source: string) {
@@ -392,6 +420,25 @@ export const siteActions = {
       return release;
     } catch {
       return null;
+    }
+  },
+  async copyLlmText() {
+    if (siteState.llmTextCopying) return;
+    siteState.llmTextCopying = true;
+    siteState.llmTextCopied = false;
+    siteState.llmTextError = "";
+    try {
+      const content = await loadLlmText();
+      await writeTextToClipboard(content);
+      siteState.llmTextCopied = true;
+      window.setTimeout(() => {
+        siteState.llmTextCopied = false;
+      }, LLM_TEXT_COPIED_VISIBLE_MS);
+    } catch (error) {
+      siteState.llmTextError =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      siteState.llmTextCopying = false;
     }
   },
   pickPlatformAsset(assets: ReleaseAsset[], platform: Platform) {
