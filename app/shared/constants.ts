@@ -5,7 +5,7 @@ export const DEFAULT_COMMAND_FILES = [
   "removeNodeFromCurrentGroup.jsx",
   "stitchExport.jsx",
   "clip.jsx",
-  // "follow-practice.jsx",
+  "follow-practice.jsx",
   // "imageGene.jsx",
   // "multiSearch.jsx",
   // "copySelectedImageToClipboard.jsx",
