@@ -168,18 +168,20 @@ const runShell = async (shell, payload) =>
     ...payload,
   });
 
+const psEscape = (value) => String(value).replace(/'/g, "''");
+
 const ensureDir = async (shell, dirPath) => {
   if (isWin()) {
     const script = [
       "$ErrorActionPreference='Stop'",
-      "$dir=$args[0]",
+      `$dir='${psEscape(dirPath)}'`,
       "if (!(Test-Path -LiteralPath $dir -PathType Container)) {",
       "  New-Item -ItemType Directory -Path $dir -Force | Out-Null",
       "}",
     ].join("; ");
     return runShell(shell, {
       command: "powershell.exe",
-      args: ["-NoProfile", "-Command", script, dirPath],
+      args: ["-NoProfile", "-Command", script],
     });
   }
   return runShell(shell, {
@@ -190,10 +192,10 @@ const ensureDir = async (shell, dirPath) => {
 
 const pathExists = async (shell, filePath) => {
   if (isWin()) {
-    const script = "if (Test-Path -LiteralPath $args[0]) { exit 0 }; exit 1";
+    const script = `if (Test-Path -LiteralPath '${psEscape(filePath)}') { exit 0 }; exit 1`;
     const result = await runShell(shell, {
       command: "powershell.exe",
-      args: ["-NoProfile", "-Command", script, filePath],
+      args: ["-NoProfile", "-Command", script],
     });
     return result.success;
   }
@@ -207,17 +209,18 @@ const pathExists = async (shell, filePath) => {
 const writeTextFile = async (shell, filePath, content) => {
   const encoded = encodeBase64(content);
   if (isWin()) {
+    // base64 contains only [A-Za-z0-9+/=], no escaping needed for $data
     const script = [
       "$ErrorActionPreference='Stop'",
-      "$path=$args[0]",
-      "$data=$args[1]",
+      `$path='${psEscape(filePath)}'`,
+      `$data='${encoded}'`,
       "$dir=[IO.Path]::GetDirectoryName($path)",
       "if ($dir) { [IO.Directory]::CreateDirectory($dir) | Out-Null }",
       "[IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($data))",
     ].join("; ");
     return runShell(shell, {
       command: "powershell.exe",
-      args: ["-NoProfile", "-Command", script, filePath, encoded],
+      args: ["-NoProfile", "-Command", script],
     });
   }
 
@@ -955,7 +958,7 @@ const prepareRuntime = async (shell, state, setStatePatch) => {
   if (!hasPlaywright) {
     const installResult = await runShell(shell, {
       command: "npm",
-      args: ["--prefix", runtimeDir, "install", "playwright", "--registry", NPM_REGISTRY],
+      args: ["--prefix", runtimeDir, "install", "playwright"],
     });
     if (!installResult.success) {
       throw new Error(installResult.error || installResult.stderr || "Playwright install failed");

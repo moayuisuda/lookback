@@ -10,9 +10,9 @@ const GITHUB_RELEASE_DOWNLOAD_PREFIX =
 const MIRROR_RELEASE_DOWNLOAD_PREFIX =
   "https://xget.xi-xu.me/gh/moayuisuda/lookback-release/releases/download/";
 const COMMAND_MARKET_TREE_API =
-  "https://api.github.com/repos/moayuisuda/lookback-release/git/trees/main?recursive=1";
+  "https://api.github.com/repos/moayuisuda/lookback/git/trees/main?recursive=1";
 const COMMAND_MARKET_RAW_PREFIX =
-  "https://raw.githubusercontent.com/moayuisuda/lookback-release/refs/heads/main/";
+  "https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/";
 const LLM_TEXT_URL =
   "https://xget-5sd.pages.dev/gh/moayuisuda/lookback/raw/refs/heads/main/llm.txt";
 
@@ -115,7 +115,9 @@ function resolveMirrorDownloadUrl(downloadUrl: string) {
 import { DEFAULT_COMMAND_FILES } from "../../../app/shared/constants";
 
 function isCommandScript(path: string) {
-  return path.startsWith("commands/") && /\.(jsx?|tsx?)$/i.test(path);
+  return (
+    path.startsWith("app/src/commands-pending/") && /\.(jsx?|tsx?)$/i.test(path)
+  );
 }
 
 function getFileName(path: string) {
