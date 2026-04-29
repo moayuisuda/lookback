@@ -15,6 +15,7 @@ const PROFILE_SCROLL_MAX_STEPS = 80;
 const PROFILE_SCROLL_IDLE_ROUNDS = 5;
 const PROFILE_SCROLL_WAIT_MS = 900;
 const PROFILE_SCROLL_INITIAL_WAIT_MS = 600;
+const PROFILE_SCROLL_MAX_CARDS = 100;
 const NPM_REGISTRY = "https://registry.npmmirror.com";
 
 export const config = {
@@ -25,6 +26,7 @@ export const config = {
       "command.followPractice.description": "Track practice notes and add their images to the canvas",
       "command.followPractice.userId": "User ID",
       "command.followPractice.keywords": "Keywords",
+      "command.followPractice.maxCards": "Max Cards",
       "command.followPractice.headless": "Headless mode",
       "command.followPractice.headless.hint": "If login is repeatedly required, try turning this on",
       "command.followPractice.refresh": "Fetch",
@@ -60,6 +62,7 @@ export const config = {
       "command.followPractice.description": "抓取练习帖子，生成待办并把图片加入当前画板",
       "command.followPractice.userId": "用户 ID",
       "command.followPractice.keywords": "匹配关键词",
+      "command.followPractice.maxCards": "最大数量",
       "command.followPractice.headless": "无头模式",
       "command.followPractice.headless.hint": "如果一直提示未登录，尝试开启",
       "command.followPractice.refresh": "拉取",
@@ -136,6 +139,7 @@ const loadState = () => {
     userId: String(raw?.userId || DEFAULT_USER_ID),
     keywords: String(raw?.keywords || DEFAULT_KEYWORDS),
     headless: raw?.headless !== false,
+    maxCards: Number(raw?.maxCards) || PROFILE_SCROLL_MAX_CARDS,
     todos,
     lastRefreshAt: Number(raw?.lastRefreshAt || 0),
     browserReady: raw?.browserReady === true,
@@ -347,6 +351,7 @@ const PROFILE_SCROLL_MAX_STEPS = ${PROFILE_SCROLL_MAX_STEPS};
 const PROFILE_SCROLL_IDLE_ROUNDS = ${PROFILE_SCROLL_IDLE_ROUNDS};
 const PROFILE_SCROLL_WAIT_MS = ${PROFILE_SCROLL_WAIT_MS};
 const PROFILE_SCROLL_INITIAL_WAIT_MS = ${PROFILE_SCROLL_INITIAL_WAIT_MS};
+const PROFILE_SCROLL_MAX_CARDS = ${PROFILE_SCROLL_MAX_CARDS};
 
 const decodePayload = () => {
   const encoded = process.argv[process.argv.length - 1] || "";
@@ -687,7 +692,7 @@ const appendVisibleProfileCards = async (page) =>
     return window.__followPracticeCards.length;
   }, collectVisibleProfileCards.toString(), "append-visible-profile-cards");
 
-const scrollToBottom = async (page) => {
+const scrollToBottom = async (page, payload) => {
   let stableCount = 0;
   let lastHeight = 0;
   let lastCount = 0;
@@ -776,6 +781,14 @@ const scrollToBottom = async (page) => {
     lastHeight = metrics.height;
     lastCount = collectedCount;
     lastScrollY = metrics.scrollY;
+    
+    // 达到最大卡片数量限制，停止滚动
+    const maxCards = payload.maxCards || PROFILE_SCROLL_MAX_CARDS;
+    if (collectedCount >= maxCards) {
+      pushDebug("scroll-stop", { note: "max-cards-reached", collectedCount, maxCards });
+      break;
+    }
+    
     if (stableCount >= PROFILE_SCROLL_IDLE_ROUNDS) break;
     await sleep(PROFILE_SCROLL_WAIT_MS);
   }
@@ -1387,7 +1400,7 @@ const matchesKeywords = (note, keywords) => {
       return;
     }
 
-    await scrollToBottom(page);
+    await scrollToBottom(page, payload);
 
     let cards = await collectProfileCards(page);
     const accessIssueAfterCards = await getAccessIssue(page);
@@ -1402,7 +1415,7 @@ const matchesKeywords = (note, keywords) => {
         mode: String(payload.mode || ""),
       });
       await ensureInteractiveLogin(payload.profileUrl, payload.mode);
-      await scrollToBottom(page);
+      await scrollToBottom(page, payload);
       cards = await collectProfileCards(page);
       const accessIssueAfterRetry = await getAccessIssue(page);
       if (accessIssueAfterRetry?.kind === "risk") {
@@ -1578,7 +1591,7 @@ const prepareRuntime = async (shell, state, setStatePatch) => {
   if (!hasPlaywright) {
     const installResult = await runShell(shell, {
       command: "npm",
-      args: ["--prefix", runtimeDir, "install", "playwright"],
+      args: ["--prefix", runtimeDir, "install", "playwright", "--registry", NPM_REGISTRY],
     });
     if (!installResult.success) {
       throw new Error(installResult.error || installResult.stderr || "Playwright install failed");
@@ -1663,13 +1676,14 @@ const mergeTodos = (currentTodos, scrapedTodos) => {
   return next;
 };
 
-const scrapeTodos = async (shell, runtimeDir, userId, keywords, headless) => {
+const scrapeTodos = async (shell, runtimeDir, userId, keywords, headless, maxCards) => {
   const payload = {
     mode: "scrape",
     profileUrl: buildProfileUrl(userId),
     userDataDir: pathJoin(runtimeDir, "xhs-profile"),
     keywords: splitKeywords(keywords),
     headless: headless !== false,
+    maxCards: Number(maxCards) || PROFILE_SCROLL_MAX_CARDS,
   };
   const result = await runShell(shell, {
     command: "node",
@@ -1801,6 +1815,7 @@ export const ui = ({ context }) => {
   const [userId, setUserId] = useState(storedState.userId);
   const [keywords, setKeywords] = useState(storedState.keywords);
   const [headless, setHeadless] = useState(storedState.headless !== false);
+  const [maxCards, setMaxCards] = useState(storedState.maxCards);
   const [status, setStatus] = useState({ key: "command.followPractice.status.ready" });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoginOpening, setIsLoginOpening] = useState(false);
@@ -1810,6 +1825,7 @@ export const ui = ({ context }) => {
   const userIdRef = useRef(userId);
   const keywordsRef = useRef(keywords);
   const headlessRef = useRef(headless);
+  const maxCardsRef = useRef(maxCards);
 
   const writeState = (next) => {
     storedStateRef.current = next;
@@ -1841,6 +1857,13 @@ export const ui = ({ context }) => {
     patchState({ headless: value });
   };
 
+  const handleMaxCardsChange = (value) => {
+    const num = Number(value) || PROFILE_SCROLL_MAX_CARDS;
+    setMaxCards(num);
+    maxCardsRef.current = num;
+    patchState({ maxCards: num });
+  };
+
   const refreshTodos = async (reason = "manual") => {
     if (refreshTaskRef.current) return refreshTaskRef.current;
 
@@ -1857,15 +1880,17 @@ export const ui = ({ context }) => {
         const activeUserId = userIdRef.current;
         const activeKeywords = keywordsRef.current;
         const activeHeadless = headlessRef.current;
+        const activeMaxCards = maxCardsRef.current;
         const runtimeDir = await prepareRuntime(shell, storedStateRef.current, setStatePatch);
         setStatus({ key: "command.followPractice.status.refreshing" });
-        const { todos: scraped, debugTrace } = await scrapeTodos(shell, runtimeDir, activeUserId, activeKeywords, activeHeadless);
+        const { todos: scraped, debugTrace } = await scrapeTodos(shell, runtimeDir, activeUserId, activeKeywords, activeHeadless, activeMaxCards);
         const nextTodos = mergeTodos(storedStateRef.current.todos, scraped);
         patchState({
           todos: nextTodos,
           userId: activeUserId,
           keywords: activeKeywords,
           headless: activeHeadless,
+          maxCards: activeMaxCards,
           lastRefreshAt: Date.now(),
         });
         if (nextTodos.length === 0 && debugTrace) {
@@ -2084,7 +2109,7 @@ export const ui = ({ context }) => {
   return (
     <div className="flex h-130 flex-col bg-neutral-950 text-neutral-100">
       <div className="flex shrink-0 items-start gap-3 border-b border-neutral-800 px-4 py-3">
-        <label className="flex min-w-0 flex-1 flex-col gap-1">
+        <label className="flex w-54 shrink-0 flex-col gap-1">
           <span className="text-xs text-neutral-400">
             {t("command.followPractice.userId")}
           </span>
@@ -2101,6 +2126,20 @@ export const ui = ({ context }) => {
           <input
             value={keywords}
             onChange={(event) => handleKeywordsChange(event.target.value)}
+            className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
+          />
+        </label>
+        <label className="flex w-16 shrink-0 flex-col gap-1">
+          <span className="text-xs text-neutral-400">
+            {t("command.followPractice.maxCards")}
+          </span>
+          <input
+            type="number"
+            value={maxCards}
+            onChange={(event) => setMaxCards(Number(event.target.value) || PROFILE_SCROLL_MAX_CARDS)}
+            onBlur={(event) => handleMaxCardsChange(event.target.value)}
+            min="1"
+            max="500"
             className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
           />
         </label>
@@ -2142,7 +2181,7 @@ export const ui = ({ context }) => {
           </label>
           <span className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-neutral-600 text-[10px] font-semibold text-neutral-400">
             ?
-            <span className="pointer-events-none absolute left-1/2 top-5 z-10 w-52 -translate-x-1/2 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-left text-xs font-normal leading-relaxed text-neutral-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+            <span className="pointer-events-none absolute left-1/2 top-5 z-10 w-24 -translate-x-1/2 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-left text-xs font-normal leading-relaxed text-neutral-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
               {t("command.followPractice.headless.hint")}
             </span>
           </span>
