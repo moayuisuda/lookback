@@ -319,7 +319,7 @@ export const ui = ({ context }) => {
   }, [actions, t, appConfig, canvasSnap]);
 
   return (
-    <div className="flex flex-col w-full" style={{height: 640}}>
+    <div className="flex flex-col w-full" style={{height: 680}}>
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-neutral-900/90 z-10">
           <div className="text-sm text-neutral-400">
