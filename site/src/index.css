@@ -1115,6 +1115,64 @@ body {
   box-shadow: none;
 }
 
+.command-shortcut-demo {
+  margin: 18px 0 0;
+  border-radius: 18px;
+  border: 1px solid rgba(126, 152, 184, 0.26);
+  background:
+    linear-gradient(145deg, rgba(57, 197, 187, 0.1), rgba(44, 119, 255, 0.08)),
+    rgba(7, 13, 24, 0.82);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.22fr);
+  align-items: center;
+  gap: 18px;
+  padding: 18px;
+  animation: fade-up 0.48s ease both;
+}
+
+.command-shortcut-demo figcaption {
+  display: grid;
+  gap: 9px;
+  align-content: center;
+}
+
+.command-shortcut-demo figcaption p {
+  margin: 0;
+  width: fit-content;
+  border-radius: 999px;
+  border: 1px solid rgba(57, 197, 187, 0.38);
+  background: rgba(57, 197, 187, 0.12);
+  color: #b1f4ee;
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.command-shortcut-demo h3 {
+  margin: 0;
+  color: #eaf4ff;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: clamp(24px, 2.6vw, 36px);
+  line-height: 1.14;
+}
+
+.command-shortcut-demo span {
+  color: var(--text-sub);
+  line-height: 1.75;
+  font-size: 14px;
+}
+
+.command-shortcut-demo img {
+  width: 100%;
+  display: block;
+  border-radius: 12px;
+  border: 1px solid rgba(147, 182, 216, 0.22);
+  box-shadow: 0 18px 36px rgba(2, 6, 14, 0.34);
+}
+
 .footer {
   max-width: 1220px;
   margin: 44px auto 10px;
@@ -1289,6 +1347,10 @@ body {
   .command-market-grid .command-card {
     grid-column: 1 / -1;
   }
+
+  .command-shortcut-demo {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 700px) {
@@ -1352,6 +1414,14 @@ body {
 
   .command-card h3 {
     max-width: none;
+  }
+
+  .command-shortcut-demo {
+    padding: 14px;
+  }
+
+  .command-shortcut-demo h3 {
+    font-size: clamp(22px, 8vw, 30px);
   }
 
   .footer-meta {

@@ -460,6 +460,18 @@ function App() {
                   })}
                 </div>
               )}
+
+            <figure className="command-shortcut-demo">
+              <figcaption>
+                <p>{t("commandMarket.shortcutDemo.badge")}</p>
+                <h3>{t("commandMarket.shortcutDemo.title")}</h3>
+                <span>{t("commandMarket.shortcutDemo.desc")}</span>
+              </figcaption>
+              <img
+                src="/shortcut-binding-demo.webp"
+                alt={t("commandMarket.shortcutDemo.alt")}
+              />
+            </figure>
           </section>
         )}
       </main>

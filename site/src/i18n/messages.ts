@@ -82,6 +82,10 @@ export const zh = {
   'commandMarket.empty': '当前没有可下载命令。',
   'commandMarket.download': '导入',
   'commandMarket.downloading': '导入中...',
+  'commandMarket.shortcutDemo.badge': '快捷键绑定',
+  'commandMarket.shortcutDemo.title': '所有命令均可设置快捷键',
+  'commandMarket.shortcutDemo.desc': '/ 键唤出命令菜单，绑定常用命令快捷键。',
+  'commandMarket.shortcutDemo.alt': '命令市场中为命令绑定快捷键的界面示意图',
 
   'footer.line': 'LookBack · 素材整理画布',
   'footer.contact': '联系邮箱：ahhcr68@gmail.com',
@@ -180,6 +184,12 @@ export const en = {
   'commandMarket.empty': 'No commands available right now.',
   'commandMarket.download': 'Import',
   'commandMarket.downloading': 'Importing...',
+  'commandMarket.shortcutDemo.badge': 'Shortcut Binding',
+  'commandMarket.shortcutDemo.title': 'Set shortcuts for every command',
+  'commandMarket.shortcutDemo.desc':
+    'Press / to open the command menu and bind shortcuts for frequent commands.',
+  'commandMarket.shortcutDemo.alt':
+    'Command market interface showing shortcut binding for commands',
 
   'footer.line': 'LookBack · Assets Organization Canvas',
   'footer.contact': 'Contact: ahhcr68@gmail.com',
