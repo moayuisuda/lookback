@@ -294,14 +294,24 @@ function downloadImage(url: string, dest: string): Promise<void> {
   const normalizeRemoteUrl = (rawUrl: string): string => {
     try {
       const parsed = new URL(rawUrl);
+      const hostname = parsed.hostname.toLowerCase();
+      if (hostname.endsWith("pinimg.com")) {
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        if (
+          segments.length >= 5 &&
+          segments[0] !== "originals" &&
+          /^\d+x\d*$/i.test(segments[0])
+        ) {
+          segments[0] = "originals";
+          parsed.pathname = `/${segments.join("/")}`;
+        }
+      }
       // X/Twitter 拖拽经常只给 media path，补齐参数后稳定命中原图。
       if (
-        parsed.hostname === "pbs.twimg.com" &&
+        hostname === "pbs.twimg.com" &&
         parsed.pathname.startsWith("/media/")
       ) {
-        if (!parsed.searchParams.has("name")) {
-          parsed.searchParams.set("name", "orig");
-        }
+        parsed.searchParams.set("name", "orig");
         if (!parsed.searchParams.has("format")) {
           const ext = path.extname(parsed.pathname).replace(".", "");
           if (ext) {

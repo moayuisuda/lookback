@@ -14,7 +14,6 @@ import { anchorActions } from "../store/anchorStore";
 import { commandActions, commandState } from "../store/commandStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { useSnapshot, type Snapshot } from "valtio";
-import { API_BASE_URL } from "../config";
 import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
 import { CanvasText } from "./canvas/CanvasText";
@@ -29,67 +28,18 @@ import {
 } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
 import {
+  createTempMetaFromImageUrl,
   createTempMetasFromFiles,
   logImageImport,
-  scanDroppedItems,
+  resolveDroppedFiles,
 } from "../utils/import";
+import { extractDroppedImageUrl } from "../utils/droppedImageUrl";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { getCssFilters } from "../utils/imageFilters";
 import { ImagePlus, Upload, MousePointer2 } from "lucide-react";
 import { getCommandContext, getCommands } from "../commands";
 import { getCommandDescription, getCommandTitle } from "../commands/display";
 import type { CommandDefinition } from "../commands/types";
-
-const createDroppedImageMeta = (file: {
-  path?: string;
-  storedFilename: string;
-  originalName: string;
-  dominantColor?: string | null;
-  tone?: string | null;
-  width: number;
-  height: number;
-}): ImageMeta => {
-  const name = file.originalName.trim() || "image";
-  const dot = name.lastIndexOf(".");
-  const base = dot > 0 ? name.slice(0, dot) : name;
-  return {
-    id: `temp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    filename: base,
-    imagePath: file.storedFilename,
-    pageUrl: undefined,
-    tags: [],
-    createdAt: Date.now(),
-    dominantColor: file.dominantColor ?? null,
-    tone: file.tone ?? null,
-    hasVector: false,
-    width: file.width,
-    height: file.height,
-  };
-};
-
-type DownloadUrlResponse = {
-  success?: boolean;
-  filename?: string;
-  path?: string;
-  diskPath?: string;
-  width?: number;
-  height?: number;
-  dominantColor?: string | null;
-  tone?: string | null;
-  error?: string;
-};
-
-const getDownloadUrlErrorMessage = async (resp: Response): Promise<string> => {
-  try {
-    const payload = (await resp.json()) as DownloadUrlResponse;
-    if (typeof payload.error === "string" && payload.error.trim()) {
-      return payload.error.trim();
-    }
-  } catch {
-    // ignore invalid body and fallback to status code
-  }
-  return `HTTP ${resp.status}`;
-};
 
 const getImportUrlHost = (url: string) => {
   try {
@@ -564,106 +514,54 @@ export const Canvas: React.FC = () => {
           }
         }
 
-        let files: File[] = [];
-        try {
-          files = await scanDroppedItems(e.dataTransfer);
-        } catch (err) {
-          console.error("Drop scan error", err);
-        }
-        if (files.length === 0) {
-          files = Array.from(e.dataTransfer.files || []);
-        }
-        if (!files.length) {
-          // Try to extract image URL from HTML first (handles Twitter/X etc.)
-          const html = e.dataTransfer.getData("text/html");
-          let url = "";
-          if (html) {
-            const img = new DOMParser()
-              .parseFromString(html, "text/html")
-              .querySelector("img");
-            if (img?.src) {
-              url = img.src;
-            }
-          }
-          // Fallback to uri-list or plain text
-          if (!url) {
-            const urlData =
-              e.dataTransfer.getData("text/uri-list") ||
-              e.dataTransfer.getData("text/plain");
-            if (urlData) {
-              url = urlData.split("\n")[0].trim();
-            }
-          }
-          if (
-            url &&
-            (url.startsWith("http://") || url.startsWith("https://"))
-          ) {
-            const urlHost = getImportUrlHost(url);
-            try {
-              logImageImport("info", "canvas url import started", {
-                source: "drop-url",
-                canvasName: canvasSnap.currentCanvasName,
-                host: urlHost,
-              });
-              const resp = await fetch(`${API_BASE_URL}/api/download-url`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  url,
-                  canvasName: canvasSnap.currentCanvasName,
-                }),
-              });
-              if (!resp.ok) {
-                throw new Error(await getDownloadUrlErrorMessage(resp));
-              }
-              const result = (await resp.json()) as DownloadUrlResponse;
-              if (
-                result.success &&
-                result.filename &&
-                result.path
-              ) {
-                const meta = createDroppedImageMeta({
-                  path: result.path,
-                  storedFilename: result.path,
-                  originalName: result.filename,
-                  dominantColor: result.dominantColor ?? null,
-                  tone: result.tone ?? null,
-                  width: result.width || 0,
-                  height: result.height || 0,
-                });
-                logImageImport("info", "canvas url import succeeded", {
-                  source: "drop-url",
-                  canvasName: canvasSnap.currentCanvasName,
-                  host: urlHost,
-                  filename: result.filename,
-                  imagePath: result.path,
-                  ...(result.diskPath ? { diskPath: result.diskPath } : {}),
-                  width: result.width || 0,
-                  height: result.height || 0,
-                });
-                canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
-              } else {
-                throw new Error("Invalid download response");
-              }
-            } catch (err) {
-              console.error("URL drop error", err);
-              const message = err instanceof Error ? err.message : String(err);
-              logImageImport("error", "canvas url import failed", {
-                source: "drop-url",
-                canvasName: canvasSnap.currentCanvasName,
-                host: urlHost,
-                error: message,
-              });
-              globalActions.pushToast(
-                {
-                  key: "toast.canvasUrlImportFailed",
-                  params: { error: message },
-                },
-                "error",
-              );
-            }
+        const url = extractDroppedImageUrl(e.dataTransfer);
+        if (url) {
+          const urlHost = getImportUrlHost(url);
+          try {
+            logImageImport("info", "canvas url import started", {
+              source: "drop-url",
+              canvasName: canvasSnap.currentCanvasName,
+              host: urlHost,
+            });
+            const meta = await createTempMetaFromImageUrl(url, {
+              canvasName: canvasSnap.currentCanvasName,
+              source: "drop-url",
+            });
+            logImageImport("info", "canvas url import succeeded", {
+              source: "drop-url",
+              canvasName: canvasSnap.currentCanvasName,
+              host: urlHost,
+              filename: meta.filename,
+              imagePath: meta.imagePath,
+              width: meta.width || 0,
+              height: meta.height || 0,
+            });
+            canvasActions.addToCanvas(meta, basePoint.x, basePoint.y);
+          } catch (err) {
+            console.error("URL drop error", err);
+            const message = err instanceof Error ? err.message : String(err);
+            logImageImport("error", "canvas url import failed", {
+              source: "drop-url",
+              canvasName: canvasSnap.currentCanvasName,
+              host: urlHost,
+              error: message,
+            });
+            globalActions.pushToast(
+              {
+                key: "toast.canvasUrlImportFailed",
+                params: { error: message },
+              },
+              "error",
+            );
           }
           return;
+        }
+
+        let files: File[] = [];
+        try {
+          files = await resolveDroppedFiles(e.dataTransfer);
+        } catch (err) {
+          console.error("Drop scan error", err);
         }
 
         const imageFiles = files.filter((f) => f.type.startsWith("image/"));

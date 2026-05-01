@@ -212,6 +212,10 @@ export type UploadTempImageResponse = {
   tone?: string | null;
 };
 
+export type DownloadTempImageResponse = UploadTempImageResponse & {
+  error?: string;
+};
+
 export async function uploadTempImageBinary(
   file: File,
   canvasName?: string
@@ -238,6 +242,30 @@ export async function uploadTempImageBinary(
     throw new Error(`Request failed with status ${res.status}`);
   }
   return (await res.json()) as UploadTempImageResponse;
+}
+
+export async function downloadTempImageUrl(
+  url: string,
+  canvasName?: string
+): Promise<DownloadTempImageResponse> {
+  const res = await apiFetch("/api/download-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, canvasName }),
+  });
+  if (!res.ok) {
+    let errorMessage = `Request failed with status ${res.status}`;
+    try {
+      const payload = (await res.json()) as DownloadTempImageResponse;
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        errorMessage = payload.error.trim();
+      }
+    } catch {
+      // 保留 HTTP 状态，避免错误响应不是 JSON 时吞掉真正失败。
+    }
+    throw new Error(errorMessage);
+  }
+  return (await res.json()) as DownloadTempImageResponse;
 }
 
 export async function getTempDominantColor(

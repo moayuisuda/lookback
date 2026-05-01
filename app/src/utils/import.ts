@@ -1,12 +1,18 @@
 import { type ImageMeta } from '../store/canvasStore';
-import { uploadTempImageBinary } from '../service';
+import { downloadTempImageUrl, uploadTempImageBinary } from '../service';
 import { globalActions } from '../store/globalStore';
+import { normalizeDroppedImageUrl } from './droppedImageUrl';
 
 const MAX_DROP_SCAN_CONCURRENCY = 16;
 const MAX_UPLOAD_CONCURRENCY = 16;
 
 type ImageImportLogLevel = 'info' | 'warn' | 'error';
 type ImageImportSource = 'drop' | 'paste' | 'drop-url';
+
+type NativePathFile = File & {
+  path?: string;
+  webkitRelativePath?: string;
+};
 
 interface CreateTempMetasOptions {
   canvasName?: string;
@@ -76,6 +82,74 @@ const mapWithConcurrency = async <T, R>(
   return results;
 };
 
+const getNativeFilePath = (file: File): string => {
+  const nativePath = (file as NativePathFile).path;
+  return typeof nativePath === 'string' ? nativePath.trim() : '';
+};
+
+const getDroppedFileKeys = (file: File): string[] => {
+  const keys: string[] = [];
+  const nativePath = getNativeFilePath(file);
+  if (nativePath) {
+    keys.push(`path:${nativePath}`);
+  }
+
+  const relativePath = (file as NativePathFile).webkitRelativePath?.trim();
+  if (relativePath) {
+    keys.push(`relative:${relativePath}:${file.size}:${file.lastModified}`);
+  }
+
+  keys.push(`meta:${file.name}:${file.size}:${file.lastModified}:${file.type}`);
+  return keys;
+};
+
+const mergeDroppedFiles = (...fileLists: File[][]): File[] => {
+  const keyToCanonicalKey = new Map<string, string>();
+  const fileMap = new Map<string, File>();
+
+  fileLists.forEach((files) => {
+    files.forEach((file) => {
+      const keys = getDroppedFileKeys(file);
+      const canonicalKey =
+        keys.find((key) => keyToCanonicalKey.has(key)) ?? keys[0];
+      const existing = fileMap.get(canonicalKey);
+
+      if (!existing) {
+        fileMap.set(canonicalKey, file);
+      } else if (!getNativeFilePath(existing) && getNativeFilePath(file)) {
+        // 批量本地导入时优先保留 Electron 原生路径，后端读取会更稳定。
+        fileMap.set(canonicalKey, file);
+      }
+
+      keys.forEach((key) => {
+        keyToCanonicalKey.set(key, canonicalKey);
+      });
+    });
+  });
+
+  return Array.from(fileMap.values());
+};
+
+const createTempMetaFromUploadedImage = (uploaded: {
+  filename: string;
+  path: string;
+  width: number;
+  height: number;
+  dominantColor?: string | null;
+  tone?: string | null;
+}): ImageMeta => ({
+  id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  filename: uploaded.filename,
+  imagePath: uploaded.path,
+  tags: [],
+  createdAt: Date.now(),
+  dominantColor: uploaded.dominantColor ?? null,
+  tone: uploaded.tone ?? null,
+  hasVector: false,
+  width: uploaded.width,
+  height: uploaded.height,
+});
+
 const uploadTempImage = async (
   file: File,
   canvasName?: string
@@ -108,68 +182,109 @@ const uploadTempImage = async (
   };
 };
 
-export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File[]> => {
-  const items = Array.from(dataTransfer.items);
-
-  const scanEntry = async (entry: FileSystemEntry): Promise<File[]> => {
-    if (entry.isFile) {
-      try {
-        const file = await new Promise<File>((resolve, reject) => {
-          (entry as FileSystemFileEntry).file(resolve, reject);
-        });
-        return [file];
-      } catch (e) {
-        console.error('Failed to read file entry', entry.name, e);
-        logImageImport('error', 'read dropped file entry failed', {
-          entryName: entry.name,
-          error: getErrorMessage(e),
-        });
-        return [];
-      }
-    } else if (entry.isDirectory) {
-      try {
-        const reader = (entry as FileSystemDirectoryEntry).createReader();
-        const readAllEntries = async (): Promise<FileSystemEntry[]> => {
-          const entries: FileSystemEntry[] = [];
-          let batch: FileSystemEntry[] = [];
-          do {
-            batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
-              reader.readEntries(resolve, reject);
-            });
-            entries.push(...batch);
-          } while (batch.length > 0);
-          return entries;
-        };
-        
-        const entries = await readAllEntries();
-        const lists = await mapWithConcurrency(
-          entries,
-          getDropScanConcurrency(entries.length),
-          async (child) => scanEntry(child),
-        );
-        return lists.flat();
-      } catch (e) {
-        console.error('Failed to read directory entry', entry.name, e);
-        logImageImport('error', 'read dropped directory entry failed', {
-          entryName: entry.name,
-          error: getErrorMessage(e),
-        });
-        return [];
-      }
+const scanDroppedEntry = async (entry: FileSystemEntry): Promise<File[]> => {
+  if (entry.isFile) {
+    try {
+      const file = await new Promise<File>((resolve, reject) => {
+        (entry as FileSystemFileEntry).file(resolve, reject);
+      });
+      return [file];
+    } catch (e) {
+      console.error('Failed to read file entry', entry.name, e);
+      logImageImport('error', 'read dropped file entry failed', {
+        entryName: entry.name,
+        error: getErrorMessage(e),
+      });
+      return [];
     }
-    return [];
-  };
+  }
 
-  const entries = items
+  if (entry.isDirectory) {
+    try {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      const entries: FileSystemEntry[] = [];
+      let batch: FileSystemEntry[] = [];
+      do {
+        batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+          reader.readEntries(resolve, reject);
+        });
+        entries.push(...batch);
+      } while (batch.length > 0);
+
+      const lists = await mapWithConcurrency(
+        entries,
+        getDropScanConcurrency(entries.length),
+        async (child) => scanDroppedEntry(child),
+      );
+      return lists.flat();
+    } catch (e) {
+      console.error('Failed to read directory entry', entry.name, e);
+      logImageImport('error', 'read dropped directory entry failed', {
+        entryName: entry.name,
+        error: getErrorMessage(e),
+      });
+      return [];
+    }
+  }
+
+  return [];
+};
+
+export const scanDroppedItems = async (dataTransfer: DataTransfer): Promise<File[]> => {
+  const entries = Array.from(dataTransfer.items)
     .map((item) => item.webkitGetAsEntry())
     .filter((entry): entry is FileSystemEntry => Boolean(entry));
 
   const lists = await mapWithConcurrency(
     entries,
     getDropScanConcurrency(entries.length),
-    async (entry) => scanEntry(entry),
+    async (entry) => scanDroppedEntry(entry),
   );
   return lists.flat();
+};
+
+export const resolveDroppedFiles = async (
+  dataTransfer: DataTransfer,
+): Promise<File[]> => {
+  const scannedFiles = await scanDroppedItems(dataTransfer);
+  const directFiles = Array.from(dataTransfer.files || []);
+  return mergeDroppedFiles(scannedFiles, directFiles);
+};
+
+export const createTempMetaFromImageUrl = async (
+  imageUrl: string,
+  options: Pick<CreateTempMetasOptions, 'canvasName' | 'source'>,
+): Promise<ImageMeta> => {
+  const normalizedUrl = normalizeDroppedImageUrl(imageUrl.trim());
+  const uploaded = await downloadTempImageUrl(normalizedUrl, options.canvasName);
+  if (
+    !uploaded ||
+    !uploaded.success ||
+    typeof uploaded.filename !== 'string' ||
+    typeof uploaded.path !== 'string'
+  ) {
+    throw new Error(uploaded?.error || 'Invalid download response');
+  }
+
+  logImageImport('info', 'canvas url import downloaded', {
+    source: options.source,
+    canvasName: options.canvasName ?? '',
+    url: normalizedUrl,
+    filename: uploaded.filename,
+    imagePath: uploaded.path,
+    ...(uploaded.diskPath ? { diskPath: uploaded.diskPath } : {}),
+    width: uploaded.width || 0,
+    height: uploaded.height || 0,
+  });
+
+  return createTempMetaFromUploadedImage({
+    filename: uploaded.filename,
+    path: uploaded.path,
+    width: uploaded.width || 0,
+    height: uploaded.height || 0,
+    dominantColor: uploaded.dominantColor ?? null,
+    tone: uploaded.tone ?? null,
+  });
 };
 
 export const createTempMetasFromFiles = async (
@@ -205,18 +320,7 @@ export const createTempMetasFromFiles = async (
           });
           return null;
         }
-        const meta: ImageMeta = {
-          id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          filename: uploaded.filename,
-          imagePath: uploaded.path,
-          tags: [],
-          createdAt: Date.now(),
-          dominantColor: uploaded.dominantColor ?? null,
-          tone: uploaded.tone ?? null,
-          hasVector: false,
-          width: uploaded.width,
-          height: uploaded.height,
-        };
+        const meta = createTempMetaFromUploadedImage(uploaded);
         globalActions.tickUploadProgress({ completed: 1 });
         return meta;
       } catch (e) {
