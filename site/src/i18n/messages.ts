@@ -46,6 +46,9 @@ export const zh = {
   'feature.6.title': '穿透模式与置顶模式',
   'feature.6.desc': '在不同场景间自由切换窗口行为，保证工具始终在你需要的位置。',
   'feature.6.shortcut.0': '穿透模式切换：Cmd/Ctrl + T（可在应用设置中修改）',
+  'feature.7.title': '可折叠编组',
+  'feature.7.desc': '快速编组整理，一键折叠收纳。',
+  'feature.7.shortcut.0': '编组：Cmd/Ctrl + Shift + G',
 
   'download.badge': '下载指引',
   'download.title': '3 步完成安装，立即开始使用',
@@ -138,6 +141,9 @@ export const en = {
   'feature.6.title': 'Pass-Through and Always-on-Top Modes',
   'feature.6.desc': 'Switch window behavior by context so your tool stays exactly where your attention needs it.',
   'feature.6.shortcut.0': 'Toggle pass-through mode: Cmd/Ctrl + T (customizable in app settings)',
+  'feature.7.title': 'Collapsible Groups',
+  'feature.7.desc': 'Group references quickly, then fold them away with one action.',
+  'feature.7.shortcut.0': 'Group: Cmd/Ctrl + Shift + G',
 
   'download.badge': 'Download Guide',
   'download.title': 'Install in 3 steps and start now',
