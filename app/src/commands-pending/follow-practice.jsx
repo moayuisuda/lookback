@@ -35,12 +35,15 @@ export const config = {
       "command.followPractice.clearMessage": "Are you sure you want to clear all todos? This action cannot be undone.",
       "command.followPractice.login": "Login",
       "command.followPractice.follow": "Practice",
+      "command.followPractice.loading": "Loading",
       "command.followPractice.checkIn": "Check in",
       "command.followPractice.cancelCheckIn": "Cancel check-in",
       "command.followPractice.done": "Done",
       "command.followPractice.pending": "Todo",
       "command.followPractice.images": "{{count}} images",
       "command.followPractice.empty": "No todos",
+      "command.followPractice.empty.hint": "First fetch or expired login requires signing in again in the popup window",
+      "command.followPractice.empty.respect": "Please respect the target account's profile preferences",
       "command.followPractice.status.ready": "Ready",
       "command.followPractice.status.preparing": "Preparing environment...",
       "command.followPractice.status.refreshing": "Refreshing...",
@@ -71,12 +74,15 @@ export const config = {
       "command.followPractice.clearMessage": "确定要清空全部待办吗？此操作无法撤销。",
       "command.followPractice.login": "登录",
       "command.followPractice.follow": "跟练",
+      "command.followPractice.loading": "加载中",
       "command.followPractice.checkIn": "打卡",
       "command.followPractice.cancelCheckIn": "取消打卡",
       "command.followPractice.done": "已打卡",
       "command.followPractice.pending": "待办",
       "command.followPractice.images": "{{count}} 张图",
       "command.followPractice.empty": "暂无待办",
+      "command.followPractice.empty.hint": "第一次拉取/登录过期 需要重新在弹出窗口登录",
+      "command.followPractice.empty.respect": "请尊重目标账号简介中的意愿",
       "command.followPractice.status.ready": "就绪",
       "command.followPractice.status.preparing": "正在准备环境...",
       "command.followPractice.status.refreshing": "正在刷新...",
@@ -352,6 +358,21 @@ const PROFILE_SCROLL_IDLE_ROUNDS = ${PROFILE_SCROLL_IDLE_ROUNDS};
 const PROFILE_SCROLL_WAIT_MS = ${PROFILE_SCROLL_WAIT_MS};
 const PROFILE_SCROLL_INITIAL_WAIT_MS = ${PROFILE_SCROLL_INITIAL_WAIT_MS};
 const PROFILE_SCROLL_MAX_CARDS = ${PROFILE_SCROLL_MAX_CARDS};
+const RISK_BASE_ACTION_DELAY_MS = 1000;
+const RISK_MAX_RETRIES = 3;
+const RISK_COOLDOWN_STEPS_MS = [5000, 10000, 20000, 30000];
+const CHROME_MAJOR_VERSION = "145";
+const FINGERPRINT_FILE_NAME = "xhs-browser-fingerprint.json";
+const MACOS_CHROME_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" +
+  CHROME_MAJOR_VERSION +
+  ".0.0.0 Safari/537.36";
+const SEC_CH_UA =
+  '"Not:A-Brand";v="99", "Google Chrome";v="' +
+  CHROME_MAJOR_VERSION +
+  '", "Chromium";v="' +
+  CHROME_MAJOR_VERSION +
+  '"';
 
 const decodePayload = () => {
   const encoded = process.argv[process.argv.length - 1] || "";
@@ -359,6 +380,240 @@ const decodePayload = () => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const pickOne = (items) => items[Math.floor(Math.random() * items.length)];
+
+const buildSecChUa = (chromeMajorVersion) =>
+  '"Not:A-Brand";v="99", "Google Chrome";v="' +
+  chromeMajorVersion +
+  '", "Chromium";v="' +
+  chromeMajorVersion +
+  '"';
+
+const buildUserAgent = (chromeMajorVersion) =>
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" +
+  chromeMajorVersion +
+  ".0.0.0 Safari/537.36";
+
+const normalizeFingerprint = (value) => {
+  const raw = value && typeof value === "object" ? value : {};
+  const screen = raw.screen && typeof raw.screen === "object" ? raw.screen : {};
+  const gpu = raw.gpu && typeof raw.gpu === "object" ? raw.gpu : {};
+  const chromeMajorVersion = String(raw.chromeMajorVersion || CHROME_MAJOR_VERSION);
+  return {
+    version: 1,
+    chromeMajorVersion,
+    userAgent: String(raw.userAgent || buildUserAgent(chromeMajorVersion)),
+    secChUa: String(raw.secChUa || buildSecChUa(chromeMajorVersion)),
+    platform: "MacIntel",
+    languages: Array.isArray(raw.languages) && raw.languages.length
+      ? raw.languages.map(String)
+      : ["zh-CN", "zh", "en-US", "en"],
+    hardwareConcurrency: Number(raw.hardwareConcurrency) || 8,
+    deviceMemory: Number(raw.deviceMemory) || 8,
+    devicePixelRatio: Number(raw.devicePixelRatio) || 2,
+    screen: {
+      width: Number(screen.width) || 1440,
+      height: Number(screen.height) || 900,
+      availWidth: Number(screen.availWidth) || Number(screen.width) || 1440,
+      availHeight: Number(screen.availHeight) || Math.max((Number(screen.height) || 900) - 25, 1),
+      colorDepth: Number(screen.colorDepth) || 30,
+      pixelDepth: Number(screen.pixelDepth) || Number(screen.colorDepth) || 30,
+    },
+    gpu: {
+      vendor: String(gpu.vendor || "Intel Inc."),
+      renderer: String(gpu.renderer || "Intel Iris OpenGL Engine"),
+    },
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+  };
+};
+
+const createFingerprint = () => {
+  const screen = pickOne([
+    { width: 1440, height: 900, availWidth: 1440, availHeight: 875, colorDepth: 30, pixelDepth: 30 },
+    { width: 1512, height: 982, availWidth: 1512, availHeight: 956, colorDepth: 30, pixelDepth: 30 },
+    { width: 1728, height: 1117, availWidth: 1728, availHeight: 1092, colorDepth: 30, pixelDepth: 30 },
+    { width: 1920, height: 1080, availWidth: 1920, availHeight: 1055, colorDepth: 24, pixelDepth: 24 },
+  ]);
+  const gpu = pickOne([
+    { vendor: "Intel Inc.", renderer: "Intel Iris OpenGL Engine" },
+    { vendor: "Apple Inc.", renderer: "Apple M1" },
+    { vendor: "Apple Inc.", renderer: "Apple M2" },
+    { vendor: "Apple Inc.", renderer: "Apple M3" },
+  ]);
+  return normalizeFingerprint({
+    screen,
+    gpu,
+    hardwareConcurrency: pickOne([8, 10, 12]),
+    deviceMemory: pickOne([8, 16]),
+    devicePixelRatio: 2,
+  });
+};
+
+const getFingerprintPath = (userDataDir) =>
+  path.join(path.dirname(String(userDataDir || "")), FINGERPRINT_FILE_NAME);
+
+const readJsonFile = (filePath) => {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const writeJsonFileAtomic = (filePath, data) => {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tempPath =
+    filePath +
+    ".tmp-" +
+    process.pid +
+    "-" +
+    Date.now() +
+    "-" +
+    Math.random().toString(16).slice(2);
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), "utf8");
+  fs.renameSync(tempPath, filePath);
+};
+
+const withRuntimeFileLock = async (targetPath, callback) => {
+  const lockDir = targetPath + ".lock";
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      fs.mkdirSync(lockDir);
+      break;
+    } catch (error) {
+      if (Date.now() - startedAt > 10000) {
+        throw error;
+      }
+      await sleep(80 + Math.round(Math.random() * 120));
+    }
+  }
+  try {
+    return await callback();
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+};
+
+const loadPersistentFingerprint = async (userDataDir) => {
+  const fingerprintPath = getFingerprintPath(userDataDir);
+  return withRuntimeFileLock(fingerprintPath, async () => {
+    const existing = readJsonFile(fingerprintPath);
+    if (existing) {
+      const fingerprint = normalizeFingerprint(existing);
+      pushDebug("fingerprint-load", { note: "runtime", path: fingerprintPath });
+      return fingerprint;
+    }
+    const fingerprint = createFingerprint();
+    writeJsonFileAtomic(fingerprintPath, fingerprint);
+    pushDebug("fingerprint-create", { note: "runtime", path: fingerprintPath });
+    return fingerprint;
+  });
+};
+
+const antiRiskState = {
+  actionDelayMs: RISK_BASE_ACTION_DELAY_MS,
+  baseActionDelayMs: RISK_BASE_ACTION_DELAY_MS,
+  lastActionAt: 0,
+  verifyCount: 0,
+  actionCount: 0,
+};
+
+const randomBetween = (min, max) => min + Math.random() * (max - min);
+
+const gaussianRandom = (mean = 0, stdDev = 1) => {
+  const u1 = Math.max(Number.EPSILON, Math.random());
+  const u2 = Math.max(Number.EPSILON, Math.random());
+  const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  return z0 * stdDev + mean;
+};
+
+const getHumanJitterMs = () => {
+  let jitter = Math.max(0, gaussianRandom(300, 150));
+  if (Math.random() < 0.05) {
+    jitter += randomBetween(2000, 5000);
+  }
+  return Math.round(jitter);
+};
+
+const humanDelay = async (reason = "action", minimumMs = antiRiskState.actionDelayMs) => {
+  const elapsed = Date.now() - antiRiskState.lastActionAt;
+  const baseWait = Math.max(0, minimumMs - elapsed);
+  const waitMs = Math.round(baseWait + getHumanJitterMs());
+  if (waitMs > 0) {
+    pushDebug("anti-risk-delay", { note: reason, waitMs });
+    await sleep(waitMs);
+  }
+};
+
+const markHumanAction = () => {
+  antiRiskState.lastActionAt = Date.now();
+  antiRiskState.actionCount += 1;
+};
+
+const isRetryableBrowserError = (error) => {
+  const message = toErrorMessage(error);
+  return (
+    isTransientPageError(error) ||
+    message.includes("Timeout") ||
+    message.includes("net::") ||
+    message.includes("Navigation failed") ||
+    message.includes("Target closed") ||
+    /^HTTP (429|500|502|503|504)\b/.test(message)
+  );
+};
+
+const backoffDelay = async (attempt, reason) => {
+  const waitMs = Math.round(1000 * 2 ** (attempt - 1) + randomBetween(0, 1000));
+  pushDebug("anti-risk-retry", { note: reason, attempt, waitMs });
+  await sleep(waitMs);
+};
+
+const coolDownForRisk = async (reason = "risk-detected") => {
+  antiRiskState.verifyCount += 1;
+  antiRiskState.actionDelayMs = Math.max(
+    antiRiskState.actionDelayMs,
+    antiRiskState.baseActionDelayMs * 2,
+  );
+  const index = Math.min(antiRiskState.verifyCount - 1, RISK_COOLDOWN_STEPS_MS.length - 1);
+  const waitMs = RISK_COOLDOWN_STEPS_MS[index];
+  pushDebug("anti-risk-cooldown", {
+    note: reason,
+    verifyCount: antiRiskState.verifyCount,
+    waitMs,
+    actionDelayMs: antiRiskState.actionDelayMs,
+  });
+  await sleep(waitMs);
+};
+
+const resetRiskCooldown = () => {
+  antiRiskState.verifyCount = 0;
+};
+
+const navigateWithRetry = async (page, url, options, label = "navigate") => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= RISK_MAX_RETRIES; attempt += 1) {
+    try {
+      await humanDelay(label);
+      const response = await page.goto(url, options);
+      markHumanAction();
+      if (response && [429, 500, 502, 503, 504].includes(response.status())) {
+        throw new Error("HTTP " + response.status() + " during " + label);
+      }
+      resetRiskCooldown();
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableBrowserError(error) || attempt >= RISK_MAX_RETRIES) {
+        throw error;
+      }
+      await backoffDelay(attempt, label);
+    }
+  }
+  throw lastError || new Error(label + " failed");
+};
 
 const debugEvents = [];
 const pushDebug = (stage, extra = {}) => {
@@ -380,9 +635,17 @@ const getDebugSummary = () =>
     .map((item) => {
       const note = item.note ? ":" + item.note : "";
       const urlPath = item.path ? " path=" + item.path : "";
+      const url = item.url ? " url=" + item.url : "";
       const login = typeof item.loginRequired === "boolean" ? " loginRequired=" + item.loginRequired : "";
       const cookies = item.authCookies ? " authCookies=" + item.authCookies : "";
-      return String(item.ts || "") + " " + String(item.stage || "") + note + urlPath + login + cookies;
+      const counts = [
+        typeof item.slideCount === "number" ? "slides=" + item.slideCount : "",
+        typeof item.imageCount === "number" ? "images=" + item.imageCount : "",
+        typeof item.rawCount === "number" ? "raw=" + item.rawCount : "",
+        typeof item.keptCount === "number" ? "kept=" + item.keptCount : "",
+        typeof item.added === "number" ? "added=" + item.added : "",
+      ].filter(Boolean).join(" ");
+      return String(item.ts || "") + " " + String(item.stage || "") + note + urlPath + url + login + cookies + (counts ? " " + counts : "");
     })
     .join(" | ");
 
@@ -706,7 +969,7 @@ const scrollToBottom = async (page, payload) => {
     }
     window.scrollTo(0, 0);
   }, "scroll-to-top-reset");
-  await sleep(PROFILE_SCROLL_INITIAL_WAIT_MS);
+  await humanDelay("profile-scroll-start", PROFILE_SCROLL_INITIAL_WAIT_MS);
 
   // snapshot DOM anchor stats before starting scroll
   const anchorStats = await evaluateWithRetry(page, () => {
@@ -759,6 +1022,7 @@ const scrollToBottom = async (page, payload) => {
         scrollY: root ? root.scrollTop : window.scrollY,
       };
     }, "scroll-to-bottom-step");
+    markHumanAction();
 
     pushDebug("scroll-step", {
       step: i,
@@ -790,7 +1054,7 @@ const scrollToBottom = async (page, payload) => {
     }
     
     if (stableCount >= PROFILE_SCROLL_IDLE_ROUNDS) break;
-    await sleep(PROFILE_SCROLL_WAIT_MS);
+    await humanDelay("profile-scroll-step", PROFILE_SCROLL_WAIT_MS);
   }
   await appendVisibleProfileCards(page);
 };
@@ -956,12 +1220,12 @@ const waitForInteractiveLogin = async (context, page, profileUrl, mode, returnUr
   if (!resolved) {
     throw new Error("Login timeout - please complete verification in the browser window");
   }
-  await page.goto(returnUrl, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => null);
-  await sleep(2000);
+  await navigateWithRetry(page, returnUrl, { waitUntil: "domcontentloaded", timeout: 45000 }, "login-return").catch(() => null);
+  await humanDelay("login-return-settle", 2000);
 };
 
-const applyStealth = async (context) => {
-  await context.addInitScript(() => {
+const applyStealth = async (context, fingerprint) => {
+  await context.addInitScript((identity) => {
     const defineGetter = (obj, key, value) => {
       try {
         Object.defineProperty(obj, key, {
@@ -972,15 +1236,25 @@ const applyStealth = async (context) => {
     };
 
     defineGetter(Navigator.prototype, "webdriver", undefined);
-    defineGetter(Navigator.prototype, "languages", ["zh-CN", "zh", "en-US", "en"]);
-    defineGetter(Navigator.prototype, "platform", "MacIntel");
-    defineGetter(Navigator.prototype, "hardwareConcurrency", 8);
-    defineGetter(Navigator.prototype, "deviceMemory", 8);
+    defineGetter(Navigator.prototype, "languages", identity.languages);
+    defineGetter(Navigator.prototype, "platform", identity.platform);
+    defineGetter(Navigator.prototype, "hardwareConcurrency", identity.hardwareConcurrency);
+    defineGetter(Navigator.prototype, "deviceMemory", identity.deviceMemory);
     defineGetter(Navigator.prototype, "plugins", [
       { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
       { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
       { name: "Native Client", filename: "internal-nacl-plugin" },
     ]);
+    defineGetter(window, "devicePixelRatio", identity.devicePixelRatio);
+
+    try {
+      defineGetter(Screen.prototype, "width", identity.screen.width);
+      defineGetter(Screen.prototype, "height", identity.screen.height);
+      defineGetter(Screen.prototype, "availWidth", identity.screen.availWidth);
+      defineGetter(Screen.prototype, "availHeight", identity.screen.availHeight);
+      defineGetter(Screen.prototype, "colorDepth", identity.screen.colorDepth);
+      defineGetter(Screen.prototype, "pixelDepth", identity.screen.pixelDepth);
+    } catch {}
 
     try {
       if (!window.chrome) {
@@ -1007,8 +1281,8 @@ const applyStealth = async (context) => {
     try {
       const getParameter = WebGLRenderingContext.prototype.getParameter;
       WebGLRenderingContext.prototype.getParameter = function (param) {
-        if (param === 37445) return "Intel Inc.";
-        if (param === 37446) return "Intel Iris OpenGL Engine";
+        if (param === 37445) return identity.gpu.vendor;
+        if (param === 37446) return identity.gpu.renderer;
         return getParameter.call(this, param);
       };
     } catch {}
@@ -1016,8 +1290,8 @@ const applyStealth = async (context) => {
     try {
       const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
       WebGL2RenderingContext.prototype.getParameter = function (param) {
-        if (param === 37445) return "Intel Inc.";
-        if (param === 37446) return "Intel Iris OpenGL Engine";
+        if (param === 37445) return identity.gpu.vendor;
+        if (param === 37446) return identity.gpu.renderer;
         return getParameter2.call(this, param);
       };
     } catch {}
@@ -1026,7 +1300,7 @@ const applyStealth = async (context) => {
       defineGetter(window, "__playwright__binding__", undefined);
       defineGetter(window, "__pwInitScripts", undefined);
     } catch {}
-  });
+  }, fingerprint);
 };
 
 const collectProfileCards = async (page) =>
@@ -1066,6 +1340,53 @@ const collectDetailImages = async (page) => {
   const seenUrl = new Set();
   const seenSlideIndexes = new Set();
   let stableRounds = 0;
+  const initialStats = await evaluateWithRetry(page, () => {
+    const normalizeUrl = (value) =>
+      String(value || "")
+        .replace(/\\u002F/g, "/")
+        .replace(/\\\//g, "/")
+        .trim();
+    const images = Array.from(document.querySelectorAll("img"));
+    const sources = Array.from(document.querySelectorAll("source[srcset]"));
+    const backgroundNodes = Array.from(document.querySelectorAll("[style*='background']"));
+    const imageSamples = images
+      .map((image) =>
+        normalizeUrl(
+          image.currentSrc ||
+            image.src ||
+            image.getAttribute("src") ||
+            image.getAttribute("data-src") ||
+            image.getAttribute("data-original") ||
+            image.getAttribute("data-lazy-src") ||
+            image.getAttribute("srcset"),
+        ),
+      )
+      .filter(Boolean)
+      .slice(0, 5);
+    const sourceSamples = sources
+      .map((source) => normalizeUrl(source.getAttribute("srcset")))
+      .filter(Boolean)
+      .slice(0, 3);
+    const backgroundSamples = backgroundNodes
+      .map((node) => String(node.getAttribute("style") || "").match(/url\((['"]?)(.*?)\1\)/)?.[2] || "")
+      .map(normalizeUrl)
+      .filter(Boolean)
+      .slice(0, 3);
+    return {
+      url: location.href,
+      path: location.pathname,
+      title: String(document.title || "").slice(0, 80),
+      slideCount: document.querySelectorAll("[data-swiper-slide-index]").length,
+      imageCount: images.length,
+      sourceCount: sources.length,
+      backgroundCount: backgroundNodes.length,
+      imageSamples,
+      sourceSamples,
+      backgroundSamples,
+    };
+  }, "detail-image-initial-stats");
+  pushDebug("detail-image-dom", initialStats);
+
   for (let i = 0; i < DEFAULT_IMAGE_SCAN_STEP; i += 1) {
     const batch = await evaluateWithRetry(page, () => {
       const slides = Array.from(document.querySelectorAll("[data-swiper-slide-index]"));
@@ -1075,7 +1396,16 @@ const collectDetailImages = async (page) => {
         if (!slideIndex) continue;
         const images = Array.from(slide.querySelectorAll("img"));
         const urls = images
-          .map((image) => image.currentSrc || image.src || image.getAttribute("src") || "")
+          .map((image) =>
+            image.currentSrc ||
+            image.src ||
+            image.getAttribute("src") ||
+            image.getAttribute("data-src") ||
+            image.getAttribute("data-original") ||
+            image.getAttribute("data-lazy-src") ||
+            image.getAttribute("srcset") ||
+            "",
+          )
           .filter(Boolean);
         if (urls.length > 0) {
           rows.push({ slideIndex, urls });
@@ -1104,6 +1434,13 @@ const collectDetailImages = async (page) => {
     } else {
       stableRounds = 0;
     }
+    pushDebug("detail-image-scan", {
+      step: i,
+      batchCount: batch.length,
+      added,
+      rawCount: urls.length,
+      stableRounds,
+    });
     if (stableRounds >= DETAIL_IMAGE_STABLE_ROUNDS && urls.length > 0) {
       break;
     }
@@ -1111,7 +1448,17 @@ const collectDetailImages = async (page) => {
     await page.keyboard.press("ArrowRight").catch(() => null);
     await sleep(80);
   }
-  return unique(urls).filter(shouldKeepImage);
+  const uniqueUrls = unique(urls);
+  const keptUrls = uniqueUrls.filter(shouldKeepImage);
+  pushDebug("detail-image-result", {
+    url: page.url(),
+    rawCount: uniqueUrls.length,
+    keptCount: keptUrls.length,
+    rejectedCount: uniqueUrls.length - keptUrls.length,
+    rawSamples: uniqueUrls.slice(0, 5),
+    keptSamples: keptUrls.slice(0, 5),
+  });
+  return keptUrls;
 };
 
 const findAndClickProfileCard = async (page, title) => {
@@ -1182,20 +1529,29 @@ const collectNoteDetail = async (
     // Only use goto when the URL contains the token, otherwise fall back to click.
     const hasToken = /[?&]xsec_token=/i.test(directUrl);
     if (/^https?:\/\//i.test(directUrl) && hasToken) {
-      await page.goto(directUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
-      await sleep(300);
+      await navigateWithRetry(page, directUrl, { waitUntil: "domcontentloaded", timeout: 15000 }, "detail-direct");
+      await humanDelay("detail-direct-settle", 300);
     } else {
       if (!page.url().includes(profileUrl.replace(/^https?:\/\/[^/]+/, ""))) {
-        await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await navigateWithRetry(page, profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 }, "detail-profile-return");
       }
+      await humanDelay("detail-card-before-click", 500);
       const clicked = await findAndClickProfileCard(page, card.title);
       if (!clicked) {
         throw new Error("Note card not found: " + card.title);
       }
-      await sleep(400);
+      markHumanAction();
+      await humanDelay("detail-card-open-settle", 400);
     }
+    pushDebug("detail-opened", {
+      note: String(card.noteId || card.title || ""),
+      url: page.url(),
+      path: await getPagePath(page),
+      hasToken,
+    });
     const accessIssue = await getAccessIssue(page);
     if (accessIssue?.kind === "risk") {
+      await coolDownForRisk("detail-access-risk");
       throw new Error(accessIssue.message || "Access blocked");
     }
     if (await detectLoginRequired(page)) {
@@ -1248,12 +1604,18 @@ const collectNoteDetail = async (
     const images = await collectDetailImages(page);
     const detailUrl = page.url();
     const noteId = getNoteIdFromUrl(detailUrl) || card.noteId;
+    pushDebug("detail-collected", {
+      note: String(noteId || card.noteId || card.title || ""),
+      url: detailUrl,
+      imageCount: images.length,
+      title: String(detail.title || card.title || "").slice(0, 80),
+    });
     if (!/^https?:\/\//i.test(directUrl)) {
       await page.keyboard.press("Escape").catch(() => null);
       if (page.url() !== profileUrl) {
-        await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => null);
+        await navigateWithRetry(page, profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 }, "detail-close-return").catch(() => null);
       }
-      await sleep(200);
+      await humanDelay("detail-close-settle", 200);
     }
     return {
       ...card,
@@ -1285,6 +1647,7 @@ const matchesKeywords = (note, keywords) => {
       userDataDir: String(payload.userDataDir || ""),
       headless: useHeadless,
     });
+    const fingerprint = await loadPersistentFingerprint(payload.userDataDir);
     const buildContextOptions = (headless) => ({
       headless,
       args: [
@@ -1292,12 +1655,18 @@ const matchesKeywords = (note, keywords) => {
         "--disable-dev-shm-usage",
         "--no-sandbox",
         "--lang=zh-CN,zh",
-        "--window-size=1440,900",
+        "--window-size=" + fingerprint.screen.width + "," + fingerprint.screen.height,
       ],
       locale: "zh-CN",
-      viewport: { width: 1440, height: 900 },
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+      viewport: { width: fingerprint.screen.width, height: fingerprint.screen.height },
+      userAgent: fingerprint.userAgent,
+      extraHTTPHeaders: {
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        dnt: "1",
+        "sec-ch-ua": fingerprint.secChUa,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+      },
     });
     let contextHeadless = useHeadless;
     let page = null;
@@ -1305,9 +1674,9 @@ const matchesKeywords = (note, keywords) => {
     const openSession = async (headless, url) => {
       context = await launchContextWithFallback(payload.userDataDir, buildContextOptions(headless));
       contextHeadless = headless;
-      await applyStealth(context);
+      await applyStealth(context, fingerprint);
       page = await context.newPage();
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await navigateWithRetry(page, url, { waitUntil: "domcontentloaded", timeout: 45000 }, "open-session");
       return { context, page };
     };
 
@@ -1363,10 +1732,11 @@ const matchesKeywords = (note, keywords) => {
       return;
     }
 
-    await sleep(2500);
+    await humanDelay("open-session-settle", 2500);
     // 如果落在登录/验证码页，等待用户手动完成，而不是立刻报错关窗
     const accessIssueAfterOpen = await getAccessIssue(page);
     if (accessIssueAfterOpen?.kind === "risk") {
+      await coolDownForRisk("open-access-risk");
       throw new Error(accessIssueAfterOpen.message || "Access blocked");
     }
     const loginRequiredAfterOpen = await detectLoginRequired(page);
@@ -1382,8 +1752,8 @@ const matchesKeywords = (note, keywords) => {
         throw new Error("Login timeout — please login in the browser window");
       }
       // 登录完成后跳回主页
-      await page.goto(payload.profileUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-      await sleep(2000);
+      await navigateWithRetry(page, payload.profileUrl, { waitUntil: "domcontentloaded", timeout: 45000 }, "post-login-profile");
+      await humanDelay("post-login-settle", 2000);
     }
 
     // detail 模式有直链，直接跳转，不需要滚动列表
@@ -1405,6 +1775,7 @@ const matchesKeywords = (note, keywords) => {
     let cards = await collectProfileCards(page);
     const accessIssueAfterCards = await getAccessIssue(page);
     if (accessIssueAfterCards?.kind === "risk") {
+      await coolDownForRisk("cards-access-risk");
       throw new Error(accessIssueAfterCards.message || "Access blocked");
     }
     let loginRequiredAfterCards = await detectLoginRequired(page);
@@ -1419,6 +1790,7 @@ const matchesKeywords = (note, keywords) => {
       cards = await collectProfileCards(page);
       const accessIssueAfterRetry = await getAccessIssue(page);
       if (accessIssueAfterRetry?.kind === "risk") {
+        await coolDownForRisk("cards-retry-access-risk");
         throw new Error(accessIssueAfterRetry.message || "Access blocked");
       }
       loginRequiredAfterCards = await detectLoginRequired(page);
@@ -1454,6 +1826,7 @@ const matchesKeywords = (note, keywords) => {
       const todosWithImages = [];
       for (const todo of todos) {
         try {
+          await humanDelay("detail-batch-next", antiRiskState.actionDelayMs);
           const detail = await collectNoteDetail(
             context,
             page,
@@ -1503,6 +1876,7 @@ const collectDebugTrace = (output) => {
       const parts = [stage];
       if (item.note) parts.push(`note=${item.note}`);
       if (item.path) parts.push(`path=${item.path}`);
+      if (item.url) parts.push(`url=${String(item.url).slice(0, 160)}`);
       if (typeof item.loginRequired === "boolean") parts.push(`loginRequired=${item.loginRequired}`);
       if (item.authCookies) parts.push(`authCookies=${item.authCookies}`);
       // scroll-step fields
@@ -1511,6 +1885,15 @@ const collectDebugTrace = (output) => {
       if (typeof item.height === "number") parts.push(`height=${item.height}`);
       if (typeof item.scrollY === "number") parts.push(`scrollY=${item.scrollY}`);
       if (typeof item.stableCount === "number") parts.push(`stable=${item.stableCount}`);
+      if (typeof item.slideCount === "number") parts.push(`slides=${item.slideCount}`);
+      if (typeof item.imageCount === "number") parts.push(`images=${item.imageCount}`);
+      if (typeof item.sourceCount === "number") parts.push(`sources=${item.sourceCount}`);
+      if (typeof item.backgroundCount === "number") parts.push(`backgrounds=${item.backgroundCount}`);
+      if (typeof item.batchCount === "number") parts.push(`batch=${item.batchCount}`);
+      if (typeof item.added === "number") parts.push(`added=${item.added}`);
+      if (typeof item.rawCount === "number") parts.push(`raw=${item.rawCount}`);
+      if (typeof item.keptCount === "number") parts.push(`kept=${item.keptCount}`);
+      if (typeof item.rejectedCount === "number") parts.push(`rejected=${item.rejectedCount}`);
       // anchor-stats fields
       if (typeof item.totalAnchors === "number") parts.push(`totalAnchors=${item.totalAnchors}`);
       if (typeof item.exploreLike === "number") parts.push(`exploreLike=${item.exploreLike}`);
@@ -1519,6 +1902,11 @@ const collectDebugTrace = (output) => {
       if (item.scrollHeight) parts.push(`scrollHeight=${item.scrollHeight}`);
       if (Array.isArray(item.sampleHrefs)) parts.push(`samples=[${item.sampleHrefs.slice(0, 3).join(",")}]`);
       if (Array.isArray(item.exploreHrefs)) parts.push(`exploreHrefs=[${item.exploreHrefs.join(",")}]`);
+      if (Array.isArray(item.imageSamples)) parts.push(`imageSamples=[${item.imageSamples.slice(0, 3).join(",")}]`);
+      if (Array.isArray(item.sourceSamples)) parts.push(`sourceSamples=[${item.sourceSamples.slice(0, 2).join(",")}]`);
+      if (Array.isArray(item.backgroundSamples)) parts.push(`backgroundSamples=[${item.backgroundSamples.slice(0, 2).join(",")}]`);
+      if (Array.isArray(item.rawSamples)) parts.push(`rawSamples=[${item.rawSamples.slice(0, 3).join(",")}]`);
+      if (Array.isArray(item.keptSamples)) parts.push(`keptSamples=[${item.keptSamples.slice(0, 3).join(",")}]`);
       return parts.join(" ");
     });
   return entries.join(" | ");
@@ -1622,6 +2010,25 @@ const getTodoTextKey = (value) =>
 
 const getTodoTitleKey = (todo) => getTodoTextKey(todo?.title || todo?.noteId);
 
+const mergeTodoRecord = (previous, scraped, now) => {
+  const imageUrls = Array.isArray(scraped?.imageUrls) ? scraped.imageUrls.filter(Boolean) : [];
+  const previousImages = Array.isArray(previous?.imageUrls) ? previous.imageUrls.filter(Boolean) : [];
+  return normalizeTodo({
+    ...previous,
+    noteId: String(scraped?.noteId || previous?.noteId || ""),
+    url: String(scraped?.url || previous?.url || ""),
+    title: String(scraped?.title || previous?.title || ""),
+    desc: String(scraped?.desc || previous?.desc || ""),
+    coverUrl: String(scraped?.coverUrl || previous?.coverUrl || imageUrls[0] || previousImages[0] || ""),
+    imageUrls: imageUrls.length > 0 ? unique([...previousImages, ...imageUrls]) : previousImages,
+    status: previous?.status || "pending",
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+    checkedAt: previous?.checkedAt || 0,
+    followedAt: previous?.followedAt || 0,
+  });
+};
+
 const mergeTodos = (currentTodos, scrapedTodos) => {
   const currentById = new Map();
   const currentByTitle = new Map();
@@ -1633,45 +2040,42 @@ const mergeTodos = (currentTodos, scrapedTodos) => {
   }
 
   const next = [];
-  const nextIds = new Set();
-  const nextTitles = new Set();
+  const nextById = new Map();
+  const nextByTitle = new Map();
   const now = Date.now();
+  const indexTodo = (todo, index) => {
+    const noteId = String(todo?.noteId || "").trim();
+    const titleKey = getTodoTitleKey(todo);
+    if (noteId) nextById.set(noteId, index);
+    if (titleKey) nextByTitle.set(titleKey, index);
+  };
+
   for (const scraped of scrapedTodos) {
     const noteId = String(scraped?.noteId || "").trim();
     if (!noteId) continue;
     const titleKey = getTodoTitleKey(scraped);
-    const dedupeKey = titleKey || getTodoTextKey(noteId);
-    if (dedupeKey && nextTitles.has(dedupeKey)) continue;
+    const existingIndex =
+      (noteId && nextById.has(noteId) ? nextById.get(noteId) : undefined) ??
+      (titleKey && nextByTitle.has(titleKey) ? nextByTitle.get(titleKey) : undefined);
+    if (typeof existingIndex === "number") {
+      next[existingIndex] = mergeTodoRecord(next[existingIndex], scraped, now);
+      indexTodo(next[existingIndex], existingIndex);
+      continue;
+    }
+
     const previous = currentById.get(noteId) || currentByTitle.get(titleKey);
-    const imageUrls = Array.isArray(scraped.imageUrls) ? scraped.imageUrls.filter(Boolean) : [];
-    next.push(
-      normalizeTodo({
-        ...previous,
-        noteId,
-        url: String(scraped.url || previous?.url || ""),
-        title: String(scraped.title || previous?.title || ""),
-        desc: String(scraped.desc || previous?.desc || ""),
-        coverUrl: String(scraped.coverUrl || previous?.coverUrl || imageUrls[0] || ""),
-        imageUrls: imageUrls.length > 0 ? imageUrls : previous?.imageUrls || [],
-        status: previous?.status || "pending",
-        createdAt: previous?.createdAt || now,
-        updatedAt: now,
-        checkedAt: previous?.checkedAt || 0,
-        followedAt: previous?.followedAt || 0,
-      }),
-    );
-    nextIds.add(noteId);
-    if (dedupeKey) nextTitles.add(dedupeKey);
+    const merged = mergeTodoRecord(previous, scraped, now);
+    next.push(merged);
+    indexTodo(merged, next.length - 1);
   }
 
   for (const todo of currentTodos) {
     const noteId = String(todo?.noteId || "").trim();
     const titleKey = getTodoTitleKey(todo);
-    if (noteId && nextIds.has(noteId)) continue;
-    if (titleKey && nextTitles.has(titleKey)) continue;
+    if (noteId && nextById.has(noteId)) continue;
+    if (titleKey && nextByTitle.has(titleKey)) continue;
     next.push(todo);
-    if (noteId) nextIds.add(noteId);
-    if (titleKey) nextTitles.add(titleKey);
+    indexTodo(todo, next.length - 1);
   }
   return next;
 };
@@ -1721,10 +2125,10 @@ const scrapeTodoDetail = async (shell, runtimeDir, userId, todo, headless) => {
   if (!result.success) {
     throw new Error(withShellDebug(result.error || result.stderr || "Scrape failed", result));
   }
-  const { todos: detailTodos } = parseScrapeResult(result.stdout);
+  const { todos: detailTodos, debugTrace } = parseScrapeResult(result.stdout);
   const [detail] = detailTodos;
   if (!detail) throw new Error("No note detail");
-  return detail;
+  return { ...detail, __debugTrace: debugTrace };
 };
 
 const openLoginWindow = async (shell, runtimeDir, userId) => {
@@ -2005,6 +2409,7 @@ export const ui = ({ context }) => {
     try {
       setActiveNoteId(todo.noteId);
       let activeTodo = todo;
+      let detailDebugTrace = "";
       if (!activeTodo.imageUrls.length) {
         setStatus({ key: "command.followPractice.status.fetchingImages" });
         const runtimeDir = await prepareRuntime(shell, storedStateRef.current, setStatePatch);
@@ -2015,6 +2420,7 @@ export const ui = ({ context }) => {
           activeTodo,
           headlessRef.current,
         );
+        detailDebugTrace = String(detail.__debugTrace || "");
         activeTodo = normalizeTodo({
           ...activeTodo,
           ...detail,
@@ -2027,6 +2433,12 @@ export const ui = ({ context }) => {
 
       setStatus({ key: "command.followPractice.status.importing" });
       if (!activeTodo.imageUrls.length) {
+        if (detailDebugTrace) {
+          setStatus({
+            key: "command.followPractice.status.failed",
+            params: { error: `No images | debug=${detailDebugTrace}` },
+          });
+        }
         actions.globalActions.pushToast(
           { key: "toast.command.followPractice.noImages" },
           "warning",
@@ -2037,6 +2449,12 @@ export const ui = ({ context }) => {
       const canvasName = canvasSnap.currentCanvasName || "Default";
       const metas = await downloadTodoImages(context, activeTodo, canvasName);
       if (!metas.length) {
+        setStatus({
+          key: "command.followPractice.status.failed",
+          params: {
+            error: `Downloaded 0/${activeTodo.imageUrls.length} images from ${activeTodo.url || activeTodo.noteId}`,
+          },
+        });
         actions.globalActions.pushToast(
           { key: "toast.command.followPractice.noImages" },
           "warning",
@@ -2194,8 +2612,16 @@ export const ui = ({ context }) => {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {visibleTodos.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-            {t("command.followPractice.empty")}
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+            <div className="text-sm text-neutral-500">
+              {t("command.followPractice.empty")}
+            </div>
+            <div className="max-w-72 text-xs leading-relaxed text-neutral-600">
+              {t("command.followPractice.empty.hint")}
+            </div>
+            <div className="max-w-72 text-xs leading-relaxed text-neutral-600">
+              {t("command.followPractice.empty.respect")}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -2239,9 +2665,20 @@ export const ui = ({ context }) => {
                       type="button"
                       onClick={() => void handleFollow(todo)}
                       disabled={isBusy}
-                      className="h-8 rounded border border-neutral-700 px-3 text-sm text-neutral-100 hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
+                      aria-busy={isBusy}
+                      className="inline-flex h-8 min-w-[76px] items-center justify-center gap-1.5 rounded border border-neutral-700 px-3 text-sm text-neutral-100 hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t("command.followPractice.follow")}
+                      {isBusy ? (
+                        <>
+                          <span
+                            className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-neutral-600 border-t-primary"
+                            aria-hidden="true"
+                          />
+                          <span>{t("command.followPractice.loading")}</span>
+                        </>
+                      ) : (
+                        t("command.followPractice.follow")
+                      )}
                     </button>
                     <button
                       type="button"
