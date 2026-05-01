@@ -1139,8 +1139,8 @@ async function createWindow(options?: { load?: boolean }) {
     y: windowState.y,
     icon: path.join(__dirname, "../resources/icon.png"),
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: true,
+      contextIsolation: false,
       preload: path.join(__dirname, "preload.cjs"),
     },
     frame: false,
