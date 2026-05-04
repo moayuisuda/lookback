@@ -1,6 +1,12 @@
 // This file is intended to be dynamically loaded.
 // Imports are not allowed. Dependencies are passed via context.
 
+const PNG_MIME_TYPE = "image/png";
+const MAX_CANVAS_SIDE = 32767;
+const MAX_CANVAS_PIXELS = 268435456;
+const PNG_TILE_WIDTH = 4096;
+const MAX_PNG_STRIP_BYTES = 32 * 1024 * 1024;
+
 const getImageUrl = (imagePath, canvasName, apiBaseUrl) => {
   let normalized = imagePath.replace(/\\/g, "/");
   if (normalized.startsWith("/")) {
@@ -172,58 +178,281 @@ const applyBackground = (canvasEl, background) => {
   return output;
 };
 
-const generateStitchPreview = async (context, canvasState, options = {}) => {
-  const {
-    config: { API_BASE_URL },
-  } = context;
-
-  const { background = "#ffffff", transparent = false } = options;
-
-  const selectedItems = canvasState.canvasItems.filter(
+const getSelectedImageItems = (canvasState) =>
+  canvasState.canvasItems.filter(
     (item) => item.isSelected && item.type === "image",
   );
 
-  if (selectedItems.length === 0) return null;
+const shouldUseSingleCanvasExport = (width, height) =>
+  width <= MAX_CANVAS_SIDE &&
+  height <= MAX_CANVAS_SIDE &&
+  width * height <= MAX_CANVAS_PIXELS;
 
-  const bounds = buildExportBounds(selectedItems);
-  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+const canvasToPngBlob = (canvasEl) =>
+  new Promise((resolve, reject) => {
+    canvasEl.toBlob((blob) => {
+      if (!blob || blob.size === 0) {
+        reject(new Error("Canvas PNG encoding failed"));
+        return;
+      }
+      resolve(blob);
+    }, PNG_MIME_TYPE);
+  });
 
-  // Limit preview size to avoid performance issues
-  const MAX_PREVIEW_SIZE = 800;
-  const scale = Math.min(
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+const writeUint32 = (target, offset, value) => {
+  target[offset] = (value >>> 24) & 255;
+  target[offset + 1] = (value >>> 16) & 255;
+  target[offset + 2] = (value >>> 8) & 255;
+  target[offset + 3] = value & 255;
+};
+
+const getCrc32 = (bytes) => {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc = crcTable[(crc ^ bytes[i]) & 255] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const createPngChunk = (type, data = new Uint8Array(0)) => {
+  const typeBytes = new TextEncoder().encode(type);
+  const chunk = new Uint8Array(12 + data.length);
+  writeUint32(chunk, 0, data.length);
+  chunk.set(typeBytes, 4);
+  chunk.set(data, 8);
+  writeUint32(
+    chunk,
+    8 + data.length,
+    getCrc32(chunk.subarray(4, 8 + data.length)),
+  );
+  return chunk;
+};
+
+const createPngHeader = (width, height) => {
+  const signature = new Uint8Array([
+    137, 80, 78, 71, 13, 10, 26, 10,
+  ]);
+  const ihdr = new Uint8Array(13);
+  writeUint32(ihdr, 0, width);
+  writeUint32(ihdr, 4, height);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return [signature, createPngChunk("IHDR", ihdr)];
+};
+
+const createRenderBox = (item) => {
+  const baseScale = item.scale ?? 1;
+  const rawW = clampPositive(item.width) * baseScale;
+  const rawH = clampPositive(item.height) * baseScale;
+  if (!rawW || !rawH) return null;
+  const bbox = getRenderBbox(rawW, rawH, item.rotation ?? 0);
+  return {
+    x: item.x + bbox.offsetX,
+    y: item.y + bbox.offsetY,
+    width: bbox.width,
+    height: bbox.height,
+  };
+};
+
+const isBoxIntersecting = (a, b) =>
+  a.x < b.x + b.width &&
+  a.x + a.width > b.x &&
+  a.y < b.y + b.height &&
+  a.y + a.height > b.y;
+
+const renderTile = (
+  tileCanvas,
+  loadedImages,
+  bounds,
+  tile,
+  background,
+  transparent,
+) => {
+  tileCanvas.width = tile.width;
+  tileCanvas.height = tile.height;
+  const ctx = tileCanvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) throw new Error("Canvas context unavailable");
+
+  ctx.clearRect(0, 0, tile.width, tile.height);
+  if (!transparent) {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, tile.width, tile.height);
+  }
+
+  const tileWorldBox = {
+    x: bounds.x + tile.x,
+    y: bounds.y + tile.y,
+    width: tile.width,
+    height: tile.height,
+  };
+
+  const visibleImages = loadedImages.filter(
+    ({ renderBox }) => renderBox && isBoxIntersecting(renderBox, tileWorldBox),
+  );
+  drawLoadedImages(ctx, visibleImages, tileWorldBox);
+  return ctx.getImageData(0, 0, tile.width, tile.height).data;
+};
+
+async function* generateTiledPngRows(
+  loadedImages,
+  bounds,
+  width,
+  height,
+  background,
+  transparent,
+) {
+  const tileCanvas = document.createElement("canvas");
+  const bytesPerRow = width * 4 + 1;
+  const stripHeight = Math.max(
     1,
-    MAX_PREVIEW_SIZE / Math.max(bounds.width, bounds.height),
+    Math.min(256, Math.floor(MAX_PNG_STRIP_BYTES / bytesPerRow)),
   );
 
-  const exportWidth = Math.max(1, Math.ceil(bounds.width * scale));
-  const exportHeight = Math.max(1, Math.ceil(bounds.height * scale));
+  for (let stripY = 0; stripY < height; stripY += stripHeight) {
+    const currentStripHeight = Math.min(stripHeight, height - stripY);
+    const rows = Array.from(
+      { length: currentStripHeight },
+      () => new Uint8Array(bytesPerRow),
+    );
 
-  const canvasEl = document.createElement("canvas");
-  canvasEl.width = exportWidth;
-  canvasEl.height = exportHeight;
-  const ctx = canvasEl.getContext("2d");
-  if (!ctx) return null;
+    for (let tileX = 0; tileX < width; tileX += PNG_TILE_WIDTH) {
+      const tileWidth = Math.min(PNG_TILE_WIDTH, width - tileX);
+      const tile = {
+        x: tileX,
+        y: stripY,
+        width: tileWidth,
+        height: currentStripHeight,
+      };
+      const tileData = renderTile(
+        tileCanvas,
+        loadedImages,
+        bounds,
+        tile,
+        background,
+        transparent,
+      );
 
-  ctx.scale(scale, scale);
+      for (let rowIndex = 0; rowIndex < currentStripHeight; rowIndex += 1) {
+        const sourceStart = rowIndex * tileWidth * 4;
+        const sourceEnd = sourceStart + tileWidth * 4;
+        const targetStart = 1 + tileX * 4;
+        rows[rowIndex].set(tileData.subarray(sourceStart, sourceEnd), targetStart);
+      }
+    }
 
-  const orderedItems = selectedItems;
+    for (const row of rows) {
+      // PNG filter type 0 keeps rows independent, so strips can be encoded sequentially.
+      row[0] = 0;
+      yield row;
+    }
+  }
+}
 
-  const loadedImages = await Promise.all(
-    orderedItems.map(async (item) => {
+const encodeTiledPngBlob = async (
+  loadedImages,
+  bounds,
+  width,
+  height,
+  background,
+  transparent,
+) => {
+  if (typeof CompressionStream !== "function") {
+    throw new Error("CompressionStream is unavailable");
+  }
+
+  const parts = createPngHeader(width, height);
+  const compressor = new CompressionStream("deflate");
+  const writer = compressor.writable.getWriter();
+  const reader = compressor.readable.getReader();
+
+  const writeRows = async () => {
+    try {
+      for await (const row of generateTiledPngRows(
+        loadedImages,
+        bounds,
+        width,
+        height,
+        background,
+        transparent,
+      )) {
+        await writer.write(row);
+      }
+      await writer.close();
+    } catch (error) {
+      await writer.abort(error);
+      throw error;
+    }
+  };
+
+  const writePromise = writeRows();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value?.length) {
+        parts.push(createPngChunk("IDAT", value));
+      }
+    }
+    await writePromise;
+  } catch (error) {
+    await writePromise.catch(() => {});
+    throw error;
+  }
+
+  parts.push(createPngChunk("IEND"));
+  return new Blob(parts, { type: PNG_MIME_TYPE });
+};
+
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+const loadSelectedImages = async (
+  items,
+  currentCanvasName,
+  apiBaseUrl,
+  ignoreLoadFailure,
+) =>
+  Promise.all(
+    items.map(async (item) => {
       const url = getImageUrl(
         item.imagePath,
-        canvasState.currentCanvasName,
-        API_BASE_URL,
+        currentCanvasName,
+        apiBaseUrl,
       );
       try {
         const img = await loadImage(url);
         return { item, img };
-      } catch (e) {
-        return null;
+      } catch (error) {
+        if (ignoreLoadFailure) return null;
+        throw error;
       }
     }),
   );
 
+const drawLoadedImages = (ctx, loadedImages, bounds) => {
   loadedImages.forEach((data) => {
     if (!data) return;
     const { item, img } = data;
@@ -245,26 +474,87 @@ const generateStitchPreview = async (context, canvasState, options = {}) => {
     );
     ctx.restore();
   });
+};
+
+const renderStitchedCanvas = async (
+  context,
+  canvasState,
+  { background, transparent, scale, trim, ignoreLoadFailure },
+) => {
+  const {
+    config: { API_BASE_URL },
+  } = context;
+
+  const selectedItems = getSelectedImageItems(canvasState);
+  if (selectedItems.length === 0) return null;
+
+  const bounds = buildExportBounds(selectedItems);
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+
+  const exportWidth = Math.max(1, Math.ceil(bounds.width * scale));
+  const exportHeight = Math.max(1, Math.ceil(bounds.height * scale));
+  const canvasEl = document.createElement("canvas");
+  canvasEl.width = exportWidth;
+  canvasEl.height = exportHeight;
+  const ctx = canvasEl.getContext("2d");
+  if (!ctx) return null;
+
+  if (!transparent && !trim) {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, exportWidth, exportHeight);
+  }
+
+  ctx.scale(scale, scale);
+
+  const loadedImages = await loadSelectedImages(
+    selectedItems,
+    canvasState.currentCanvasName,
+    API_BASE_URL,
+    ignoreLoadFailure,
+  );
+  drawLoadedImages(ctx, loadedImages, bounds);
+
+  if (!trim) return canvasEl;
 
   const trimmedCanvas = trimTransparentEdges(canvasEl);
-  const outputCanvas = transparent
-    ? trimmedCanvas
-    : applyBackground(trimmedCanvas, background);
-  return outputCanvas.toDataURL("image/png");
+  return transparent ? trimmedCanvas : applyBackground(trimmedCanvas, background);
+};
+
+const generateStitchPreview = async (context, canvasState, options = {}) => {
+  const { background = "#ffffff", transparent = false } = options;
+
+  const selectedItems = getSelectedImageItems(canvasState);
+  const bounds = buildExportBounds(selectedItems);
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+
+  // Limit preview size to avoid performance issues
+  const MAX_PREVIEW_SIZE = 800;
+  const scale = Math.min(
+    1,
+    MAX_PREVIEW_SIZE / Math.max(bounds.width, bounds.height),
+  );
+
+  const outputCanvas = await renderStitchedCanvas(context, canvasState, {
+    background,
+    transparent,
+    scale,
+    trim: true,
+    ignoreLoadFailure: true,
+  });
+  if (!outputCanvas) return null;
+
+  const blob = await canvasToPngBlob(outputCanvas);
+  return URL.createObjectURL(blob);
 };
 
 const exportStitchedImage = async (context, canvasState, options = {}) => {
   const {
     actions: { globalActions },
-    config: { API_BASE_URL },
-    electron,
   } = context;
 
   const { background = "#ffffff", transparent = false } = options;
 
-  const selectedItems = canvasState.canvasItems.filter(
-    (item) => item.isSelected && item.type === "image",
-  );
+  const selectedItems = getSelectedImageItems(canvasState);
 
   if (selectedItems.length === 0) {
     globalActions.pushToast(
@@ -283,73 +573,47 @@ const exportStitchedImage = async (context, canvasState, options = {}) => {
 
     const exportWidth = Math.max(1, Math.ceil(bounds.width));
     const exportHeight = Math.max(1, Math.ceil(bounds.height));
-    const canvasEl = document.createElement("canvas");
-    canvasEl.width = exportWidth;
-    canvasEl.height = exportHeight;
-    const ctx = canvasEl.getContext("2d");
-    if (!ctx) {
-      globalActions.pushToast({ key: "toast.command.exportFailed" }, "error");
-      return;
-    }
 
-    const orderedItems = selectedItems;
-
-    const loadedImages = await Promise.all(
-      orderedItems.map(async (item) => {
-        const url = getImageUrl(
-          item.imagePath,
-          canvasState.currentCanvasName,
-          API_BASE_URL,
-        );
-        const img = await loadImage(url);
-        return { item, img };
-      }),
-    );
-
-    loadedImages.forEach(({ item, img }) => {
-      const scale = item.scale ?? 1;
-      const flipX = item.flipX === true;
-      const rotation = (item.rotation ?? 0) * (Math.PI / 180);
-      const drawX = item.x - bounds.x;
-      const drawY = item.y - bounds.y;
-      ctx.save();
-      ctx.translate(drawX, drawY);
-      ctx.rotate(rotation);
-      ctx.scale(scale * (flipX ? -1 : 1), scale);
-      ctx.drawImage(
-        img,
-        -item.width / 2,
-        -item.height / 2,
-        item.width,
-        item.height,
-      );
-      ctx.restore();
-    });
-
-    const trimmedCanvas = trimTransparentEdges(canvasEl);
-    const outputCanvas = transparent
-      ? trimmedCanvas
-      : applyBackground(trimmedCanvas, background);
-    const imageBase64 = outputCanvas.toDataURL("image/png");
-    const filename = `stitched_${Date.now()}.png`;
-
-    if (electron?.saveImageFile) {
-      const result = await electron.saveImageFile(imageBase64, filename);
-      if (result?.canceled) {
-        return;
-      }
-      if (!result?.success) {
+    let blob = null;
+    if (shouldUseSingleCanvasExport(exportWidth, exportHeight)) {
+      const outputCanvas = await renderStitchedCanvas(context, canvasState, {
+        background,
+        transparent,
+        scale: 1,
+        trim: false,
+        ignoreLoadFailure: false,
+      });
+      if (!outputCanvas) {
         globalActions.pushToast({ key: "toast.command.exportFailed" }, "error");
         return;
       }
-      globalActions.pushToast({ key: "toast.command.exportSaved" }, "success");
-      return;
+      blob = await canvasToPngBlob(outputCanvas);
+    } else {
+      const {
+        config: { API_BASE_URL },
+      } = context;
+      const loadedImages = await loadSelectedImages(
+        selectedItems,
+        canvasState.currentCanvasName,
+        API_BASE_URL,
+        false,
+      );
+      const renderableImages = loadedImages.map((data) => ({
+        ...data,
+        renderBox: createRenderBox(data.item),
+      }));
+      blob = await encodeTiledPngBlob(
+        renderableImages,
+        bounds,
+        exportWidth,
+        exportHeight,
+        background,
+        transparent,
+      );
     }
 
-    const link = document.createElement("a");
-    link.href = imageBase64;
-    link.download = filename;
-    link.click();
+    const filename = `stitched_${Date.now()}.png`;
+    downloadBlob(blob, filename);
     globalActions.pushToast({ key: "toast.command.exportSaved" }, "success");
   } catch (error) {
     void error;
@@ -368,6 +632,7 @@ export const config = {
       "command.stitchExport.preview.empty": "No images selected",
       "command.stitchExport.transparent": "Transparent",
       "command.stitchExport.action.export": "Export Stitch",
+      "command.stitchExport.action.exporting": "Exporting...",
     },
     zh: {
       "command.stitchExport.title": "拼接导出",
@@ -376,6 +641,7 @@ export const config = {
       "command.stitchExport.preview.empty": "未选择图片",
       "command.stitchExport.transparent": "透明背景",
       "command.stitchExport.action.export": "导出拼接图",
+      "command.stitchExport.action.exporting": "导出中...",
     },
   },
   titleKey: "command.stitchExport.title",
@@ -396,12 +662,19 @@ export const ui = ({ context }) => {
   const [background, setBackground] = useState("#ffffff");
   const [previewUrl, setPreviewUrl] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [transparent, setTransparent] = useState(false);
   const [previewBackground, setPreviewBackground] = useState(background);
 
   const handleExport = async () => {
-    await exportStitchedImage(context, canvasSnap, { background, transparent });
-    actions.commandActions.close();
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await exportStitchedImage(context, canvasSnap, { background, transparent });
+      actions.commandActions.close();
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -413,18 +686,30 @@ export const ui = ({ context }) => {
 
   useEffect(() => {
     let active = true;
+    let objectUrl = null;
     setLoading(true);
     generateStitchPreview(context, canvasSnap, {
       background: previewBackground,
       transparent,
     }).then((url) => {
+      objectUrl = url;
       if (active) {
         setPreviewUrl(url);
+        setLoading(false);
+      } else if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }).catch(() => {
+      if (active) {
+        setPreviewUrl(null);
         setLoading(false);
       }
     });
     return () => {
       active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
   }, [previewBackground, transparent, context, canvasSnap]);
 
@@ -479,9 +764,23 @@ export const ui = ({ context }) => {
           <button
             type="button"
             onClick={handleExport}
-            className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded text-xs text-white transition-colors"
+            disabled={exporting}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-xs text-white transition-colors ${
+              exporting
+                ? "bg-neutral-800/70 cursor-not-allowed opacity-70"
+                : "bg-neutral-800 hover:bg-neutral-700"
+            }`}
           >
-            {t("command.stitchExport.action.export")}
+            {exporting && (
+              <span className="h-3 w-3 rounded-full border border-neutral-500 border-t-white animate-spin" />
+            )}
+            <span>
+              {t(
+                exporting
+                  ? "command.stitchExport.action.exporting"
+                  : "command.stitchExport.action.export",
+              )}
+            </span>
           </button>
         </div>
       </div>
