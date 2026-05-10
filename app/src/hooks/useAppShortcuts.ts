@@ -22,6 +22,7 @@ export const useAppShortcuts = () => {
 
   const canvasAutoLayoutHotkey = acceleratorToHotkey(snap.canvasAutoLayoutShortcut);
   const canvasGroupHotkey = acceleratorToHotkey(snap.canvasGroupShortcut);
+  const canvasPenHotkey = acceleratorToHotkey(snap.canvasPenShortcut);
   const zoomToFitHotkey = acceleratorToHotkey(snap.zoomToFitShortcut);
   const commandPaletteShortcut = snap.commandPaletteShortcut;
 
@@ -46,6 +47,16 @@ export const useAppShortcuts = () => {
   );
 
   useHotkeys(
+    canvasPenHotkey ?? "",
+    (e) => {
+      e.preventDefault();
+      canvasActions.togglePenMode();
+    },
+    { preventDefault: true, enabled: Boolean(canvasPenHotkey) },
+    [canvasPenHotkey],
+  );
+
+  useHotkeys(
     zoomToFitHotkey ?? "",
     (e) => {
       e.preventDefault();
@@ -60,8 +71,14 @@ export const useAppShortcuts = () => {
     "mod+z",
     (e) => {
       e.preventDefault();
-      canvasActions.undoCanvas();
-      canvasActions.clearSelectionState();
+      const preservePenMode = canvasState.isPenMode;
+      canvasActions.undoCanvas({ preservePenMode });
+      if (preservePenMode) {
+        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
+      }
+      if (!preservePenMode) {
+        canvasActions.clearSelectionState();
+      }
     },
     [],
   );
@@ -70,8 +87,14 @@ export const useAppShortcuts = () => {
     "mod+shift+z, mod+y",
     (e) => {
       e.preventDefault();
-      canvasActions.redoCanvas();
-      canvasActions.clearSelectionState();
+      const preservePenMode = canvasState.isPenMode;
+      canvasActions.redoCanvas({ preservePenMode });
+      if (preservePenMode) {
+        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
+      }
+      if (!preservePenMode) {
+        canvasActions.clearSelectionState();
+      }
     },
     [],
   );

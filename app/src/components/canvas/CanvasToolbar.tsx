@@ -1,10 +1,11 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   X,
   LayoutTemplate,
   PictureInPicture2,
   Eraser,
   Filter,
+  Pencil,
 } from "lucide-react";
 import { useSnapshot } from "valtio";
 import { globalState, globalActions } from "../../store/globalStore";
@@ -12,15 +13,25 @@ import { anchorState, anchorActions } from "../../store/anchorStore";
 import { useT } from "../../i18n/useT";
 import { FilterSelector } from "./FilterSelector";
 import clsx from "clsx";
+import { CANVAS_PEN_STROKE_WIDTH_OPTIONS } from "../../store/canvasStore";
 
 interface CanvasToolbarProps {
   canvasFilters: readonly string[];
   showMinimap: boolean;
   isExpanded: boolean;
+  isPenMode: boolean;
+  penTool: "draw" | "erase";
+  penStrokeColor: string;
+  penStrokeWidth: number;
+  penColorSlots: readonly string[];
   onFiltersChange: (filters: string[]) => void;
+  onTogglePenMode: () => void;
+  onPenToolChange: (tool: "draw" | "erase") => void;
+  onPenStrokeColorChange: (color: string) => void;
+  onPenColorSlotChange: (index: number, color: string) => void;
+  onPenStrokeWidthChange: (width: number) => void;
   onToggleMinimap: () => void;
   onAutoLayout: () => void;
-  onRequestClear: () => void;
 }
 
 const ToolbarButton: React.FC<{
@@ -55,6 +66,108 @@ const ToolbarButton: React.FC<{
 };
 
 const ToolbarDivider = () => <div className="h-px w-4 bg-neutral-600" />;
+
+const PenControls: React.FC<{
+  penTool: "draw" | "erase";
+  penStrokeColor: string;
+  penStrokeWidth: number;
+  penColorSlots: readonly string[];
+  onPenToolChange: (tool: "draw" | "erase") => void;
+  onPenStrokeColorChange: (color: string) => void;
+  onPenColorSlotChange: (index: number, color: string) => void;
+  onPenStrokeWidthChange: (width: number) => void;
+}> = ({
+  penTool,
+  penStrokeColor,
+  penStrokeWidth,
+  penColorSlots,
+  onPenToolChange,
+  onPenStrokeColorChange,
+  onPenColorSlotChange,
+  onPenStrokeWidthChange,
+}) => {
+  const { t } = useT();
+  const colorInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center gap-1">
+        {CANVAS_PEN_STROKE_WIDTH_OPTIONS.map((width) => (
+          <button
+            key={width}
+            type="button"
+            className={clsx(
+              "h-5 w-5 rounded flex items-center justify-center transition-colors",
+              penStrokeWidth === width
+                ? "bg-primary/90"
+                : "hover:bg-neutral-800 text-neutral-400",
+            )}
+            title={t("canvas.toolbar.penStrokeWidth")}
+            onClick={() => onPenStrokeWidthChange(width)}
+          >
+            <span
+              className="rounded-full bg-current"
+              style={{ width: width + 3, height: width + 3 }}
+            />
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-col items-center gap-1">
+        {penColorSlots.map((color, index) => {
+          const isSelected = penStrokeColor === color.toLowerCase();
+          return (
+            <div key={`${index}_${color}`} className="relative h-5 w-5">
+              <button
+                type="button"
+                className={clsx(
+                  "h-5 w-5 rounded flex items-center justify-center transition-colors border",
+                  isSelected
+                    ? "border-primary bg-neutral-800"
+                    : "border-transparent hover:border-neutral-700",
+                )}
+                title={t("canvas.toolbar.penColor")}
+                onClick={() => {
+                  if (isSelected) {
+                    colorInputRefs.current[index]?.click();
+                    return;
+                  }
+                  onPenStrokeColorChange(color);
+                }}
+              >
+                <span
+                  className="h-3.5 w-3.5 rounded-sm border border-white/20"
+                  style={{ backgroundColor: color }}
+                />
+              </button>
+              <input
+                ref={(node) => {
+                  colorInputRefs.current[index] = node;
+                }}
+                type="color"
+                value={color}
+                aria-label={t("canvas.toolbar.penColor")}
+                onChange={(event) =>
+                  onPenColorSlotChange(index, event.target.value)
+                }
+                className="absolute inset-0 h-5 w-5 opacity-0 pointer-events-none"
+                tabIndex={-1}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <ToolbarButton
+        isActive={penTool === "erase"}
+        onClick={() => onPenToolChange(penTool === "erase" ? "draw" : "erase")}
+        title={t("canvas.toolbar.penErase")}
+      >
+        <Eraser size={14} />
+      </ToolbarButton>
+    </div>
+  );
+};
 
 const AnchorControls: React.FC = () => {
   const { t } = useT();
@@ -142,10 +255,19 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   canvasFilters,
   showMinimap,
   isExpanded,
+  isPenMode,
+  penTool,
+  penStrokeColor,
+  penStrokeWidth,
+  penColorSlots,
   onFiltersChange,
+  onTogglePenMode,
+  onPenToolChange,
+  onPenStrokeColorChange,
+  onPenColorSlotChange,
+  onPenStrokeWidthChange,
   onToggleMinimap,
   onAutoLayout,
-  onRequestClear,
 }) => {
   const { t } = useT();
   const appSnap = useSnapshot(globalState);
@@ -185,6 +307,32 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
         <ToolbarDivider />
 
         <ToolbarButton
+          isActive={isPenMode}
+          onClick={onTogglePenMode}
+          title={t("canvas.toolbar.pen")}
+        >
+          <Pencil size={14} />
+        </ToolbarButton>
+
+        {isPenMode && (
+          <>
+            <ToolbarDivider />
+            <PenControls
+              penTool={penTool}
+              penStrokeColor={penStrokeColor}
+              penStrokeWidth={penStrokeWidth}
+              penColorSlots={penColorSlots}
+              onPenToolChange={onPenToolChange}
+              onPenStrokeColorChange={onPenStrokeColorChange}
+              onPenColorSlotChange={onPenColorSlotChange}
+              onPenStrokeWidthChange={onPenStrokeWidthChange}
+            />
+          </>
+        )}
+
+        <ToolbarDivider />
+
+        <ToolbarButton
           onClick={onAutoLayout}
           title={t("canvas.toolbar.smartLayout")}
         >
@@ -202,16 +350,6 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
         <ToolbarDivider />
 
         <AnchorControls />
-
-        <ToolbarDivider />
-
-        <ToolbarButton
-          variant="danger"
-          onClick={onRequestClear}
-          title={t("common.clear")}
-        >
-          <Eraser size={14} />
-        </ToolbarButton>
       </div>
     </div>
   );

@@ -46,6 +46,7 @@ export interface GlobalState {
   toggleMouseThroughShortcut: string;
   canvasAutoLayoutShortcut: string;
   canvasGroupShortcut: string;
+  canvasPenShortcut: string;
   zoomToFitShortcut: string;
   commandPaletteShortcut: string;
   isAppHidden: boolean;
@@ -95,6 +96,7 @@ const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
 const DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+Shift+G' : 'Ctrl+Shift+G';
+const DEFAULT_CANVAS_PEN_SHORTCUT = isMac ? 'Command+P' : 'Ctrl+P';
 const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
 
 export const globalState = proxy<GlobalState>({
@@ -120,6 +122,7 @@ export const globalState = proxy<GlobalState>({
   toggleMouseThroughShortcut: DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT,
   canvasAutoLayoutShortcut: DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
+  canvasPenShortcut: DEFAULT_CANVAS_PEN_SHORTCUT,
   zoomToFitShortcut: '',
   commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
   isAppHidden: false,
@@ -171,6 +174,11 @@ export const globalActions = {
         settings,
         'canvasGroupShortcut',
         DEFAULT_CANVAS_GROUP_SHORTCUT,
+      );
+      const rawCanvasPenShortcut = readSetting<unknown>(
+        settings,
+        'canvasPenShortcut',
+        DEFAULT_CANVAS_PEN_SHORTCUT,
       );
       const rawCommandPaletteShortcut = readSetting<unknown>(
         settings,
@@ -251,6 +259,9 @@ export const globalActions = {
 
       if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
         globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
+      }
+      if (typeof rawCanvasPenShortcut === 'string' && rawCanvasPenShortcut.trim()) {
+        globalState.canvasPenShortcut = rawCanvasPenShortcut.trim();
       }
       if (
         typeof rawCommandPaletteShortcut === 'string' &&
@@ -504,6 +515,13 @@ export const globalActions = {
     if (!next) return false;
     globalState.canvasGroupShortcut = next;
     await settingStorage.set('canvasGroupShortcut', next);
+    return true;
+  },
+  setCanvasPenShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.canvasPenShortcut = next;
+    await settingStorage.set('canvasPenShortcut', next);
     return true;
   },
   setZoomToFitShortcut: async (accelerator: string) => {

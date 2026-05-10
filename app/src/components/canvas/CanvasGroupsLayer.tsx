@@ -65,6 +65,7 @@ type CanvasGroupsLayerProps = {
   colorSwatches: readonly string[];
   activeGroupId: string | null;
   activeColorPickerGroupId: string | null;
+  isPenMode: boolean;
   onGroupSelect: (groupId: string) => void;
   onGroupDragStart: (
     groupId: string,
@@ -191,6 +192,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
   colorSwatches,
   activeGroupId,
   activeColorPickerGroupId,
+  isPenMode,
   onGroupSelect,
   onGroupDragStart,
   onGroupDragMove,
@@ -220,6 +222,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
 
   const bindGroupPointerDown = (groupId: string) => {
     return (e: React.PointerEvent<SVGRectElement>) => {
+      if (canvasState.isPenMode) return;
       if (canvasState.isSpaceDown) return;
       if (e.button !== 0) return;
       e.stopPropagation();
@@ -379,7 +382,9 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
               </>
             ) : null}
 
-            {renderMode === "controls" && (group.collapse || isActive) && (
+            {renderMode === "controls" &&
+            !isPenMode &&
+            (group.collapse || isActive) && (
               <>
                 {isActive && !group.collapse ? (
                   <CanvasControlButton

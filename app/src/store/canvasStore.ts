@@ -44,6 +44,37 @@ export interface CanvasText {
   isAutoEdit?: boolean;
 }
 
+export interface CanvasPathPoint {
+  x: number;
+  y: number;
+}
+
+export interface CanvasPathStroke {
+  path: string;
+  pointCount: number;
+  lastPoint: CanvasPathPoint;
+  points: CanvasPathPoint[];
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface CanvasPath {
+  type: "path";
+  itemId: string;
+  x: number;
+  y: number;
+  rotation: number;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+  strokes: CanvasPathStroke[];
+  stroke: string;
+  strokeWidth: number;
+  isSelected?: boolean;
+}
+
 export interface CanvasImage extends ImageMeta {
   type: "image";
   itemId: string;
@@ -61,11 +92,21 @@ export interface CanvasImage extends ImageMeta {
 }
 
 const GROUP_GAP = 40;
+const DEFAULT_CANVAS_PATH_STROKE = "#ffffff";
+const DEFAULT_CANVAS_PATH_STROKE_WIDTH = 4;
+export const CANVAS_PEN_STROKE_WIDTH_OPTIONS = [4, 12] as const;
+const MIN_CANVAS_PATH_STROKE_WIDTH = 1;
+const MAX_CANVAS_PATH_STROKE_WIDTH = 32;
+const DEFAULT_CANVAS_PATH_COLOR_SLOTS = [
+  "#ffffff",
+  "#39c5bb",
+  "#ef4444",
+] as const;
 const DEFAULT_CANVAS_GROUP_COLOR = "#39c5bb";
 export const CANVAS_GROUP_PADDING_X = 64;
 export const CANVAS_GROUP_PADDING_Y = 64;
 
-export type CanvasItem = CanvasImage | CanvasText;
+export type CanvasItem = CanvasImage | CanvasText | CanvasPath;
 
 export interface CanvasGroup {
   groupId: string;
@@ -75,7 +116,7 @@ export interface CanvasGroup {
 }
 
 export interface CanvasPersistedItem {
-  type: "image" | "text";
+  type: "image" | "text" | "path";
   kind?: "ref" | "temp";
   itemId: string;
   x: number;
@@ -84,6 +125,8 @@ export interface CanvasPersistedItem {
   scale: number;
   width?: number;
   height?: number;
+  offsetX?: number;
+  offsetY?: number;
 
   // Image specific
   flipX?: boolean;
@@ -106,6 +149,11 @@ export interface CanvasPersistedItem {
   fontSize?: number;
   fill?: string;
   align?: string;
+
+  // Path specific
+  strokes?: CanvasPathStroke[];
+  stroke?: string;
+  strokeWidth?: number;
 }
 
 interface CanvasPoint {
@@ -126,6 +174,10 @@ type CanvasGeometryItem = {
 interface CanvasHistoryEntry {
   canvasItems: CanvasItem[];
   canvasGroups: CanvasGroup[];
+}
+
+interface CanvasHistoryOptions {
+  preservePenMode?: boolean;
 }
 
 interface CanvasSelectionRect {
@@ -363,6 +415,300 @@ const measureCanvasTextSize = (text: string, fontSize: number) => {
 
 const clonePlain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+const clampCanvasPathStrokeWidth = (value: number) => {
+  if (!Number.isFinite(value)) return DEFAULT_CANVAS_PATH_STROKE_WIDTH;
+  const clamped = Math.max(
+    MIN_CANVAS_PATH_STROKE_WIDTH,
+    Math.min(MAX_CANVAS_PATH_STROKE_WIDTH, value),
+  );
+  return CANVAS_PEN_STROKE_WIDTH_OPTIONS.reduce(
+    (closest, option) =>
+      Math.abs(option - clamped) < Math.abs(closest - clamped)
+        ? option
+        : closest,
+    CANVAS_PEN_STROKE_WIDTH_OPTIONS[0],
+  );
+};
+
+const normalizeCanvasPathColor = (value: unknown) => {
+  if (typeof value !== "string") return DEFAULT_CANVAS_PATH_STROKE;
+  const normalized = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(normalized)) return normalized;
+  if (/^#[0-9a-f]{3}$/.test(normalized)) {
+    const r = normalized[1];
+    const g = normalized[2];
+    const b = normalized[3];
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return DEFAULT_CANVAS_PATH_STROKE;
+};
+
+const normalizeCanvasPathColorSlots = (value: unknown) => {
+  const source = Array.isArray(value) ? value : DEFAULT_CANVAS_PATH_COLOR_SLOTS;
+  return DEFAULT_CANVAS_PATH_COLOR_SLOTS.map((fallback, index) =>
+    normalizeCanvasPathColor(source[index] ?? fallback),
+  );
+};
+
+const getCanvasPathStrokePoints = (stroke: CanvasPathStroke) =>
+  Array.isArray(stroke.points) ? stroke.points : [];
+
+const getCanvasPathPointCount = (item: Pick<CanvasPath, "strokes">) =>
+  item.strokes.reduce(
+    (count, stroke) => count + getCanvasPathStrokePoints(stroke).length,
+    0,
+  );
+
+const getCanvasPathOrigin = (item: CanvasPath) => ({
+  x: item.x + item.offsetX,
+  y: item.y + item.offsetY,
+});
+
+const getCanvasPathLocalPoint = (item: CanvasPath, point: CanvasPoint) => {
+  const origin = getCanvasPathOrigin(item);
+  return {
+    x: point.x - origin.x,
+    y: point.y - origin.y,
+  };
+};
+
+const formatCanvasPathNumber = (value: number) =>
+  Number.isInteger(value) ? String(value) : value.toFixed(2);
+
+const getLineCommand = (point: CanvasPathPoint) =>
+  `L ${formatCanvasPathNumber(point.x)} ${formatCanvasPathNumber(point.y)}`;
+
+const getMoveCommand = (point: CanvasPathPoint) =>
+  `M ${formatCanvasPathNumber(point.x)} ${formatCanvasPathNumber(point.y)}`;
+
+const getDistanceToSegment = (
+  point: CanvasPathPoint,
+  start: CanvasPathPoint,
+  end: CanvasPathPoint,
+) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+  const t = Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq),
+  );
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+};
+
+const isPointOnSegment = (
+  point: CanvasPathPoint,
+  start: CanvasPathPoint,
+  end: CanvasPathPoint,
+) => {
+  const epsilon = 0.000001;
+  const cross =
+    (point.y - start.y) * (end.x - start.x) -
+    (point.x - start.x) * (end.y - start.y);
+  if (Math.abs(cross) > epsilon) return false;
+  return (
+    point.x >= Math.min(start.x, end.x) - epsilon &&
+    point.x <= Math.max(start.x, end.x) + epsilon &&
+    point.y >= Math.min(start.y, end.y) - epsilon &&
+    point.y <= Math.max(start.y, end.y) + epsilon
+  );
+};
+
+const getSegmentCross = (
+  start: CanvasPathPoint,
+  end: CanvasPathPoint,
+  point: CanvasPathPoint,
+) =>
+  (end.x - start.x) * (point.y - start.y) -
+  (end.y - start.y) * (point.x - start.x);
+
+const doSegmentsIntersect = (
+  aStart: CanvasPathPoint,
+  aEnd: CanvasPathPoint,
+  bStart: CanvasPathPoint,
+  bEnd: CanvasPathPoint,
+) => {
+  const aToBStart = getSegmentCross(aStart, aEnd, bStart);
+  const aToBEnd = getSegmentCross(aStart, aEnd, bEnd);
+  const bToAStart = getSegmentCross(bStart, bEnd, aStart);
+  const bToAEnd = getSegmentCross(bStart, bEnd, aEnd);
+
+  if (
+    aToBStart * aToBEnd < 0 &&
+    bToAStart * bToAEnd < 0
+  ) {
+    return true;
+  }
+
+  return (
+    isPointOnSegment(bStart, aStart, aEnd) ||
+    isPointOnSegment(bEnd, aStart, aEnd) ||
+    isPointOnSegment(aStart, bStart, bEnd) ||
+    isPointOnSegment(aEnd, bStart, bEnd)
+  );
+};
+
+const getDistanceBetweenSegments = (
+  aStart: CanvasPathPoint,
+  aEnd: CanvasPathPoint,
+  bStart: CanvasPathPoint,
+  bEnd: CanvasPathPoint,
+) => {
+  if (doSegmentsIntersect(aStart, aEnd, bStart, bEnd)) return 0;
+  return Math.min(
+    getDistanceToSegment(aStart, bStart, bEnd),
+    getDistanceToSegment(aEnd, bStart, bEnd),
+    getDistanceToSegment(bStart, aStart, aEnd),
+    getDistanceToSegment(bEnd, aStart, aEnd),
+  );
+};
+
+const getPathPointFromWorld = (item: CanvasPath, point: CanvasPoint) => {
+  const scale = item.scale || 1;
+  const dx = point.x - item.x;
+  const dy = point.y - item.y;
+  const rotation = (-(item.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: (dx * cos - dy * sin) / scale - item.offsetX,
+    y: (dx * sin + dy * cos) / scale - item.offsetY,
+  };
+};
+
+const isStrokeHitByPoint = (
+  stroke: CanvasPathStroke,
+  point: CanvasPathPoint,
+  tolerance: number,
+) => {
+  const points = getCanvasPathStrokePoints(stroke);
+  if (points.length === 0) return false;
+  if (points.length === 1) {
+    return Math.hypot(
+      point.x - points[0].x,
+      point.y - points[0].y,
+    ) <= tolerance;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (
+      getDistanceToSegment(point, points[index - 1], points[index]) <=
+      tolerance
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const isStrokeHitBySegment = (
+  stroke: CanvasPathStroke,
+  start: CanvasPathPoint,
+  end: CanvasPathPoint,
+  tolerance: number,
+) => {
+  const points = getCanvasPathStrokePoints(stroke);
+  if (points.length === 0) return false;
+  if (points.length === 1) {
+    return getDistanceToSegment(points[0], start, end) <= tolerance;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (
+      getDistanceBetweenSegments(
+        start,
+        end,
+        points[index - 1],
+        points[index],
+      ) <= tolerance
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const expandCanvasPathBounds = (
+  item: CanvasPath,
+  point: CanvasPoint,
+  strokeWidth: number,
+) => {
+  const origin = getCanvasPathOrigin(item);
+  const padding = Math.max(1, strokeWidth / 2);
+  const currentMinX = item.x - item.width / 2;
+  const currentMinY = item.y - item.height / 2;
+  const currentMaxX = item.x + item.width / 2;
+  const currentMaxY = item.y + item.height / 2;
+  const minX = Math.min(currentMinX, point.x - padding);
+  const minY = Math.min(currentMinY, point.y - padding);
+  const maxX = Math.max(currentMaxX, point.x + padding);
+  const maxY = Math.max(currentMaxY, point.y + padding);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  // The SVG path commands stay relative to a fixed drawing origin. When the
+  // bounding center moves, only this offset changes; old commands are untouched.
+  item.x = centerX;
+  item.y = centerY;
+  item.offsetX = origin.x - centerX;
+  item.offsetY = origin.y - centerY;
+  item.width = Math.max(strokeWidth, maxX - minX);
+  item.height = Math.max(strokeWidth, maxY - minY);
+};
+
+const recomputeCanvasPathBounds = (item: CanvasPath) => {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  item.strokes.forEach((stroke) => {
+    const padding = Math.max(1, stroke.strokeWidth / 2);
+    getCanvasPathStrokePoints(stroke).forEach((point) => {
+      const x = point.x + item.offsetX;
+      const y = point.y + item.offsetY;
+      minX = Math.min(minX, x - padding);
+      minY = Math.min(minY, y - padding);
+      maxX = Math.max(maxX, x + padding);
+      maxY = Math.max(maxY, y + padding);
+    });
+  });
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return false;
+  }
+
+  const localCenterX = (minX + maxX) / 2;
+  const localCenterY = (minY + maxY) / 2;
+  const scale = item.scale || 1;
+  const rotation = ((item.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const scaledX = localCenterX * scale;
+  const scaledY = localCenterY * scale;
+
+  item.x += scaledX * cos - scaledY * sin;
+  item.y += scaledX * sin + scaledY * cos;
+  item.offsetX -= localCenterX;
+  item.offsetY -= localCenterY;
+  const maxStrokeWidth = item.strokes.reduce(
+    (max, stroke) => Math.max(max, stroke.strokeWidth),
+    MIN_CANVAS_PATH_STROKE_WIDTH,
+  );
+  item.strokeWidth = maxStrokeWidth;
+  item.width = Math.max(maxStrokeWidth, maxX - minX);
+  item.height = Math.max(maxStrokeWidth, maxY - minY);
+  return true;
+};
+
 const syncProxyRecord = <T extends object>(target: T, source: T) => {
   const targetRecord = target as Record<string, unknown>;
   const sourceRecord = source as Record<string, unknown>;
@@ -428,6 +774,14 @@ const createCanvasHistoryEntry = (): CanvasHistoryEntry => {
   };
 };
 
+const areCanvasHistoryEntriesEqual = (
+  prev: CanvasHistoryEntry | undefined,
+  next: CanvasHistoryEntry,
+) => {
+  if (!prev) return false;
+  return JSON.stringify(prev) === JSON.stringify(next);
+};
+
 interface CanvasStoreState {
   canvasItems: CanvasItem[];
   canvasGroups: CanvasGroup[];
@@ -437,6 +791,14 @@ interface CanvasStoreState {
   canvasFilters: string[];
   showMinimap: boolean;
   isCanvasToolbarExpanded: boolean;
+  isPenMode: boolean;
+  isDrawingPath: boolean;
+  activePathItemId: string | null;
+  penTool: "draw" | "erase";
+  isPenEraseOverride: boolean;
+  penStrokeColor: string;
+  penStrokeWidth: number;
+  penColorSlots: string[];
 
   isClearModalOpen: boolean;
   primaryId: string | null;
@@ -475,6 +837,14 @@ export const canvasState = proxy<CanvasStoreState>({
   canvasFilters: [],
   showMinimap: true,
   isCanvasToolbarExpanded: true,
+  isPenMode: false,
+  isDrawingPath: false,
+  activePathItemId: null,
+  penTool: "draw",
+  isPenEraseOverride: false,
+  penStrokeColor: DEFAULT_CANVAS_PATH_STROKE,
+  penStrokeWidth: DEFAULT_CANVAS_PATH_STROKE_WIDTH,
+  penColorSlots: [...DEFAULT_CANVAS_PATH_COLOR_SLOTS],
   isClearModalOpen: false,
   primaryId: null,
   dimensions: { width: 0, height: 0 },
@@ -513,6 +883,24 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
           width: item.width,
           height: item.height,
           align: item.align,
+        };
+      }
+
+      if (item.type === "path") {
+        return {
+          type: "path",
+          itemId: item.itemId,
+          x: item.x,
+          y: item.y,
+          rotation: item.rotation,
+          scale: item.scale,
+          offsetX: item.offsetX,
+          offsetY: item.offsetY,
+          width: item.width,
+          height: item.height,
+          strokes: clonePlain(item.strokes),
+          stroke: item.stroke,
+          strokeWidth: item.strokeWidth,
         };
       }
 
@@ -695,6 +1083,67 @@ const debouncedPersistCanvasViewport = debounce(
   persistCanvasViewport,
 );
 
+const resetPathDrawingState = () => {
+  canvasState.isPenMode = false;
+  canvasState.isDrawingPath = false;
+  canvasState.activePathItemId = null;
+  canvasState.isPenEraseOverride = false;
+};
+
+const syncActivePathAfterHistoryRestore = (preservePenMode: boolean) => {
+  canvasState.isDrawingPath = false;
+  canvasState.isPenEraseOverride = false;
+  if (!preservePenMode) {
+    resetPathDrawingState();
+    return;
+  }
+
+  canvasState.isPenMode = true;
+  canvasState.activePathItemId =
+    canvasState.canvasItems.find(
+      (item): item is CanvasPath =>
+        item.type === "path" && item.isSelected === true,
+    )?.itemId ?? null;
+};
+
+const eraseCanvasPathStrokes = (
+  createHitTest: (item: CanvasPath) => (stroke: CanvasPathStroke) => boolean,
+) => {
+  let didChange = false;
+  const removedItemIds = new Set<string>();
+
+  canvasState.canvasItems.forEach((item) => {
+    if (item.type !== "path") return;
+    const shouldEraseStroke = createHitTest(item);
+    const nextStrokes = item.strokes.filter(
+      (stroke) => !shouldEraseStroke(stroke),
+    );
+    if (nextStrokes.length === item.strokes.length) return;
+
+    didChange = true;
+    item.strokes = nextStrokes;
+    if (nextStrokes.length === 0) {
+      removedItemIds.add(item.itemId);
+    } else {
+      recomputeCanvasPathBounds(item);
+    }
+  });
+
+  if (removedItemIds.size > 0) {
+    mergeToItems(
+      canvasState.canvasItems.filter(
+        (item) => !removedItemIds.has(item.itemId),
+      ),
+    );
+    if (canvasState.primaryId && removedItemIds.has(canvasState.primaryId)) {
+      canvasState.primaryId = null;
+    }
+    canvasState.multiSelectUnion = null;
+  }
+
+  return didChange;
+};
+
 export const canvasActions = {
   hydrateSettings: async () => {
     try {
@@ -714,6 +1163,21 @@ export const canvasActions = {
         "isCanvasToolbarExpanded",
         canvasState.isCanvasToolbarExpanded,
       );
+      const rawPenStrokeColor = readSetting<unknown>(
+        settings,
+        "penStrokeColor",
+        canvasState.penStrokeColor,
+      );
+      const rawPenStrokeWidth = readSetting<unknown>(
+        settings,
+        "penStrokeWidth",
+        canvasState.penStrokeWidth,
+      );
+      const rawPenColorSlots = readSetting<unknown>(
+        settings,
+        "penColorSlots",
+        canvasState.penColorSlots,
+      );
 
       if (Array.isArray(rawCanvasFilters)) {
         canvasState.canvasFilters = rawCanvasFilters as string[];
@@ -725,6 +1189,18 @@ export const canvasActions = {
 
       if (typeof rawIsCanvasToolbarExpanded === "boolean") {
         canvasState.isCanvasToolbarExpanded = rawIsCanvasToolbarExpanded;
+      }
+
+      canvasState.penColorSlots = normalizeCanvasPathColorSlots(rawPenColorSlots);
+      const nextStrokeColor = normalizeCanvasPathColor(rawPenStrokeColor);
+      canvasState.penStrokeColor = canvasState.penColorSlots.includes(
+        nextStrokeColor,
+      )
+        ? nextStrokeColor
+        : canvasState.penColorSlots[0];
+      if (typeof rawPenStrokeWidth === "number") {
+        canvasState.penStrokeWidth =
+          clampCanvasPathStrokeWidth(rawPenStrokeWidth);
       }
     } catch (error) {
       void error;
@@ -738,6 +1214,7 @@ export const canvasActions = {
 
   initCanvas: async (): Promise<void> => {
     try {
+      resetPathDrawingState();
       const lastActive = await settingStorage.get<string>({
         key: "lastActiveCanvas",
         fallback: "Default",
@@ -776,6 +1253,28 @@ export const canvasActions = {
             align: item.align,
             isSelected: false,
             isAutoEdit: false,
+          });
+          return;
+        }
+
+        if (item.type === "path") {
+          reconstructed.push({
+            type: "path",
+            itemId: item.itemId,
+            x: item.x,
+            y: item.y,
+            rotation: item.rotation,
+            scale: item.scale,
+            offsetX: item.offsetX || 0,
+            offsetY: item.offsetY || 0,
+            width: item.width || 0,
+            height: item.height || 0,
+            strokes: Array.isArray(item.strokes)
+              ? clonePlain(item.strokes)
+              : [],
+            stroke: item.stroke || DEFAULT_CANVAS_PATH_STROKE,
+            strokeWidth: item.strokeWidth || DEFAULT_CANVAS_PATH_STROKE_WIDTH,
+            isSelected: false,
           });
           return;
         }
@@ -872,6 +1371,7 @@ export const canvasActions = {
       }
     } catch (error) {
       void error;
+      resetPathDrawingState();
       mergeToItems([]);
       mergeToGroups([]);
       canvasState.activeCanvasGroupId = null;
@@ -883,6 +1383,7 @@ export const canvasActions = {
 
   switchCanvas: async (name: string, skipSave = false) => {
     if (name === canvasState.currentCanvasName) return;
+    canvasActions.setPenMode(false);
 
     if (!skipSave) {
       // Save current viewport
@@ -909,9 +1410,16 @@ export const canvasActions = {
 
   commitCanvasChange: () => {
     cleanupCanvasGroups(canvasState.canvasItems);
+    const nextEntry = createCanvasHistoryEntry();
+    const currentEntry = canvasState.canvasHistory[canvasState.canvasHistoryIndex];
+    if (areCanvasHistoryEntriesEqual(currentEntry, nextEntry)) {
+      persistCanvasScene();
+      return;
+    }
+
     const nextIndex = canvasState.canvasHistoryIndex + 1;
     canvasState.canvasHistory = canvasState.canvasHistory.slice(0, nextIndex);
-    canvasState.canvasHistory.push(createCanvasHistoryEntry());
+    canvasState.canvasHistory.push(nextEntry);
     canvasState.canvasHistoryIndex = nextIndex;
 
     if (canvasState.canvasHistory.length > 50) {
@@ -922,8 +1430,12 @@ export const canvasActions = {
     persistCanvasScene();
   },
 
-  undoCanvas: () => {
+  undoCanvas: (options: CanvasHistoryOptions = {}) => {
+    if (canvasState.isDrawingPath) {
+      canvasActions.endPathStroke();
+    }
     if (canvasState.canvasHistoryIndex > 0) {
+      const preservePenMode = options.preservePenMode === true;
       canvasState.canvasHistoryIndex--;
       const historyEntry =
         canvasState.canvasHistory[canvasState.canvasHistoryIndex];
@@ -931,13 +1443,20 @@ export const canvasActions = {
       mergeToGroups(historyEntry.canvasGroups);
       canvasState.activeCanvasGroupId = null;
       canvasState.activeCanvasGroupColorPickerId = null;
-      canvasActions.clearSelectionState();
+      syncActivePathAfterHistoryRestore(preservePenMode);
+      if (!preservePenMode) {
+        canvasActions.clearSelectionState();
+      }
       persistCanvasScene();
     }
   },
 
-  redoCanvas: () => {
+  redoCanvas: (options: CanvasHistoryOptions = {}) => {
+    if (canvasState.isDrawingPath) {
+      canvasActions.endPathStroke();
+    }
     if (canvasState.canvasHistoryIndex < canvasState.canvasHistory.length - 1) {
+      const preservePenMode = options.preservePenMode === true;
       canvasState.canvasHistoryIndex++;
       const historyEntry =
         canvasState.canvasHistory[canvasState.canvasHistoryIndex];
@@ -945,7 +1464,10 @@ export const canvasActions = {
       mergeToGroups(historyEntry.canvasGroups);
       canvasState.activeCanvasGroupId = null;
       canvasState.activeCanvasGroupColorPickerId = null;
-      canvasActions.clearSelectionState();
+      syncActivePathAfterHistoryRestore(preservePenMode);
+      if (!preservePenMode) {
+        canvasActions.clearSelectionState();
+      }
       persistCanvasScene();
     }
   },
@@ -960,6 +1482,220 @@ export const canvasActions = {
       start: null,
       current: null,
     };
+  },
+
+  setPenMode: (enabled: boolean) => {
+    if (enabled) {
+      if (canvasState.isPenMode) return;
+      canvasActions.clearSelectionState();
+      canvasState.activeCanvasGroupId = null;
+      canvasState.activeCanvasGroupColorPickerId = null;
+      canvasState.isPenMode = true;
+      canvasState.isDrawingPath = false;
+      canvasState.activePathItemId = null;
+      canvasState.penTool = "draw";
+      canvasState.isPenEraseOverride = false;
+      return;
+    }
+
+    const activeId = canvasState.activePathItemId;
+    canvasState.isPenMode = false;
+    canvasState.isDrawingPath = false;
+    canvasState.activePathItemId = null;
+    canvasState.isPenEraseOverride = false;
+
+    if (!activeId) return;
+    const item = canvasState.canvasItems.find(
+      (entry): entry is CanvasPath =>
+        entry.itemId === activeId && entry.type === "path",
+    );
+
+    if (!item || getCanvasPathPointCount(item) === 0) {
+      mergeToItems(
+        canvasState.canvasItems.filter((entry) => entry.itemId !== activeId),
+      );
+      return;
+    }
+
+    canvasState.canvasItems.forEach((entry) => {
+      entry.isSelected = entry.itemId === activeId;
+    });
+    canvasState.primaryId = activeId;
+    canvasState.multiSelectUnion = null;
+    canvasActions.attachItemsToGroupAtPoint([activeId], { x: item.x, y: item.y });
+    canvasActions.commitCanvasChange();
+  },
+
+  togglePenMode: () => {
+    canvasActions.setPenMode(!canvasState.isPenMode);
+  },
+
+  setPenTool: (tool: "draw" | "erase") => {
+    canvasState.penTool = tool;
+    canvasState.isPenEraseOverride = false;
+    if (tool === "erase") {
+      canvasActions.endPathStroke();
+    }
+  },
+
+  setPenEraseOverride: (enabled: boolean) => {
+    if (!canvasState.isPenMode) {
+      canvasState.isPenEraseOverride = false;
+      return;
+    }
+    canvasState.isPenEraseOverride = enabled;
+    if (enabled) {
+      canvasActions.endPathStroke();
+    }
+  },
+
+  setPenStrokeColor: (color: string) => {
+    const next = normalizeCanvasPathColor(color);
+    canvasState.penStrokeColor = next;
+    canvasState.penTool = "draw";
+    canvasState.isPenEraseOverride = false;
+    void settingStorage.set("penStrokeColor", next);
+  },
+
+  setPenColorSlot: (index: number, color: string) => {
+    if (!Number.isInteger(index)) return;
+    if (index < 0 || index >= DEFAULT_CANVAS_PATH_COLOR_SLOTS.length) return;
+    const nextColor = normalizeCanvasPathColor(color);
+    const nextSlots = [...canvasState.penColorSlots];
+    nextSlots[index] = nextColor;
+    canvasState.penColorSlots = nextSlots;
+    canvasState.penStrokeColor = nextColor;
+    canvasState.penTool = "draw";
+    canvasState.isPenEraseOverride = false;
+    void settingStorage.set("penColorSlots", nextSlots);
+    void settingStorage.set("penStrokeColor", nextColor);
+  },
+
+  setPenStrokeWidth: (width: number) => {
+    const next = clampCanvasPathStrokeWidth(width);
+    canvasState.penStrokeWidth = next;
+    canvasState.penTool = "draw";
+    canvasState.isPenEraseOverride = false;
+    void settingStorage.set("penStrokeWidth", next);
+  },
+
+  beginPathStroke: (point: CanvasPoint) => {
+    if (!canvasState.isPenMode) return null;
+    canvasState.isDrawingPath = true;
+
+    let item = canvasState.canvasItems.find(
+      (entry): entry is CanvasPath =>
+        entry.itemId === canvasState.activePathItemId &&
+        entry.type === "path",
+    );
+
+    if (!item) {
+      const strokeWidth = canvasState.penStrokeWidth;
+      item = {
+        type: "path",
+        itemId: `path_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        x: point.x,
+        y: point.y,
+        rotation: 0,
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0,
+        width: strokeWidth,
+        height: strokeWidth,
+        strokes: [],
+        stroke: canvasState.penStrokeColor,
+        strokeWidth,
+        isSelected: true,
+      };
+      canvasState.canvasItems.push(item);
+      canvasState.activePathItemId = item.itemId;
+    }
+
+    const localPoint = getCanvasPathLocalPoint(item, point);
+    item.stroke = canvasState.penStrokeColor;
+    item.strokeWidth = Math.max(item.strokeWidth, canvasState.penStrokeWidth);
+    item.strokes.push({
+      path: getMoveCommand(localPoint),
+      pointCount: 1,
+      lastPoint: localPoint,
+      points: [localPoint],
+      stroke: canvasState.penStrokeColor,
+      strokeWidth: canvasState.penStrokeWidth,
+    });
+    expandCanvasPathBounds(item, point, canvasState.penStrokeWidth);
+
+    canvasState.canvasItems.forEach((entry) => {
+      entry.isSelected = entry.itemId === item.itemId;
+    });
+    canvasState.primaryId = item.itemId;
+    canvasState.multiSelectUnion = null;
+    return item.itemId;
+  },
+
+  appendPathPoint: (point: CanvasPoint) => {
+    if (!canvasState.isDrawingPath || !canvasState.activePathItemId) return;
+    const item = canvasState.canvasItems.find(
+      (entry): entry is CanvasPath =>
+        entry.itemId === canvasState.activePathItemId &&
+        entry.type === "path",
+    );
+    if (!item) return;
+
+    const stroke = item.strokes[item.strokes.length - 1];
+    if (!stroke) return;
+
+    const localPoint = getCanvasPathLocalPoint(item, point);
+    const scale = canvasState.canvasViewport.scale || 1;
+    const minDistance = Math.max(0.5 / scale, item.strokeWidth * 0.2);
+    const distance = Math.hypot(
+      localPoint.x - stroke.lastPoint.x,
+      localPoint.y - stroke.lastPoint.y,
+    );
+    if (distance < minDistance) return;
+
+    stroke.path = `${stroke.path} ${getLineCommand(localPoint)}`;
+    stroke.pointCount += 1;
+    stroke.lastPoint = localPoint;
+    stroke.points.push(localPoint);
+    expandCanvasPathBounds(item, point, stroke.strokeWidth);
+  },
+
+  endPathStroke: () => {
+    if (canvasState.isDrawingPath && canvasState.activePathItemId) {
+      canvasActions.commitCanvasChange();
+    }
+    canvasState.isDrawingPath = false;
+  },
+
+  erasePathStrokeAtPoint: (point: CanvasPoint) => {
+    return eraseCanvasPathStrokes((item) => {
+      const localPoint = getPathPointFromWorld(item, point);
+      const itemScale = Math.max(0.01, Math.abs(item.scale || 1));
+      return (stroke) =>
+        isStrokeHitByPoint(
+          stroke,
+          localPoint,
+          stroke.strokeWidth / 2 + canvasState.penStrokeWidth / (2 * itemScale),
+        );
+    });
+  },
+
+  erasePathStrokeAtSegment: (start: CanvasPoint, end: CanvasPoint) => {
+    return eraseCanvasPathStrokes((item) => {
+      const localStart = getPathPointFromWorld(item, start);
+      const localEnd = getPathPointFromWorld(item, end);
+      const itemScale = Math.max(0.01, Math.abs(item.scale || 1));
+      return (stroke) => {
+        const tolerance =
+          stroke.strokeWidth / 2 + canvasState.penStrokeWidth / (2 * itemScale);
+        return isStrokeHitBySegment(stroke, localStart, localEnd, tolerance);
+      };
+    });
+  },
+
+  commitPathErase: () => {
+    cleanupCanvasGroups(canvasState.canvasItems);
+    canvasActions.commitCanvasChange();
   },
 
   setActiveCanvasGroup: (groupId: string | null) => {
@@ -1475,7 +2211,7 @@ export const canvasActions = {
   removeImageFromCanvas: (imageId: string) => {
     const prevLen = canvasState.canvasItems.length;
     const nextItems = canvasState.canvasItems.filter((img) => {
-      if (img.type === "text") return true;
+      if (img.type !== "image") return true;
       return img.id !== imageId;
     });
     mergeToItems(nextItems);
@@ -1544,6 +2280,7 @@ export const canvasActions = {
       return;
     }
 
+    resetPathDrawingState();
     mergeToItems([]);
     mergeToGroups([]);
     canvasState.activeCanvasGroupId = null;

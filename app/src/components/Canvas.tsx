@@ -7,6 +7,7 @@ import {
   getRenderBbox,
   type CanvasItem,
   type CanvasImage as CanvasImageState,
+  type CanvasPath as CanvasPathState,
   type CanvasText as CanvasTextState,
   type ImageMeta,
 } from "../store/canvasStore";
@@ -18,6 +19,7 @@ import { ConfirmModal } from "./ConfirmModal";
 import { Minimap } from "./canvas/Minimap";
 import { CanvasText } from "./canvas/CanvasText";
 import { CanvasImage } from "./canvas/CanvasImage";
+import { CanvasPath } from "./canvas/CanvasPath";
 import { CanvasToolbar } from "./canvas/CanvasToolbar";
 import { CanvasGroupsLayer } from "./canvas/CanvasGroupsLayer";
 import { SelectOverlay } from "./canvas/SelectOverlay";
@@ -114,6 +116,20 @@ const CanvasItemRenderer = React.memo(
         />
       );
     }
+
+    if (itemSnap.type === "path") {
+      return (
+        <CanvasPath
+          item={itemState as CanvasPathState}
+          onDragStart={(pos) => onDragStart(itemId, pos)}
+          onDragMove={(delta) => onDragMove(itemId, delta)}
+          onDragEnd={(delta) => onDragEnd(itemId, delta)}
+          onSelect={(e) => onSelect(itemId, e)}
+          onContain={() => onContainItem(itemId)}
+        />
+      );
+    }
+
     const image = itemState as CanvasImageState;
 
     return (
@@ -178,6 +194,12 @@ export const Canvas: React.FC = () => {
     canvasFilters,
     showMinimap,
     isCanvasToolbarExpanded,
+    isPenMode,
+    penTool,
+    isPenEraseOverride,
+    penStrokeColor,
+    penStrokeWidth,
+    penColorSlots,
     contextMenu,
     activeCanvasGroupId,
     activeCanvasGroupColorPickerId,
@@ -190,8 +212,16 @@ export const Canvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const stageScale = canvasViewport.scale || 1;
+  const penCursor = isPenMode
+    ? penTool === "erase" || isPenEraseOverride
+      ? "cell"
+      : "crosshair"
+    : undefined;
 
   const isPanningRef = useRef(false);
+  const isErasingPathRef = useRef(false);
+  const pathEraseChangedRef = useRef(false);
+  const lastErasePointRef = useRef<{ x: number; y: number } | null>(null);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
   const selectionAppendRef = useRef(false);
   const multiDragRef = useRef<{
@@ -209,7 +239,7 @@ export const Canvas: React.FC = () => {
     snapshots: Map<
       string,
       {
-        type: "image" | "text";
+        type: CanvasItem["type"];
         x: number;
         y: number;
         scale: number;
@@ -233,6 +263,30 @@ export const Canvas: React.FC = () => {
     groupId: null,
     snapshots: new Map(),
   });
+
+  const getActivePenTool = useMemoizedFn(() => {
+    if (canvasState.isPenEraseOverride) return "erase";
+    return canvasState.penTool;
+  });
+
+  const getCanvasIdleCursor = useMemoizedFn(() => {
+    if (!canvasState.isPenMode) return "default";
+    return getActivePenTool() === "erase" ? "cell" : "crosshair";
+  });
+
+  useEffect(() => {
+    if (
+      canvasState.isSpaceDown ||
+      isPanningRef.current ||
+      isErasingPathRef.current
+    ) {
+      return;
+    }
+    const svg = svgRef.current;
+    if (svg) {
+      svg.style.cursor = getCanvasIdleCursor();
+    }
+  }, [getCanvasIdleCursor, isPenEraseOverride, isPenMode, penTool]);
 
   const setPrimaryId = useMemoizedFn((id: string | null) => {
     canvasState.primaryId = id;
@@ -801,6 +855,16 @@ export const Canvas: React.FC = () => {
       ) {
         return;
       }
+      if (
+        canvasState.isPenMode &&
+        (e.key === "Meta" || e.key === "Control")
+      ) {
+        canvasActions.setPenEraseOverride(true);
+        const svg = svgRef.current;
+        if (svg && !isPanningRef.current) {
+          svg.style.cursor = getCanvasIdleCursor();
+        }
+      }
       if (e.code === "Space") {
         e.preventDefault();
         if (canvasState.isSpaceDown) return;
@@ -813,6 +877,13 @@ export const Canvas: React.FC = () => {
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") {
+        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
+        const svg = svgRef.current;
+        if (svg && !isPanningRef.current && !isErasingPathRef.current) {
+          svg.style.cursor = getCanvasIdleCursor();
+        }
+      }
       if (e.code === "Space") {
         e.preventDefault();
         const wasActive = canvasState.isSpaceDown;
@@ -831,7 +902,7 @@ export const Canvas: React.FC = () => {
         }
         const svg = svgRef.current;
         if (svg && !isPanningRef.current) {
-          svg.style.cursor = "default";
+          svg.style.cursor = getCanvasIdleCursor();
         }
       }
     };
@@ -840,8 +911,14 @@ export const Canvas: React.FC = () => {
       isSpaceContainBlockedRef.current = false;
       isPanningRef.current = false;
       lastPanPointRef.current = null;
+      canvasActions.setPenEraseOverride(false);
+      if (canvasState.isDrawingPath) {
+        canvasActions.endPathStroke();
+      }
       const svg = svgRef.current;
-      if (svg) svg.style.cursor = "default";
+      if (svg) {
+        svg.style.cursor = getCanvasIdleCursor();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -854,6 +931,7 @@ export const Canvas: React.FC = () => {
   }, [
     closeContextMenu,
     containCanvasItems,
+    getCanvasIdleCursor,
     getContainLayoutTargetItems,
     handleContainItem,
     handleZoomToFit,
@@ -897,6 +975,139 @@ export const Canvas: React.FC = () => {
     },
   );
 
+  const appendPathPointFromClient = useMemoizedFn(
+    (client: { clientX: number; clientY: number }) => {
+      const local = getLocalPointFromClient(client.clientX, client.clientY);
+      if (!local) return;
+      canvasActions.appendPathPoint(localToWorldPoint(local));
+    },
+  );
+
+  const finishPathDrawing = useMemoizedFn(
+    (client?: { clientX: number; clientY: number }) => {
+      if (!canvasState.isDrawingPath) return;
+      if (client) {
+        appendPathPointFromClient(client);
+      }
+      canvasActions.endPathStroke();
+      const svg = svgRef.current;
+      if (svg) {
+        svg.style.cursor = getCanvasIdleCursor();
+      }
+    },
+  );
+
+  const erasePathStrokeFromClient = useMemoizedFn(
+    (client: { clientX: number; clientY: number }) => {
+      const local = getLocalPointFromClient(client.clientX, client.clientY);
+      if (!local) return;
+      const worldPoint = localToWorldPoint(local);
+      const previousPoint = lastErasePointRef.current;
+      const didErase = previousPoint
+        ? canvasActions.erasePathStrokeAtSegment(previousPoint, worldPoint)
+        : canvasActions.erasePathStrokeAtPoint(worldPoint);
+      lastErasePointRef.current = worldPoint;
+      if (didErase) {
+        pathEraseChangedRef.current = true;
+      }
+    },
+  );
+
+  const finishPathErase = useMemoizedFn(() => {
+    if (!isErasingPathRef.current) return;
+    isErasingPathRef.current = false;
+    lastErasePointRef.current = null;
+    if (pathEraseChangedRef.current) {
+      canvasActions.commitPathErase();
+      pathEraseChangedRef.current = false;
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    }
+  });
+
+  const handlePointerDown = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (!canvasState.isPenMode) return;
+      if (canvasState.isSpaceDown) return;
+      if (e.button !== 0) return;
+
+      e.preventDefault();
+      closeContextMenu();
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      if (!local) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+
+      if (getActivePenTool() === "erase") {
+        isErasingPathRef.current = true;
+        pathEraseChangedRef.current = false;
+        lastErasePointRef.current = null;
+        erasePathStrokeFromClient(e);
+        const svg = svgRef.current;
+        if (svg) svg.style.cursor = "cell";
+        return;
+      }
+
+      canvasActions.beginPathStroke(localToWorldPoint(local));
+      const svg = svgRef.current;
+      if (svg) svg.style.cursor = "crosshair";
+    },
+  );
+
+  const handlePointerMove = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        erasePathStrokeFromClient(e);
+        return;
+      }
+      if (!canvasState.isDrawingPath) return;
+      e.preventDefault();
+      appendPathPointFromClient(e);
+    },
+  );
+
+  const handlePointerUp = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        erasePathStrokeFromClient(e);
+        finishPathErase();
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        const svg = svgRef.current;
+        if (svg) {
+          svg.style.cursor = getCanvasIdleCursor();
+        }
+        return;
+      }
+      if (!canvasState.isDrawingPath) return;
+      e.preventDefault();
+      finishPathDrawing(e);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    },
+  );
+
+  const handlePointerCancel = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        finishPathErase();
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        return;
+      }
+      if (!canvasState.isDrawingPath) return;
+      e.preventDefault();
+      finishPathDrawing();
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    },
+  );
+
   const handleMouseDown = useMemoizedFn(
     (e: React.MouseEvent<SVGSVGElement>) => {
       closeContextMenu();
@@ -915,6 +1126,10 @@ export const Canvas: React.FC = () => {
         lastPanPointRef.current = { x: e.clientX, y: e.clientY };
         const svg = svgRef.current;
         if (svg) svg.style.cursor = "grabbing";
+        return;
+      }
+
+      if (canvasState.isPenMode) {
         return;
       }
 
@@ -1069,11 +1284,11 @@ export const Canvas: React.FC = () => {
       };
       setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
       const svg = svgRef.current;
-      if (svg) svg.style.cursor = "default";
+      if (svg) svg.style.cursor = getCanvasIdleCursor();
       return;
     }
     const svg = svgRef.current;
-    if (svg) svg.style.cursor = "default";
+    if (svg) svg.style.cursor = getCanvasIdleCursor();
 
     isPanningRef.current = false;
     lastPanPointRef.current = null;
@@ -1143,7 +1358,7 @@ export const Canvas: React.FC = () => {
   });
 
   useEffect(() => {
-    const handleWindowMouseUp = () => {
+    const handleWindowMouseUp = (event: MouseEvent | TouchEvent) => {
       if (multiScaleRef.current.active) {
         const current = multiScaleRef.current;
         const scale = current.scale || 1;
@@ -1181,6 +1396,16 @@ export const Canvas: React.FC = () => {
         };
         setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
       }
+      if (canvasState.isDrawingPath) {
+        if (event instanceof MouseEvent) {
+          finishPathDrawing(event);
+        } else {
+          finishPathDrawing();
+        }
+      }
+      if (isErasingPathRef.current) {
+        finishPathErase();
+      }
       if (canvasState.selectionBox.start || canvasState.selectionBox.current) {
         canvasState.selectionBox = { start: null, current: null };
       }
@@ -1188,7 +1413,7 @@ export const Canvas: React.FC = () => {
       lastPanPointRef.current = null;
       const svg = svgRef.current;
       if (svg) {
-        svg.style.cursor = "default";
+        svg.style.cursor = getCanvasIdleCursor();
       }
     };
     window.addEventListener("mouseup", handleWindowMouseUp);
@@ -1197,7 +1422,14 @@ export const Canvas: React.FC = () => {
       window.removeEventListener("mouseup", handleWindowMouseUp);
       window.removeEventListener("touchend", handleWindowMouseUp);
     };
-  }, [computeMultiSelectUnion, getSelectedIds, setMultiSelectUnion]);
+  }, [
+    computeMultiSelectUnion,
+    finishPathErase,
+    finishPathDrawing,
+    getCanvasIdleCursor,
+    getSelectedIds,
+    setMultiSelectUnion,
+  ]);
 
   const handleAutoLayout = useMemoizedFn(() => {
     const targetItems = getContainLayoutTargetItems();
@@ -1244,7 +1476,7 @@ export const Canvas: React.FC = () => {
 
     let hasChanges = false;
     selectedItems.forEach((item) => {
-      if (item.type !== "text") {
+      if (item.type === "image") {
         const currentFlipX = item.flipX === true;
         canvasActions.updateCanvasImageSilent(item.itemId, {
           flipX: !currentFlipX,
@@ -1267,7 +1499,7 @@ export const Canvas: React.FC = () => {
 
     let hasChanges = false;
     selectedItems.forEach((item) => {
-      if (item.type !== "text") {
+      if (item.type === "image") {
         const currentFlipY = item.flipY === true;
         canvasActions.updateCanvasImageSilent(item.itemId, {
           flipY: !currentFlipY,
@@ -1350,7 +1582,7 @@ export const Canvas: React.FC = () => {
       const snapshots = new Map<
         string,
         {
-          type: "image" | "text";
+          type: CanvasItem["type"];
           x: number;
           y: number;
           scale: number;
@@ -1373,12 +1605,11 @@ export const Canvas: React.FC = () => {
           });
           return;
         }
-        const img = target as CanvasImageState;
         snapshots.set(selectedId, {
-          type: "image",
-          x: img.x,
-          y: img.y,
-          scale: img.scale || 1,
+          type: target.type,
+          x: target.x,
+          y: target.y,
+          scale: target.scale || 1,
         });
       });
       if (snapshots.size === 0) return;
@@ -1476,7 +1707,7 @@ export const Canvas: React.FC = () => {
 
   const handleFlipItem = useMemoizedFn((id: string) => {
     const target = canvasState.canvasItems.find((item) => item.itemId === id);
-    if (!target || target.type === "text") return;
+    if (!target || target.type !== "image") return;
     const currentFlipX = target.flipX === true;
     canvasActions.updateCanvasImage(id, {
       flipX: !currentFlipX,
@@ -1485,7 +1716,7 @@ export const Canvas: React.FC = () => {
 
   const handleFlipYItem = useMemoizedFn((id: string) => {
     const target = canvasState.canvasItems.find((item) => item.itemId === id);
-    if (!target || target.type === "text") return;
+    if (!target || target.type !== "image") return;
     const currentFlipY = target.flipY === true;
     canvasActions.updateCanvasImage(id, {
       flipY: !currentFlipY,
@@ -1770,10 +2001,25 @@ export const Canvas: React.FC = () => {
         canvasFilters={canvasFilters}
         showMinimap={showMinimap}
         isExpanded={isCanvasToolbarExpanded}
+        isPenMode={isPenMode}
+        penTool={penTool}
+        penStrokeColor={penStrokeColor}
+        penStrokeWidth={penStrokeWidth}
+        penColorSlots={penColorSlots}
         onFiltersChange={(filters) => canvasActions.setCanvasFilters(filters)}
+        onTogglePenMode={() => canvasActions.togglePenMode()}
+        onPenToolChange={(tool) => canvasActions.setPenTool(tool)}
+        onPenStrokeColorChange={(color) =>
+          canvasActions.setPenStrokeColor(color)
+        }
+        onPenColorSlotChange={(index, color) =>
+          canvasActions.setPenColorSlot(index, color)
+        }
+        onPenStrokeWidthChange={(width) =>
+          canvasActions.setPenStrokeWidth(width)
+        }
         onToggleMinimap={() => canvasActions.toggleMinimap()}
         onAutoLayout={handleAutoLayout}
-        onRequestClear={() => setIsClearModalOpen(true)}
       />
 
       {contextMenu.visible && !shouldEnableMouseThrough && (
@@ -1860,6 +2106,11 @@ export const Canvas: React.FC = () => {
         ref={svgRef}
         width={dimensions.width}
         height={dimensions.height}
+        style={{ cursor: penCursor }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -1890,6 +2141,7 @@ export const Canvas: React.FC = () => {
             colorSwatches={appSnap.colorSwatches}
             activeGroupId={activeCanvasGroupId}
             activeColorPickerGroupId={activeCanvasGroupColorPickerId}
+            isPenMode={isPenMode}
             onGroupSelect={handleGroupSelect}
             onGroupDragStart={handleGroupDragStart}
             onGroupDragMove={handleGroupDragMove}
@@ -1932,6 +2184,7 @@ export const Canvas: React.FC = () => {
             colorSwatches={appSnap.colorSwatches}
             activeGroupId={activeCanvasGroupId}
             activeColorPickerGroupId={activeCanvasGroupColorPickerId}
+            isPenMode={isPenMode}
             onGroupSelect={handleGroupSelect}
             onGroupDragStart={handleGroupDragStart}
             onGroupDragMove={handleGroupDragMove}
@@ -1943,7 +2196,7 @@ export const Canvas: React.FC = () => {
             onGroupContain={handleCanvasGroupContain}
             renderMode="controls"
           />
-          {!shouldEnableMouseThrough && (
+          {!shouldEnableMouseThrough && !isPenMode && (
             <SelectionRect
               selectionBox={selectionBox}
               stageScale={stageScale}

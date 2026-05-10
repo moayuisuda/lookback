@@ -93,6 +93,8 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   // In ghost mode (mouse through), we should not show the selection overlay
   if (globalSnap.mouseThrough) return null;
 
+  if (canvasSnap.isPenMode) return null;
+
   if (isSelectionBoxActive) return null;
 
   const collapsedItemIds = new Set<string>();
@@ -147,7 +149,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             onCommitItem(item.itemId, { rotation: 0 });
           }}
         />
-        {item.type !== "text" && (
+        {item.type === "image" && (
           <CanvasControlButton
             x={singleUnion.x}
             y={singleUnion.y}
@@ -166,7 +168,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             }}
           />
         )}
-        {item.type !== "text" && (
+        {item.type === "image" && (
           <CanvasControlButton
             x={singleUnion.x}
             y={singleUnion.y + singleUnion.height}
@@ -223,6 +225,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
 
   const union = getItemsUnion(selectedItems);
   if (!union) return null;
+  const hasImageSelection = selectedItems.some((item) => item.type === "image");
 
   return (
     <>
@@ -238,40 +241,44 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         fill="none"
         pointerEvents="none"
       />
-      <CanvasControlButton
-        x={union.x}
-        y={union.y}
-        scale={btnScale}
-        size={24}
-        fill={THEME.primary}
-        stroke="white"
-        strokeWidth={2}
-        iconPath={CANVAS_ICONS.FLIP.PATH}
-        iconScale={CANVAS_ICONS.FLIP.SCALE}
-        iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
-        iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
-        onClick={(e) => {
-          e.stopPropagation();
-          onFlipSelection();
-        }}
-      />
-      <CanvasControlButton
-        x={union.x}
-        y={union.y + union.height}
-        scale={btnScale}
-        size={24}
-        fill={THEME.primary}
-        stroke="white"
-        strokeWidth={2}
-        iconPath={CANVAS_ICONS.FLIP_Y.PATH}
-        iconScale={CANVAS_ICONS.FLIP_Y.SCALE}
-        iconOffsetX={CANVAS_ICONS.FLIP_Y.OFFSET_X}
-        iconOffsetY={CANVAS_ICONS.FLIP_Y.OFFSET_Y}
-        onClick={(e) => {
-          e.stopPropagation();
-          onFlipYSelection();
-        }}
-      />
+      {hasImageSelection && (
+        <CanvasControlButton
+          x={union.x}
+          y={union.y}
+          scale={btnScale}
+          size={24}
+          fill={THEME.primary}
+          stroke="white"
+          strokeWidth={2}
+          iconPath={CANVAS_ICONS.FLIP.PATH}
+          iconScale={CANVAS_ICONS.FLIP.SCALE}
+          iconOffsetX={CANVAS_ICONS.FLIP.OFFSET_X}
+          iconOffsetY={CANVAS_ICONS.FLIP.OFFSET_Y}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFlipSelection();
+          }}
+        />
+      )}
+      {hasImageSelection && (
+        <CanvasControlButton
+          x={union.x}
+          y={union.y + union.height}
+          scale={btnScale}
+          size={24}
+          fill={THEME.primary}
+          stroke="white"
+          strokeWidth={2}
+          iconPath={CANVAS_ICONS.FLIP_Y.PATH}
+          iconScale={CANVAS_ICONS.FLIP_Y.SCALE}
+          iconOffsetX={CANVAS_ICONS.FLIP_Y.OFFSET_X}
+          iconOffsetY={CANVAS_ICONS.FLIP_Y.OFFSET_Y}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFlipYSelection();
+          }}
+        />
+      )}
       <CanvasControlButton
         x={union.x + union.width}
         y={union.y}

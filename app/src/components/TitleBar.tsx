@@ -324,6 +324,10 @@ export const TitleBar: React.FC = () => {
     await globalActions.setCanvasGroupShortcut(accelerator);
   };
 
+  const handleSetCanvasPenShortcut = async (accelerator: string) => {
+    await globalActions.setCanvasPenShortcut(accelerator);
+  };
+
   const handleSetZoomToFitShortcut = async (accelerator: string) => {
     await globalActions.setZoomToFitShortcut(accelerator);
   };
@@ -1067,6 +1071,18 @@ export const TitleBar: React.FC = () => {
                     value={snap.canvasGroupShortcut}
                     onChange={(accel) =>
                       void handleSetCanvasGroupShortcut(accel)
+                    }
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.canvasPen")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.canvasPenShortcut}
+                    onChange={(accel) =>
+                      void handleSetCanvasPenShortcut(accel)
                     }
                     onInvalid={handleShortcutInvalid}
                   />

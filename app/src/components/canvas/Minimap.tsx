@@ -3,7 +3,6 @@ import { useSnapshot } from "valtio";
 import {
   canvasState,
   canvasActions,
-  type CanvasImage,
 } from "../../store/canvasStore";
 import { THEME } from "../../theme";
 
@@ -112,34 +111,35 @@ export const Minimap: React.FC = () => {
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      {(canvasSnap.canvasItems || [])
-        .filter((item): item is CanvasImage => item.type === "image")
-        .map((item) => {
-          const scale = item.scale || 1;
-          const w = (item.width || 0) * scale;
-          const h = (item.height || 0) * scale;
+      {(canvasSnap.canvasItems || []).map((item) => {
+        const scale = item.scale || 1;
+        const w = (item.width || 0) * scale;
+        const h = (item.height || 0) * scale;
 
-          const dominantColor =
-            typeof item.dominantColor === "string" &&
-            item.dominantColor.trim().length > 0
-              ? item.dominantColor
+        const itemColor =
+          item.type === "image" &&
+          typeof item.dominantColor === "string" &&
+          item.dominantColor.trim().length > 0
+            ? item.dominantColor
+            : item.type === "path"
+              ? item.stroke
               : "#6b7280";
 
-          return (
-            <div
-              key={item.itemId}
-              className="absolute"
-              style={{
-                left: toMapX(item.x - w / 2),
-                top: toMapY(item.y - h / 2),
-                width: Math.max(2, w * mapScale),
-                height: Math.max(2, h * mapScale),
-                backgroundColor: dominantColor,
-                borderRadius: 1,
-              }}
-            />
-          );
-        })}
+        return (
+          <div
+            key={item.itemId}
+            className="absolute"
+            style={{
+              left: toMapX(item.x - w / 2),
+              top: toMapY(item.y - h / 2),
+              width: Math.max(2, w * mapScale),
+              height: Math.max(2, h * mapScale),
+              backgroundColor: itemColor,
+              borderRadius: 1,
+            }}
+          />
+        );
+      })}
 
       {/* Viewport Rect */}
       <div

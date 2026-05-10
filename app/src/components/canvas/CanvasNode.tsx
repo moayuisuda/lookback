@@ -51,6 +51,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   } | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent<SVGGElement>) => {
+    if (canvasState.isPenMode) return;
+
     if (e.button === 2) {
       if (onSelect) {
         onSelect(e);
