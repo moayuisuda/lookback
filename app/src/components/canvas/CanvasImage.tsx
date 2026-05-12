@@ -103,6 +103,7 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
         <image
           className="image-node"
           href={imageUrl}
+          onDragStart={(e) => e.preventDefault()}
           x={-baseWidth / 2}
           y={-baseHeight / 2}
           width={baseWidth}

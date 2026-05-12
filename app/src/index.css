@@ -33,6 +33,11 @@ input[type="color"]::-webkit-color-swatch {
   -webkit-app-region: no-drag;
 }
 
+.image-node {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
 html, body, #root {
   background-color: transparent;
 }
