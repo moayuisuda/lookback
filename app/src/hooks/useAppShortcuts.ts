@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useSnapshot } from "valtio";
 import { useHotkeys } from "react-hotkeys-hook";
 import { globalState, globalActions } from "../store/globalStore";
 import {
   acceleratorToHotkey,
+  isAcceleratorMainKeyEvent,
   isAcceleratorMatch,
   parseAccelerator,
 } from "../utils/hotkeys";
@@ -13,16 +14,39 @@ import { getCommandContext } from "../commands";
 
 import { canvasActions, canvasState } from "../store/canvasStore";
 
+const PEN_ERASE_HOLD_THRESHOLD_MS = 300;
+
+type PenTool = "draw" | "erase";
+
+type PenEraseKeySession = {
+  startedAt: number;
+  previousTool: PenTool;
+  accelerator: string;
+};
+
+const isEditableShortcutTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable
+  );
+};
+
 export const useAppShortcuts = () => {
   const snap = useSnapshot(globalState);
   const commandSnap = useSnapshot(commandState);
+  const canvasSnap = useSnapshot(canvasState);
+  const penEraseKeySessionRef = useRef<PenEraseKeySession | null>(null);
   const isCommandPaletteOpen = commandSnap.isOpen;
   const externalCommands = commandSnap.externalCommands;
   const externalCommandShortcuts = commandSnap.externalCommandShortcuts;
+  const isPenMode = canvasSnap.isPenMode;
 
   const canvasAutoLayoutHotkey = acceleratorToHotkey(snap.canvasAutoLayoutShortcut);
   const canvasGroupHotkey = acceleratorToHotkey(snap.canvasGroupShortcut);
   const canvasPenHotkey = acceleratorToHotkey(snap.canvasPenShortcut);
+  const canvasPenEraseShortcut = snap.canvasPenEraseShortcut.trim();
   const zoomToFitHotkey = acceleratorToHotkey(snap.zoomToFitShortcut);
   const commandPaletteShortcut = snap.commandPaletteShortcut;
 
@@ -66,6 +90,76 @@ export const useAppShortcuts = () => {
     [zoomToFitHotkey],
   );
 
+  // Tap toggles eraser; holding the shortcut makes eraser momentary.
+  useEffect(() => {
+    const finishPenEraseKeySession = (restorePreviousTool: boolean) => {
+      const session = penEraseKeySessionRef.current;
+      if (!session) return;
+      penEraseKeySessionRef.current = null;
+      if (!canvasState.isPenMode) return;
+
+      if (restorePreviousTool) {
+        canvasActions.setPenTool(session.previousTool);
+        return;
+      }
+
+      if (session.previousTool === "erase") {
+        canvasActions.setPenTool("draw");
+      }
+    };
+
+    if (!canvasPenEraseShortcut || !isPenMode || isCommandPaletteOpen) {
+      finishPenEraseKeySession(true);
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || isEditableShortcutTarget(e.target)) return;
+      if (!isAcceleratorMatch(e, canvasPenEraseShortcut)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (penEraseKeySessionRef.current) return;
+
+      const previousTool = canvasState.penTool;
+      penEraseKeySessionRef.current = {
+        startedAt: Date.now(),
+        previousTool,
+        accelerator: canvasPenEraseShortcut,
+      };
+
+      if (previousTool !== "erase") {
+        canvasActions.setPenTool("erase");
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const session = penEraseKeySessionRef.current;
+      if (!session) return;
+      if (!isAcceleratorMainKeyEvent(e, session.accelerator)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      const isHold =
+        Date.now() - session.startedAt >= PEN_ERASE_HOLD_THRESHOLD_MS;
+      finishPenEraseKeySession(isHold);
+    };
+
+    const handleBlur = () => {
+      finishPenEraseKeySession(true);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("blur", handleBlur);
+      finishPenEraseKeySession(true);
+    };
+  }, [canvasPenEraseShortcut, isCommandPaletteOpen, isPenMode]);
+
   // Canvas Undo / Redo
   useHotkeys(
     "mod+z",
@@ -73,9 +167,6 @@ export const useAppShortcuts = () => {
       e.preventDefault();
       const preservePenMode = canvasState.isPenMode;
       canvasActions.undoCanvas({ preservePenMode });
-      if (preservePenMode) {
-        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
-      }
       if (!preservePenMode) {
         canvasActions.clearSelectionState();
       }
@@ -89,9 +180,6 @@ export const useAppShortcuts = () => {
       e.preventDefault();
       const preservePenMode = canvasState.isPenMode;
       canvasActions.redoCanvas({ preservePenMode });
-      if (preservePenMode) {
-        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
-      }
       if (!preservePenMode) {
         canvasActions.clearSelectionState();
       }

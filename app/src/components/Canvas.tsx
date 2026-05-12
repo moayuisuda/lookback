@@ -196,7 +196,6 @@ export const Canvas: React.FC = () => {
     isCanvasToolbarExpanded,
     isPenMode,
     penTool,
-    isPenEraseOverride,
     penStrokeColor,
     penStrokeWidth,
     penColorSlots,
@@ -213,7 +212,7 @@ export const Canvas: React.FC = () => {
 
   const stageScale = canvasViewport.scale || 1;
   const penCursor = isPenMode
-    ? penTool === "erase" || isPenEraseOverride
+    ? penTool === "erase"
       ? "cell"
       : "crosshair"
     : undefined;
@@ -264,14 +263,9 @@ export const Canvas: React.FC = () => {
     snapshots: new Map(),
   });
 
-  const getActivePenTool = useMemoizedFn(() => {
-    if (canvasState.isPenEraseOverride) return "erase";
-    return canvasState.penTool;
-  });
-
   const getCanvasIdleCursor = useMemoizedFn(() => {
     if (!canvasState.isPenMode) return "default";
-    return getActivePenTool() === "erase" ? "cell" : "crosshair";
+    return canvasState.penTool === "erase" ? "cell" : "crosshair";
   });
 
   useEffect(() => {
@@ -286,7 +280,7 @@ export const Canvas: React.FC = () => {
     if (svg) {
       svg.style.cursor = getCanvasIdleCursor();
     }
-  }, [getCanvasIdleCursor, isPenEraseOverride, isPenMode, penTool]);
+  }, [getCanvasIdleCursor, isPenMode, penTool]);
 
   const setPrimaryId = useMemoizedFn((id: string | null) => {
     canvasState.primaryId = id;
@@ -855,16 +849,6 @@ export const Canvas: React.FC = () => {
       ) {
         return;
       }
-      if (
-        canvasState.isPenMode &&
-        (e.key === "Meta" || e.key === "Control")
-      ) {
-        canvasActions.setPenEraseOverride(true);
-        const svg = svgRef.current;
-        if (svg && !isPanningRef.current) {
-          svg.style.cursor = getCanvasIdleCursor();
-        }
-      }
       if (e.code === "Space") {
         e.preventDefault();
         if (canvasState.isSpaceDown) return;
@@ -877,13 +861,6 @@ export const Canvas: React.FC = () => {
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Meta" || e.key === "Control") {
-        canvasActions.setPenEraseOverride(e.metaKey || e.ctrlKey);
-        const svg = svgRef.current;
-        if (svg && !isPanningRef.current && !isErasingPathRef.current) {
-          svg.style.cursor = getCanvasIdleCursor();
-        }
-      }
       if (e.code === "Space") {
         e.preventDefault();
         const wasActive = canvasState.isSpaceDown;
@@ -911,7 +888,6 @@ export const Canvas: React.FC = () => {
       isSpaceContainBlockedRef.current = false;
       isPanningRef.current = false;
       lastPanPointRef.current = null;
-      canvasActions.setPenEraseOverride(false);
       if (canvasState.isDrawingPath) {
         canvasActions.endPathStroke();
       }
@@ -1036,7 +1012,7 @@ export const Canvas: React.FC = () => {
       if (!local) return;
       e.currentTarget.setPointerCapture(e.pointerId);
 
-      if (getActivePenTool() === "erase") {
+      if (canvasState.penTool === "erase") {
         isErasingPathRef.current = true;
         pathEraseChangedRef.current = false;
         lastErasePointRef.current = null;
@@ -2008,7 +1984,7 @@ export const Canvas: React.FC = () => {
         penColorSlots={penColorSlots}
         onFiltersChange={(filters) => canvasActions.setCanvasFilters(filters)}
         onTogglePenMode={() => canvasActions.togglePenMode()}
-        onPenToolChange={(tool) => canvasActions.setPenTool(tool)}
+        onTogglePenErase={() => canvasActions.togglePenEraseTool()}
         onPenStrokeColorChange={(color) =>
           canvasActions.setPenStrokeColor(color)
         }

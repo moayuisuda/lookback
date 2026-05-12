@@ -47,6 +47,7 @@ export interface GlobalState {
   canvasAutoLayoutShortcut: string;
   canvasGroupShortcut: string;
   canvasPenShortcut: string;
+  canvasPenEraseShortcut: string;
   zoomToFitShortcut: string;
   commandPaletteShortcut: string;
   isAppHidden: boolean;
@@ -97,6 +98,7 @@ const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
 const DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+Shift+G' : 'Ctrl+Shift+G';
 const DEFAULT_CANVAS_PEN_SHORTCUT = isMac ? 'Command+P' : 'Ctrl+P';
+const DEFAULT_CANVAS_PEN_ERASE_SHORTCUT = 'E';
 const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
 
 export const globalState = proxy<GlobalState>({
@@ -123,6 +125,7 @@ export const globalState = proxy<GlobalState>({
   canvasAutoLayoutShortcut: DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT,
   canvasGroupShortcut: DEFAULT_CANVAS_GROUP_SHORTCUT,
   canvasPenShortcut: DEFAULT_CANVAS_PEN_SHORTCUT,
+  canvasPenEraseShortcut: DEFAULT_CANVAS_PEN_ERASE_SHORTCUT,
   zoomToFitShortcut: '',
   commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
   isAppHidden: false,
@@ -179,6 +182,11 @@ export const globalActions = {
         settings,
         'canvasPenShortcut',
         DEFAULT_CANVAS_PEN_SHORTCUT,
+      );
+      const rawCanvasPenEraseShortcut = readSetting<unknown>(
+        settings,
+        'canvasPenEraseShortcut',
+        DEFAULT_CANVAS_PEN_ERASE_SHORTCUT,
       );
       const rawCommandPaletteShortcut = readSetting<unknown>(
         settings,
@@ -262,6 +270,12 @@ export const globalActions = {
       }
       if (typeof rawCanvasPenShortcut === 'string' && rawCanvasPenShortcut.trim()) {
         globalState.canvasPenShortcut = rawCanvasPenShortcut.trim();
+      }
+      if (
+        typeof rawCanvasPenEraseShortcut === 'string' &&
+        rawCanvasPenEraseShortcut.trim()
+      ) {
+        globalState.canvasPenEraseShortcut = rawCanvasPenEraseShortcut.trim();
       }
       if (
         typeof rawCommandPaletteShortcut === 'string' &&
@@ -522,6 +536,13 @@ export const globalActions = {
     if (!next) return false;
     globalState.canvasPenShortcut = next;
     await settingStorage.set('canvasPenShortcut', next);
+    return true;
+  },
+  setCanvasPenEraseShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!next) return false;
+    globalState.canvasPenEraseShortcut = next;
+    await settingStorage.set('canvasPenEraseShortcut', next);
     return true;
   },
   setZoomToFitShortcut: async (accelerator: string) => {

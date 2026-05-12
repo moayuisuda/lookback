@@ -107,6 +107,7 @@ export const en = {
   "titleBar.canvasAutoLayout": "Image Smart Layout",
   "titleBar.canvasGroup": "Image Grouping",
   "titleBar.canvasPen": "Pen Mode",
+  "titleBar.canvasPenErase": "Erase Strokes",
   "titleBar.zoomToFit": "Zoom to Fit",
   "titleBar.shortcutClickToRecord": "Click to record",
   "titleBar.shortcutRecording": "Press a shortcut…",

@@ -26,7 +26,7 @@ interface CanvasToolbarProps {
   penColorSlots: readonly string[];
   onFiltersChange: (filters: string[]) => void;
   onTogglePenMode: () => void;
-  onPenToolChange: (tool: "draw" | "erase") => void;
+  onTogglePenErase: () => void;
   onPenStrokeColorChange: (color: string) => void;
   onPenColorSlotChange: (index: number, color: string) => void;
   onPenStrokeWidthChange: (width: number) => void;
@@ -72,7 +72,7 @@ const PenControls: React.FC<{
   penStrokeColor: string;
   penStrokeWidth: number;
   penColorSlots: readonly string[];
-  onPenToolChange: (tool: "draw" | "erase") => void;
+  onTogglePenErase: () => void;
   onPenStrokeColorChange: (color: string) => void;
   onPenColorSlotChange: (index: number, color: string) => void;
   onPenStrokeWidthChange: (width: number) => void;
@@ -81,7 +81,7 @@ const PenControls: React.FC<{
   penStrokeColor,
   penStrokeWidth,
   penColorSlots,
-  onPenToolChange,
+  onTogglePenErase,
   onPenStrokeColorChange,
   onPenColorSlotChange,
   onPenStrokeWidthChange,
@@ -160,7 +160,7 @@ const PenControls: React.FC<{
 
       <ToolbarButton
         isActive={penTool === "erase"}
-        onClick={() => onPenToolChange(penTool === "erase" ? "draw" : "erase")}
+        onClick={onTogglePenErase}
         title={t("canvas.toolbar.penErase")}
       >
         <Eraser size={14} />
@@ -262,7 +262,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   penColorSlots,
   onFiltersChange,
   onTogglePenMode,
-  onPenToolChange,
+  onTogglePenErase,
   onPenStrokeColorChange,
   onPenColorSlotChange,
   onPenStrokeWidthChange,
@@ -322,7 +322,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
               penStrokeColor={penStrokeColor}
               penStrokeWidth={penStrokeWidth}
               penColorSlots={penColorSlots}
-              onPenToolChange={onPenToolChange}
+              onTogglePenErase={onTogglePenErase}
               onPenStrokeColorChange={onPenStrokeColorChange}
               onPenColorSlotChange={onPenColorSlotChange}
               onPenStrokeWidthChange={onPenStrokeWidthChange}

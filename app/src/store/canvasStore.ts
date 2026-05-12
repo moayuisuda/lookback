@@ -795,7 +795,6 @@ interface CanvasStoreState {
   isDrawingPath: boolean;
   activePathItemId: string | null;
   penTool: "draw" | "erase";
-  isPenEraseOverride: boolean;
   penStrokeColor: string;
   penStrokeWidth: number;
   penColorSlots: string[];
@@ -841,7 +840,6 @@ export const canvasState = proxy<CanvasStoreState>({
   isDrawingPath: false,
   activePathItemId: null,
   penTool: "draw",
-  isPenEraseOverride: false,
   penStrokeColor: DEFAULT_CANVAS_PATH_STROKE,
   penStrokeWidth: DEFAULT_CANVAS_PATH_STROKE_WIDTH,
   penColorSlots: [...DEFAULT_CANVAS_PATH_COLOR_SLOTS],
@@ -1087,12 +1085,10 @@ const resetPathDrawingState = () => {
   canvasState.isPenMode = false;
   canvasState.isDrawingPath = false;
   canvasState.activePathItemId = null;
-  canvasState.isPenEraseOverride = false;
 };
 
 const syncActivePathAfterHistoryRestore = (preservePenMode: boolean) => {
   canvasState.isDrawingPath = false;
-  canvasState.isPenEraseOverride = false;
   if (!preservePenMode) {
     resetPathDrawingState();
     return;
@@ -1494,7 +1490,6 @@ export const canvasActions = {
       canvasState.isDrawingPath = false;
       canvasState.activePathItemId = null;
       canvasState.penTool = "draw";
-      canvasState.isPenEraseOverride = false;
       return;
     }
 
@@ -1502,7 +1497,6 @@ export const canvasActions = {
     canvasState.isPenMode = false;
     canvasState.isDrawingPath = false;
     canvasState.activePathItemId = null;
-    canvasState.isPenEraseOverride = false;
 
     if (!activeId) return;
     const item = canvasState.canvasItems.find(
@@ -1532,28 +1526,22 @@ export const canvasActions = {
 
   setPenTool: (tool: "draw" | "erase") => {
     canvasState.penTool = tool;
-    canvasState.isPenEraseOverride = false;
     if (tool === "erase") {
       canvasActions.endPathStroke();
     }
   },
 
-  setPenEraseOverride: (enabled: boolean) => {
-    if (!canvasState.isPenMode) {
-      canvasState.isPenEraseOverride = false;
-      return;
-    }
-    canvasState.isPenEraseOverride = enabled;
-    if (enabled) {
-      canvasActions.endPathStroke();
-    }
+  togglePenEraseTool: () => {
+    if (!canvasState.isPenMode) return;
+    canvasActions.setPenTool(
+      canvasState.penTool === "erase" ? "draw" : "erase",
+    );
   },
 
   setPenStrokeColor: (color: string) => {
     const next = normalizeCanvasPathColor(color);
     canvasState.penStrokeColor = next;
     canvasState.penTool = "draw";
-    canvasState.isPenEraseOverride = false;
     void settingStorage.set("penStrokeColor", next);
   },
 
@@ -1566,7 +1554,6 @@ export const canvasActions = {
     canvasState.penColorSlots = nextSlots;
     canvasState.penStrokeColor = nextColor;
     canvasState.penTool = "draw";
-    canvasState.isPenEraseOverride = false;
     void settingStorage.set("penColorSlots", nextSlots);
     void settingStorage.set("penStrokeColor", nextColor);
   },
@@ -1575,7 +1562,6 @@ export const canvasActions = {
     const next = clampCanvasPathStrokeWidth(width);
     canvasState.penStrokeWidth = next;
     canvasState.penTool = "draw";
-    canvasState.isPenEraseOverride = false;
     void settingStorage.set("penStrokeWidth", next);
   },
 

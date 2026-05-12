@@ -101,6 +101,7 @@ export const zh = {
   "titleBar.canvasAutoLayout": "图片智能布局",
   "titleBar.canvasGroup": "图片编组",
   "titleBar.canvasPen": "手绘模式",
+  "titleBar.canvasPenErase": "擦除笔画",
   "titleBar.zoomToFit": "适应画布",
   "titleBar.shortcutClickToRecord": "点击录制",
   "titleBar.shortcutRecording": "请按键...",

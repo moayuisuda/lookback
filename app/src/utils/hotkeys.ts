@@ -43,6 +43,38 @@ export const parseAccelerator = (value: string) => {
   };
 };
 
+const isMainKeyMatch = (
+  e: KeyboardEvent,
+  key: string,
+  options: { ignoreModifiers?: boolean } = {},
+) => {
+  if (key === "/") return e.key === "/" || e.code === "Slash";
+  if (key === "?") {
+    return e.key === "?" || (options.ignoreModifiers && e.code === "Slash");
+  }
+  if (key === "Space") return e.key === " " || e.code === "Space";
+  if (key === "Plus") {
+    return e.key === "+" || (options.ignoreModifiers && e.code === "Equal");
+  }
+  if (key === "Up") return e.key === "ArrowUp";
+  if (key === "Down") return e.key === "ArrowDown";
+  if (key === "Left") return e.key === "ArrowLeft";
+  if (key === "Right") return e.key === "ArrowRight";
+  if (key === "Esc") return e.key === "Escape";
+  if (/^F\d{1,2}$/.test(key)) return e.key === key;
+  if (key.length === 1) return e.key.toLowerCase() === key.toLowerCase();
+  return e.key === key;
+};
+
+export const isAcceleratorMainKeyEvent = (
+  e: KeyboardEvent,
+  accelerator: string,
+) => {
+  const parsed = parseAccelerator(accelerator);
+  if (!parsed) return false;
+  return isMainKeyMatch(e, parsed.key, { ignoreModifiers: true });
+};
+
 export const isAcceleratorMatch = (e: KeyboardEvent, accelerator: string) => {
   const parsed = parseAccelerator(accelerator);
   if (!parsed) return false;
@@ -50,10 +82,5 @@ export const isAcceleratorMatch = (e: KeyboardEvent, accelerator: string) => {
   if (e.ctrlKey !== parsed.ctrl) return false;
   if (e.altKey !== parsed.alt) return false;
   if (e.shiftKey !== parsed.shift) return false;
-  const key = parsed.key;
-  if (key === "/") return e.key === "/" || e.code === "Slash";
-  if (key === "?") return e.key === "?" || (e.code === "Slash" && e.shiftKey);
-  if (/^F\d{1,2}$/.test(parsed.key)) return e.key === key;
-  if (key.length === 1) return e.key === key;
-  return e.key === key;
+  return isMainKeyMatch(e, parsed.key);
 };
