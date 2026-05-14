@@ -16,12 +16,18 @@ interface SelectOverlayProps {
   onDeleteSelection: () => void;
   onFlipSelection: () => void;
   onFlipYSelection: () => void;
-  onScaleStart: (client: { x: number; y: number }) => void;
+  onScaleStart: (client: { x: number; y: number; pointerId: number }) => void;
   onDeleteItem: (id: string) => void;
   onFlipItem: (id: string) => void;
   onFlipYItem: (id: string) => void;
-  onRotateItemStart: (id: string, client: { x: number; y: number }) => void;
-  onScaleStartItem: (id: string, client: { x: number; y: number }) => void;
+  onRotateItemStart: (
+    id: string,
+    client: { x: number; y: number; pointerId: number },
+  ) => void;
+  onScaleStartItem: (
+    id: string,
+    client: { x: number; y: number; pointerId: number },
+  ) => void;
   onCommitItem: (id: string, next: Partial<CanvasItem>) => void;
 }
 
@@ -140,9 +146,15 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
           iconScale={CANVAS_ICONS.ROTATE.SCALE}
           iconOffsetX={CANVAS_ICONS.ROTATE.OFFSET_X}
           iconOffsetY={CANVAS_ICONS.ROTATE.OFFSET_Y}
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
+            e.preventDefault();
             e.stopPropagation();
-            onRotateItemStart(item.itemId, { x: e.clientX, y: e.clientY });
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onRotateItemStart(item.itemId, {
+              x: e.clientX,
+              y: e.clientY,
+              pointerId: e.pointerId,
+            });
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
@@ -214,9 +226,15 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
           strokeWidth={2}
           cursor="nwse-resize"
           shadowBlur={4}
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
+            e.preventDefault();
             e.stopPropagation();
-            onScaleStartItem(item.itemId, { x: e.clientX, y: e.clientY });
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onScaleStartItem(item.itemId, {
+              x: e.clientX,
+              y: e.clientY,
+              pointerId: e.pointerId,
+            });
           }}
         />
       </>
@@ -306,9 +324,15 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         strokeWidth={2}
         cursor="nwse-resize"
         shadowBlur={4}
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
+          e.preventDefault();
           e.stopPropagation();
-          onScaleStart({ x: e.clientX, y: e.clientY });
+          e.currentTarget.setPointerCapture(e.pointerId);
+          onScaleStart({
+            x: e.clientX,
+            y: e.clientY,
+            pointerId: e.pointerId,
+          });
         }}
       />
     </>

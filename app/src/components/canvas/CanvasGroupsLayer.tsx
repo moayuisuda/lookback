@@ -206,8 +206,11 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
 }) => {
   const dragRef = useRef<{
     groupId: string;
+    pointerId: number;
     startX: number;
     startY: number;
+    lastX: number;
+    lastY: number;
   } | null>(null);
 
   const layouts = useMemo(() => {
@@ -225,21 +228,47 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
       if (canvasState.isPenMode) return;
       if (canvasState.isSpaceDown) return;
       if (e.button !== 0) return;
+      e.preventDefault();
       e.stopPropagation();
+      const captureTarget = e.currentTarget;
+      captureTarget.setPointerCapture(e.pointerId);
       onGroupSelect(groupId);
       dragRef.current = {
         groupId,
+        pointerId: e.pointerId,
         startX: e.clientX,
         startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
       };
       onGroupDragStart(groupId, {
         clientX: e.clientX,
         clientY: e.clientY,
       });
 
+      let cleanupDragListeners = () => undefined;
+
+      const finishDrag = (clientX: number, clientY: number) => {
+        const state = dragRef.current;
+        if (!state || state.groupId !== groupId) return;
+        onGroupDragEnd(groupId, {
+          dx: clientX - state.startX,
+          dy: clientY - state.startY,
+        });
+        dragRef.current = null;
+        cleanupDragListeners();
+        if (captureTarget.hasPointerCapture(state.pointerId)) {
+          captureTarget.releasePointerCapture(state.pointerId);
+        }
+      };
+
       const handlePointerMove = (event: PointerEvent) => {
         const state = dragRef.current;
         if (!state || state.groupId !== groupId) return;
+        if (event.pointerId !== state.pointerId) return;
+        event.preventDefault();
+        state.lastX = event.clientX;
+        state.lastY = event.clientY;
         onGroupDragMove(groupId, {
           dx: event.clientX - state.startX,
           dy: event.clientY - state.startY,
@@ -249,17 +278,27 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
       const handlePointerUp = (event: PointerEvent) => {
         const state = dragRef.current;
         if (!state || state.groupId !== groupId) return;
-        onGroupDragEnd(groupId, {
-          dx: event.clientX - state.startX,
-          dy: event.clientY - state.startY,
-        });
-        dragRef.current = null;
+        if (event.pointerId !== state.pointerId) return;
+        event.preventDefault();
+        finishDrag(event.clientX, event.clientY);
+      };
+
+      const handlePointerCancel = (event: PointerEvent) => {
+        const state = dragRef.current;
+        if (!state || state.groupId !== groupId) return;
+        if (event.pointerId !== state.pointerId) return;
+        finishDrag(state.lastX, state.lastY);
+      };
+
+      cleanupDragListeners = () => {
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
+        window.removeEventListener("pointercancel", handlePointerCancel);
       };
 
       window.addEventListener("pointermove", handlePointerMove);
       window.addEventListener("pointerup", handlePointerUp);
+      window.addEventListener("pointercancel", handlePointerCancel);
     };
   };
 
@@ -353,6 +392,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                 strokeWidth={isActive ? 2 : 1}
                 vectorEffect="non-scaling-stroke"
                 onPointerDown={bindGroupPointerDown(group.groupId)}
+                style={{ touchAction: "none" }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   onGroupContain(group.groupId);
@@ -374,6 +414,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                   strokeWidth={isActive ? 2 : 1}
                   vectorEffect="non-scaling-stroke"
                   onPointerDown={bindGroupPointerDown(group.groupId)}
+                  style={{ touchAction: "none" }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     onGroupContain(group.groupId);

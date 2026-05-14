@@ -5,12 +5,14 @@ import {
   canvasState,
   canvasActions,
   getRenderBbox,
+  getLiveStroke,
   type CanvasItem,
   type CanvasImage as CanvasImageState,
   type CanvasPath as CanvasPathState,
   type CanvasText as CanvasTextState,
   type ImageMeta,
 } from "../store/canvasStore";
+import { buildSamples, type BrushSample } from "../utils/canvasBrush";
 import { anchorActions } from "../store/anchorStore";
 import { commandActions, commandState } from "../store/commandStore";
 import { globalActions, globalState } from "../store/globalStore";
@@ -42,6 +44,15 @@ import { ImagePlus, Upload, MousePointer2 } from "lucide-react";
 import { getCommandContext, getCommands } from "../commands";
 import { getCommandDescription, getCommandTitle } from "../commands/display";
 import type { CommandDefinition } from "../commands/types";
+
+type PointerPointSource = {
+  clientX: number;
+  clientY: number;
+  pressure?: number;
+  timeStamp?: number;
+  pointerType?: string;
+  nativeEvent?: PointerEvent;
+};
 
 const getImportUrlHost = (url: string) => {
   try {
@@ -209,6 +220,9 @@ export const Canvas: React.FC = () => {
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // overlay canvas 用于绘制中实时笔画渲染，完全绕过 React/valtio
+  const liveStrokeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveStrokeRafRef = useRef<number | null>(null);
 
   const stageScale = canvasViewport.scale || 1;
   const penCursor = isPenMode
@@ -222,6 +236,7 @@ export const Canvas: React.FC = () => {
   const pathEraseChangedRef = useRef(false);
   const lastErasePointRef = useRef<{ x: number; y: number } | null>(null);
   const lastPanPointRef = useRef<{ x: number; y: number } | null>(null);
+  const canvasInteractionPointerIdRef = useRef<number | null>(null);
   const selectionAppendRef = useRef(false);
   const multiDragRef = useRef<{
     active: boolean;
@@ -235,6 +250,7 @@ export const Canvas: React.FC = () => {
     startUnion: { x: number; y: number; width: number; height: number } | null;
     startDistance: number;
     scale: number;
+    pointerId: number | null;
     snapshots: Map<
       string,
       {
@@ -251,6 +267,7 @@ export const Canvas: React.FC = () => {
     startUnion: null,
     startDistance: 1,
     scale: 1,
+    pointerId: null,
     snapshots: new Map(),
   });
   const groupDragRef = useRef<{
@@ -498,17 +515,23 @@ export const Canvas: React.FC = () => {
   });
 
   useEffect(() => {
-    const updateSize = () => {
-      if (containerRef.current) {
-        canvasState.dimensions = {
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        };
+    const syncCanvasSize = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const w = container.offsetWidth;
+      const h = container.offsetHeight;
+      canvasState.dimensions = { width: w, height: h };
+      // overlay canvas 需要跟 DPR 对齐，避免 Retina 下模糊
+      const canvas = liveStrokeCanvasRef.current;
+      if (canvas) {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
       }
     };
-    window.addEventListener("resize", updateSize);
-    updateSize();
-    return () => window.removeEventListener("resize", updateSize);
+    window.addEventListener("resize", syncCanvasSize);
+    syncCanvasSize();
+    return () => window.removeEventListener("resize", syncCanvasSize);
   }, [setIsSpaceDown]);
 
   useEffect(() => {
@@ -951,20 +974,106 @@ export const Canvas: React.FC = () => {
     },
   );
 
-  const appendPathPointFromClient = useMemoizedFn(
-    (client: { clientX: number; clientY: number }) => {
-      const local = getLocalPointFromClient(client.clientX, client.clientY);
-      if (!local) return;
-      canvasActions.appendPathPoint(localToWorldPoint(local));
+  const getCoalescedPointerPoints = useMemoizedFn(
+    (client: PointerPointSource) => {
+      const points = client.nativeEvent?.getCoalescedEvents?.();
+      return points && points.length > 0 ? points : [client];
     },
   );
 
+  const appendPathPointFromClient = useMemoizedFn(
+    (client: PointerPointSource, options?: { force?: boolean }) => {
+      const points = getCoalescedPointerPoints(client);
+      points.forEach((point, index) => {
+        const local = getLocalPointFromClient(point.clientX, point.clientY);
+        if (!local) return;
+        canvasActions.appendPathPoint(
+          {
+            ...localToWorldPoint(local),
+            pressure: point.pressure,
+            timestamp: point.timeStamp,
+            pointerType: point.pointerType,
+          },
+          {
+            force: options?.force === true && index === points.length - 1,
+          },
+        );
+      });
+    },
+  );
+
+  // RAF 循环用 pressure+velocity 半径绘制实时笔锋，与最终 dab 路径视觉一致
+  const renderLiveStroke = useMemoizedFn(() => {
+    const canvas = liveStrokeCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const stroke = getLiveStroke();
+    if (stroke && stroke.points.length >= 1) {
+      const { scale, x: vx, y: vy } = canvasState.canvasViewport;
+      ctx.save();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, vx * dpr, vy * dpr);
+      ctx.fillStyle = stroke.color;
+      // 复用 buildSamples 计算每点 pressure+velocity 半径
+      const samples = buildSamples(
+        stroke.points as BrushSample[],
+        stroke.strokeWidth,
+      );
+      // 胶囊体连接相邻采样点
+      for (let i = 1; i < samples.length; i++) {
+        const prev = samples[i - 1];
+        const curr = samples[i];
+        const dx = curr.x - prev.x;
+        const dy = curr.y - prev.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.001) continue;
+        const nx = -dy / len;
+        const ny = dx / len;
+        ctx.beginPath();
+        ctx.moveTo(prev.x + nx * prev.radius, prev.y + ny * prev.radius);
+        ctx.lineTo(curr.x + nx * curr.radius, curr.y + ny * curr.radius);
+        ctx.lineTo(curr.x - nx * curr.radius, curr.y - ny * curr.radius);
+        ctx.lineTo(prev.x - nx * prev.radius, prev.y - ny * prev.radius);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // 圆形 dab 覆盖接缝
+      for (const sample of samples) {
+        ctx.beginPath();
+        ctx.arc(sample.x, sample.y, Math.max(0.5, sample.radius), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    liveStrokeRafRef.current = requestAnimationFrame(renderLiveStroke);
+  });
+
+  const startLiveStrokeRender = useMemoizedFn(() => {
+    if (liveStrokeRafRef.current !== null) return;
+    liveStrokeRafRef.current = requestAnimationFrame(renderLiveStroke);
+  });
+
+  const stopLiveStrokeRender = useMemoizedFn(() => {
+    if (liveStrokeRafRef.current !== null) {
+      cancelAnimationFrame(liveStrokeRafRef.current);
+      liveStrokeRafRef.current = null;
+    }
+    const canvas = liveStrokeCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  });
+
   const finishPathDrawing = useMemoizedFn(
-    (client?: { clientX: number; clientY: number }) => {
+    (client?: PointerPointSource) => {
       if (!canvasState.isDrawingPath) return;
       if (client) {
-        appendPathPointFromClient(client);
+        appendPathPointFromClient(client, { force: true });
       }
+      stopLiveStrokeRender();
       canvasActions.endPathStroke();
       const svg = svgRef.current;
       if (svg) {
@@ -974,18 +1083,20 @@ export const Canvas: React.FC = () => {
   );
 
   const erasePathStrokeFromClient = useMemoizedFn(
-    (client: { clientX: number; clientY: number }) => {
-      const local = getLocalPointFromClient(client.clientX, client.clientY);
-      if (!local) return;
-      const worldPoint = localToWorldPoint(local);
-      const previousPoint = lastErasePointRef.current;
-      const didErase = previousPoint
-        ? canvasActions.erasePathStrokeAtSegment(previousPoint, worldPoint)
-        : canvasActions.erasePathStrokeAtPoint(worldPoint);
-      lastErasePointRef.current = worldPoint;
-      if (didErase) {
-        pathEraseChangedRef.current = true;
-      }
+    (client: PointerPointSource) => {
+      getCoalescedPointerPoints(client).forEach((point) => {
+        const local = getLocalPointFromClient(point.clientX, point.clientY);
+        if (!local) return;
+        const worldPoint = localToWorldPoint(local);
+        const previousPoint = lastErasePointRef.current;
+        const didErase = previousPoint
+          ? canvasActions.erasePathStrokeAtSegment(previousPoint, worldPoint)
+          : canvasActions.erasePathStrokeAtPoint(worldPoint);
+        lastErasePointRef.current = worldPoint;
+        if (didErase) {
+          pathEraseChangedRef.current = true;
+        }
+      });
     },
   );
 
@@ -1000,92 +1111,242 @@ export const Canvas: React.FC = () => {
     }
   });
 
+  const updateScaleSessionFromClient = useMemoizedFn(
+    (client: { clientX: number; clientY: number }) => {
+      const current = multiScaleRef.current;
+      if (!current.active) return;
+      if (!current.anchor || !current.startUnion) return;
+      const local = getLocalPointFromClient(client.clientX, client.clientY);
+      if (!local) return;
+      const pos = localToWorldPoint(local);
+      const base = Math.max(1, current.startDistance || 1);
+      const next = Math.hypot(
+        pos.x - current.anchor.x,
+        pos.y - current.anchor.y,
+      );
+      const scale = Math.max(0.1, next / base);
+      current.scale = scale;
+      current.snapshots.forEach((start, selectedId) => {
+        const nextX =
+          current.anchor!.x + (start.x - current.anchor!.x) * scale;
+        const nextY =
+          current.anchor!.y + (start.y - current.anchor!.y) * scale;
+        if (start.type === "text") {
+          const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
+          canvasActions.updateCanvasImageTransient(selectedId, {
+            x: nextX,
+            y: nextY,
+            fontSize: nextFontSize,
+          });
+          return;
+        }
+        const nextScale = Math.max(0.05, start.scale * scale);
+        canvasActions.updateCanvasImageTransient(selectedId, {
+          x: nextX,
+          y: nextY,
+          scale: nextScale,
+        });
+      });
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    },
+  );
+
+  const resetScaleSession = useMemoizedFn(() => {
+    multiScaleRef.current = {
+      active: false,
+      anchor: null,
+      startUnion: null,
+      startDistance: 1,
+      scale: 1,
+      pointerId: null,
+      snapshots: new Map(),
+    };
+    const svg = svgRef.current;
+    if (svg) svg.style.cursor = getCanvasIdleCursor();
+  });
+
+  const finishScaleSession = useMemoizedFn(() => {
+    const current = multiScaleRef.current;
+    if (!current.active) return;
+    const scale = current.scale || 1;
+    if (current.anchor) {
+      current.snapshots.forEach((start, selectedId) => {
+        const nextX =
+          current.anchor!.x + (start.x - current.anchor!.x) * scale;
+        const nextY =
+          current.anchor!.y + (start.y - current.anchor!.y) * scale;
+        if (start.type === "text") {
+          const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
+          canvasActions.updateCanvasImageSilent(selectedId, {
+            x: nextX,
+            y: nextY,
+            fontSize: nextFontSize,
+          });
+          return;
+        }
+        const nextScale = Math.max(0.05, start.scale * scale);
+        canvasActions.updateCanvasImageSilent(selectedId, {
+          x: nextX,
+          y: nextY,
+          scale: nextScale,
+        });
+      });
+      canvasActions.commitCanvasChange();
+    }
+    resetScaleSession();
+    setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  });
+
+  const captureCanvasInteractionPointer = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      canvasInteractionPointerIdRef.current = e.pointerId;
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+    },
+  );
+
+  const releaseCanvasInteractionPointer = useMemoizedFn(
+    (target: SVGSVGElement, pointerId: number) => {
+      if (canvasInteractionPointerIdRef.current === pointerId) {
+        canvasInteractionPointerIdRef.current = null;
+      }
+      if (target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture(pointerId);
+      }
+    },
+  );
+
+  const isCanvasInteractionPointer = useMemoizedFn((pointerId: number) => {
+    const activePointerId = canvasInteractionPointerIdRef.current;
+    return activePointerId === pointerId;
+  });
+
+  const updateCanvasPanFromClient = useMemoizedFn(
+    (client: { clientX: number; clientY: number }) => {
+      const last = lastPanPointRef.current;
+      if (!last) return;
+
+      const currentPoint = { x: client.clientX, y: client.clientY };
+      const dx = currentPoint.x - last.x;
+      const dy = currentPoint.y - last.y;
+      const viewport = canvasState.canvasViewport;
+
+      canvasActions.setCanvasViewport({
+        x: viewport.x + dx,
+        y: viewport.y + dy,
+        width: canvasState.dimensions.width,
+        height: canvasState.dimensions.height,
+        scale: viewport.scale,
+      });
+      lastPanPointRef.current = currentPoint;
+    },
+  );
+
+  const updateSelectionBoxFromClient = useMemoizedFn(
+    (client: { clientX: number; clientY: number }) => {
+      const currentSelection = canvasState.selectionBox;
+      if (!currentSelection.start) return;
+      const local = getLocalPointFromClient(client.clientX, client.clientY);
+      if (!local) return;
+      const pos = localToWorldPoint(local);
+      canvasState.selectionBox = {
+        ...currentSelection,
+        current: pos,
+      };
+    },
+  );
+
+  const finishCanvasPointerInteraction = useMemoizedFn(
+    (client?: { clientX: number; clientY: number }) => {
+      const svg = svgRef.current;
+      if (svg) svg.style.cursor = getCanvasIdleCursor();
+
+      isPanningRef.current = false;
+      lastPanPointRef.current = null;
+
+      const currentSelection = canvasState.selectionBox;
+      if (currentSelection.start && currentSelection.current) {
+        const x1 = Math.min(
+          currentSelection.start.x,
+          currentSelection.current.x,
+        );
+        const x2 = Math.max(
+          currentSelection.start.x,
+          currentSelection.current.x,
+        );
+        const y1 = Math.min(
+          currentSelection.start.y,
+          currentSelection.current.y,
+        );
+        const y2 = Math.max(
+          currentSelection.start.y,
+          currentSelection.current.y,
+        );
+        const width = x2 - x1;
+        const height = y2 - y1;
+
+        const isClick = width <= 2 && height <= 2;
+        const viewportScale = canvasState.canvasViewport.scale || 1;
+        const zoomArea = width * height * viewportScale * viewportScale;
+        const shouldZoom = zoomArea >= MIN_ZOOM_AREA;
+
+        if (canvasState.selectionMode === "zoom") {
+          if (shouldZoom) {
+            // 右键框选缩放完成时再清理选中项，避免按下阶段打断已有节点状态。
+            clearSelection();
+            zoomToBounds({ x: x1, y: y1, width, height }, 0);
+          } else if (client && !shouldEnableMouseThrough) {
+            const local = getLocalPointFromClient(
+              client.clientX,
+              client.clientY,
+            );
+            if (local) {
+              openContextMenu(local.x, local.y);
+              void commandActions.loadExternalCommands();
+            }
+          }
+          canvasState.selectionBox = { start: null, current: null };
+          return;
+        }
+
+        if (!isClick) {
+          const newSelected = selectionAppendRef.current
+            ? getSelectedIds()
+            : new Set<string>();
+          let lastHitId: string | null = null;
+          visibleCanvasItems.forEach((item) => {
+            const scale = item.scale || 1;
+            const rawW = (item.width || 0) * scale;
+            const rawH = (item.height || 0) * scale;
+            const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
+
+            const itemMinX = item.x + bbox.offsetX;
+            const itemMinY = item.y + bbox.offsetY;
+            const itemMaxX = itemMinX + bbox.width;
+            const itemMaxY = itemMinY + bbox.height;
+
+            if (
+              itemMinX < x2 &&
+              itemMaxX > x1 &&
+              itemMinY < y2 &&
+              itemMaxY > y1
+            ) {
+              newSelected.add(item.itemId);
+              lastHitId = item.itemId;
+            }
+          });
+          setSelectionByIds(newSelected);
+          if (lastHitId) setPrimaryId(lastHitId);
+          setMultiSelectUnion(computeMultiSelectUnion(newSelected));
+        }
+      }
+      canvasState.selectionBox = { start: null, current: null };
+    },
+  );
+
   const handlePointerDown = useMemoizedFn(
     (e: React.PointerEvent<SVGSVGElement>) => {
-      if (!canvasState.isPenMode) return;
-      if (canvasState.isSpaceDown) return;
-      if (e.button !== 0) return;
-
-      e.preventDefault();
-      closeContextMenu();
-      const local = getLocalPointFromClient(e.clientX, e.clientY);
-      if (!local) return;
-      e.currentTarget.setPointerCapture(e.pointerId);
-
-      if (canvasState.penTool === "erase") {
-        isErasingPathRef.current = true;
-        pathEraseChangedRef.current = false;
-        lastErasePointRef.current = null;
-        erasePathStrokeFromClient(e);
-        const svg = svgRef.current;
-        if (svg) svg.style.cursor = "cell";
-        return;
-      }
-
-      canvasActions.beginPathStroke(localToWorldPoint(local));
-      const svg = svgRef.current;
-      if (svg) svg.style.cursor = "crosshair";
-    },
-  );
-
-  const handlePointerMove = useMemoizedFn(
-    (e: React.PointerEvent<SVGSVGElement>) => {
-      if (isErasingPathRef.current) {
-        e.preventDefault();
-        erasePathStrokeFromClient(e);
-        return;
-      }
-      if (!canvasState.isDrawingPath) return;
-      e.preventDefault();
-      appendPathPointFromClient(e);
-    },
-  );
-
-  const handlePointerUp = useMemoizedFn(
-    (e: React.PointerEvent<SVGSVGElement>) => {
-      if (isErasingPathRef.current) {
-        e.preventDefault();
-        erasePathStrokeFromClient(e);
-        finishPathErase();
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        }
-        const svg = svgRef.current;
-        if (svg) {
-          svg.style.cursor = getCanvasIdleCursor();
-        }
-        return;
-      }
-      if (!canvasState.isDrawingPath) return;
-      e.preventDefault();
-      finishPathDrawing(e);
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-    },
-  );
-
-  const handlePointerCancel = useMemoizedFn(
-    (e: React.PointerEvent<SVGSVGElement>) => {
-      if (isErasingPathRef.current) {
-        e.preventDefault();
-        finishPathErase();
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        }
-        return;
-      }
-      if (!canvasState.isDrawingPath) return;
-      e.preventDefault();
-      finishPathDrawing();
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
-    },
-  );
-
-  const handleMouseDown = useMemoizedFn(
-    (e: React.MouseEvent<SVGSVGElement>) => {
       closeContextMenu();
       const isSpaceDownNow = canvasState.isSpaceDown;
       if (
@@ -1094,10 +1355,43 @@ export const Canvas: React.FC = () => {
       ) {
         isSpaceContainBlockedRef.current = true;
       }
+
+      if (canvasState.isPenMode) {
+        if (isSpaceDownNow) return;
+        if (e.button !== 0) return;
+
+        e.preventDefault();
+        const local = getLocalPointFromClient(e.clientX, e.clientY);
+        if (!local) return;
+        captureCanvasInteractionPointer(e);
+
+        if (canvasState.penTool === "erase") {
+          isErasingPathRef.current = true;
+          pathEraseChangedRef.current = false;
+          lastErasePointRef.current = null;
+          erasePathStrokeFromClient(e);
+          const svg = svgRef.current;
+          if (svg) svg.style.cursor = "cell";
+          return;
+        }
+
+        canvasActions.beginPathStroke({
+          ...localToWorldPoint(local),
+          pressure: e.pressure,
+          timestamp: e.timeStamp,
+          pointerType: e.pointerType,
+        });
+        startLiveStrokeRender();
+        const svg = svgRef.current;
+        if (svg) svg.style.cursor = "crosshair";
+        return;
+      }
+
       const isSpacePan = isSpaceDownNow && e.button === 0;
       const isMiddleButton = e.button === 1;
       if (isSpacePan || isMiddleButton) {
         e.preventDefault();
+        captureCanvasInteractionPointer(e);
         isPanningRef.current = true;
         lastPanPointRef.current = { x: e.clientX, y: e.clientY };
         const svg = svgRef.current;
@@ -1105,13 +1399,10 @@ export const Canvas: React.FC = () => {
         return;
       }
 
-      if (canvasState.isPenMode) {
-        return;
-      }
-
       const isRightButton = e.button === 2;
       if (isRightButton) {
         e.preventDefault();
+        captureCanvasInteractionPointer(e);
         canvasActions.setActiveCanvasGroup(null);
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
@@ -1128,6 +1419,8 @@ export const Canvas: React.FC = () => {
         target === e.currentTarget || target.id === "canvas-content-layer";
 
       if (isLeftButton && isBackground) {
+        e.preventDefault();
+        captureCanvasInteractionPointer(e);
         canvasActions.setActiveCanvasGroup(null);
         const local = getLocalPointFromClient(e.clientX, e.clientY);
         if (!local) return;
@@ -1142,266 +1435,171 @@ export const Canvas: React.FC = () => {
     },
   );
 
-  const handleMouseMove = useMemoizedFn(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      if (multiScaleRef.current.active) {
-        const current = multiScaleRef.current;
-        if (!current.anchor || !current.startUnion) return;
-        const local = getLocalPointFromClient(e.clientX, e.clientY);
-        if (!local) return;
-        const pos = localToWorldPoint(local);
-        const base = Math.max(1, current.startDistance || 1);
-        const next = Math.hypot(
-          pos.x - current.anchor.x,
-          pos.y - current.anchor.y,
-        );
-        const scale = Math.max(0.1, next / base);
-        current.scale = scale;
-        current.snapshots.forEach((start, selectedId) => {
-          const nextX =
-            current.anchor!.x + (start.x - current.anchor!.x) * scale;
-          const nextY =
-            current.anchor!.y + (start.y - current.anchor!.y) * scale;
-          if (start.type === "text") {
-            const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
-            canvasActions.updateCanvasImageTransient(selectedId, {
-              x: nextX,
-              y: nextY,
-              fontSize: nextFontSize,
-            });
-          } else {
-            const nextScale = Math.max(0.05, start.scale * scale);
-            canvasActions.updateCanvasImageTransient(selectedId, {
-              x: nextX,
-              y: nextY,
-              scale: nextScale,
-            });
-          }
-        });
-        setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  const handlePointerMove = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (
+        multiScaleRef.current.active &&
+        multiScaleRef.current.pointerId === e.pointerId
+      ) {
+        e.preventDefault();
+        updateScaleSessionFromClient(e);
         return;
       }
-      // Panning (Space held)
+      if (!isCanvasInteractionPointer(e.pointerId)) return;
+
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        erasePathStrokeFromClient(e);
+        return;
+      }
+      if (canvasState.isDrawingPath) {
+        e.preventDefault();
+        appendPathPointFromClient(e);
+        return;
+      }
+
       if (isPanningRef.current) {
-        const last = lastPanPointRef.current;
-        if (!last) return;
-
-        const currentPoint = { x: e.clientX, y: e.clientY };
-
-        const dx = currentPoint.x - last.x;
-        const dy = currentPoint.y - last.y;
-        // We need to calculate based on the current viewport state in store
-        // because stage.x() might not be updated yet in React render cycle
-        // However, for smooth dragging, we usually rely on event deltas.
-        // Since we are now controlled, we should base on canvasViewport.
-
-        const viewport = canvasState.canvasViewport;
-        const nextPos = { x: viewport.x + dx, y: viewport.y + dy };
-
-        canvasActions.setCanvasViewport({
-          x: nextPos.x,
-          y: nextPos.y,
-          width: canvasState.dimensions.width,
-          height: canvasState.dimensions.height,
-          scale: viewport.scale,
-        });
-        lastPanPointRef.current = currentPoint;
+        e.preventDefault();
+        updateCanvasPanFromClient(e);
         return;
       }
 
-      // Box Selection
-      const currentSelection = canvasState.selectionBox;
-      if (currentSelection.start) {
-        const local = getLocalPointFromClient(e.clientX, e.clientY);
-        if (!local) return;
-        const pos = localToWorldPoint(local);
-        canvasState.selectionBox = {
-          ...currentSelection,
-          current: pos,
-        };
+      if (canvasState.selectionBox.start) {
+        e.preventDefault();
+        updateSelectionBoxFromClient(e);
       }
     },
   );
 
-  const handleMouseUp = useMemoizedFn((e: React.MouseEvent<SVGSVGElement>) => {
-    if (multiScaleRef.current.active) {
-      const current = multiScaleRef.current;
-      const scale = current.scale || 1;
-      if (current.anchor) {
-        current.snapshots.forEach((start, selectedId) => {
-          const nextX =
-            current.anchor!.x + (start.x - current.anchor!.x) * scale;
-          const nextY =
-            current.anchor!.y + (start.y - current.anchor!.y) * scale;
-          if (start.type === "text") {
-            const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
-            canvasActions.updateCanvasImage(selectedId, {
-              x: nextX,
-              y: nextY,
-              fontSize: nextFontSize,
-            });
-          } else {
-            const nextScale = Math.max(0.05, start.scale * scale);
-            canvasActions.updateCanvasImage(selectedId, {
-              x: nextX,
-              y: nextY,
-              scale: nextScale,
-            });
-          }
-        });
+  const handlePointerUp = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (
+        multiScaleRef.current.active &&
+        multiScaleRef.current.pointerId === e.pointerId
+      ) {
+        e.preventDefault();
+        updateScaleSessionFromClient(e);
+        finishScaleSession();
+        return;
       }
-      multiScaleRef.current = {
-        active: false,
-        anchor: null,
-        startUnion: null,
-        startDistance: 1,
-        scale: 1,
-        snapshots: new Map(),
-      };
-      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
-      const svg = svgRef.current;
-      if (svg) svg.style.cursor = getCanvasIdleCursor();
-      return;
-    }
-    const svg = svgRef.current;
-    if (svg) svg.style.cursor = getCanvasIdleCursor();
+      if (!isCanvasInteractionPointer(e.pointerId)) return;
 
-    isPanningRef.current = false;
-    lastPanPointRef.current = null;
-
-    const currentSelection = canvasState.selectionBox;
-    if (currentSelection.start && currentSelection.current) {
-      const x1 = Math.min(currentSelection.start.x, currentSelection.current.x);
-      const x2 = Math.max(currentSelection.start.x, currentSelection.current.x);
-      const y1 = Math.min(currentSelection.start.y, currentSelection.current.y);
-      const y2 = Math.max(currentSelection.start.y, currentSelection.current.y);
-      const width = x2 - x1;
-      const height = y2 - y1;
-
-      const isClick = width <= 2 && height <= 2;
-      const viewportScale = canvasState.canvasViewport.scale || 1;
-      const zoomArea = width * height * viewportScale * viewportScale;
-      const shouldZoom = zoomArea >= MIN_ZOOM_AREA;
-
-      if (canvasState.selectionMode === "zoom") {
-        if (shouldZoom) {
-          // 右键框选缩放，mousedown 时可能已选中节点，需清除
-          clearSelection();
-          zoomToBounds({ x: x1, y: y1, width, height }, 0);
-        } else if (!shouldEnableMouseThrough) {
-          const local = getLocalPointFromClient(e.clientX, e.clientY);
-          if (local) {
-            openContextMenu(local.x, local.y);
-            void commandActions.loadExternalCommands();
-          }
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        erasePathStrokeFromClient(e);
+        finishPathErase();
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
+        const svg = svgRef.current;
+        if (svg) {
+          svg.style.cursor = getCanvasIdleCursor();
         }
-        canvasState.selectionBox = { start: null, current: null };
+        return;
+      }
+      if (canvasState.isDrawingPath) {
+        e.preventDefault();
+        finishPathDrawing(e);
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
         return;
       }
 
-      if (!isClick) {
-        const newSelected = selectionAppendRef.current
-          ? getSelectedIds()
-          : new Set<string>();
-        let lastHitId: string | null = null;
-        visibleCanvasItems.forEach((item) => {
-          const scale = item.scale || 1;
-          const rawW = (item.width || 0) * scale;
-          const rawH = (item.height || 0) * scale;
-          const bbox = getRenderBbox(rawW, rawH, item.rotation || 0);
-
-          const itemMinX = item.x + bbox.offsetX;
-          const itemMinY = item.y + bbox.offsetY;
-          const itemMaxX = itemMinX + bbox.width;
-          const itemMaxY = itemMinY + bbox.height;
-
-          if (
-            itemMinX < x2 &&
-            itemMaxX > x1 &&
-            itemMinY < y2 &&
-            itemMaxY > y1
-          ) {
-            newSelected.add(item.itemId);
-            lastHitId = item.itemId;
-          }
-        });
-        setSelectionByIds(newSelected);
-        if (lastHitId) setPrimaryId(lastHitId);
-        setMultiSelectUnion(computeMultiSelectUnion(newSelected));
+      if (
+        isPanningRef.current ||
+        canvasState.selectionBox.start ||
+        canvasState.selectionBox.current
+      ) {
+        e.preventDefault();
+        updateSelectionBoxFromClient(e);
+        finishCanvasPointerInteraction(e);
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
       }
-    }
-    canvasState.selectionBox = { start: null, current: null };
-  });
+    },
+  );
 
-  useEffect(() => {
-    const handleWindowMouseUp = (event: MouseEvent | TouchEvent) => {
-      if (multiScaleRef.current.active) {
-        const current = multiScaleRef.current;
-        const scale = current.scale || 1;
-        if (current.anchor) {
-          current.snapshots.forEach((start, selectedId) => {
-            const nextX =
-              current.anchor!.x + (start.x - current.anchor!.x) * scale;
-            const nextY =
-              current.anchor!.y + (start.y - current.anchor!.y) * scale;
-            if (start.type === "text") {
-              const nextFontSize = Math.max(8, (start.fontSize || 0) * scale);
-              canvasActions.updateCanvasImageSilent(selectedId, {
-                x: nextX,
-                y: nextY,
-                fontSize: nextFontSize,
-              });
-            } else {
-              const nextScale = Math.max(0.05, start.scale * scale);
-              canvasActions.updateCanvasImageSilent(selectedId, {
-                x: nextX,
-                y: nextY,
-                scale: nextScale,
-              });
-            }
-          });
-          canvasActions.commitCanvasChange();
-        }
-        multiScaleRef.current = {
-          active: false,
-          anchor: null,
-          startUnion: null,
-          startDistance: 1,
-          scale: 1,
-          snapshots: new Map(),
-        };
-        setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  const handlePointerCancel = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (
+        multiScaleRef.current.active &&
+        multiScaleRef.current.pointerId === e.pointerId
+      ) {
+        e.preventDefault();
+        finishScaleSession();
+        return;
+      }
+      if (!isCanvasInteractionPointer(e.pointerId)) return;
+
+      if (isErasingPathRef.current) {
+        e.preventDefault();
+        finishPathErase();
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
+        return;
       }
       if (canvasState.isDrawingPath) {
-        if (event instanceof MouseEvent) {
-          finishPathDrawing(event);
-        } else {
-          finishPathDrawing();
+        e.preventDefault();
+        finishPathDrawing();
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
+        return;
+      }
+
+      if (
+        isPanningRef.current ||
+        canvasState.selectionBox.start ||
+        canvasState.selectionBox.current
+      ) {
+        e.preventDefault();
+        finishCanvasPointerInteraction();
+        releaseCanvasInteractionPointer(e.currentTarget, e.pointerId);
+      }
+    },
+  );
+
+  useEffect(() => {
+    const handleWindowInteractionEnd = (event: PointerEvent) => {
+      if (multiScaleRef.current.active) {
+        if (multiScaleRef.current.pointerId === event.pointerId) {
+          finishScaleSession();
         }
       }
-      if (isErasingPathRef.current) {
-        finishPathErase();
+
+      if (canvasInteractionPointerIdRef.current === event.pointerId) {
+        if (canvasState.isDrawingPath) {
+          if (event.type === "pointerup") {
+            finishPathDrawing(event);
+          } else {
+            finishPathDrawing();
+          }
+        }
+        if (isErasingPathRef.current) {
+          finishPathErase();
+        }
+        if (
+          isPanningRef.current ||
+          canvasState.selectionBox.start ||
+          canvasState.selectionBox.current
+        ) {
+          finishCanvasPointerInteraction(
+            event.type === "pointerup" ? event : undefined,
+          );
+        }
+        canvasInteractionPointerIdRef.current = null;
       }
-      if (canvasState.selectionBox.start || canvasState.selectionBox.current) {
-        canvasState.selectionBox = { start: null, current: null };
-      }
-      isPanningRef.current = false;
-      lastPanPointRef.current = null;
+
       const svg = svgRef.current;
       if (svg) {
         svg.style.cursor = getCanvasIdleCursor();
       }
     };
-    window.addEventListener("mouseup", handleWindowMouseUp);
-    window.addEventListener("touchend", handleWindowMouseUp);
+    window.addEventListener("pointerup", handleWindowInteractionEnd);
+    window.addEventListener("pointercancel", handleWindowInteractionEnd);
     return () => {
-      window.removeEventListener("mouseup", handleWindowMouseUp);
-      window.removeEventListener("touchend", handleWindowMouseUp);
+      window.removeEventListener("pointerup", handleWindowInteractionEnd);
+      window.removeEventListener("pointercancel", handleWindowInteractionEnd);
     };
   }, [
     computeMultiSelectUnion,
+    finishCanvasPointerInteraction,
     finishPathErase,
     finishPathDrawing,
+    finishScaleSession,
     getCanvasIdleCursor,
     getSelectedIds,
     setMultiSelectUnion,
@@ -1551,7 +1749,8 @@ export const Canvas: React.FC = () => {
     (
       targetIds: Set<string>,
       union: { x: number; y: number; width: number; height: number },
-      startPoint?: { x: number; y: number } | null,
+      startPoint: { x: number; y: number } | null,
+      pointerId: number,
     ) => {
       if (targetIds.size === 0) return;
       if (union.width <= 0 || union.height <= 0) return;
@@ -1602,6 +1801,7 @@ export const Canvas: React.FC = () => {
         startUnion: { ...union },
         startDistance,
         scale: 1,
+        pointerId,
         snapshots,
       };
       const svg = svgRef.current;
@@ -1610,19 +1810,19 @@ export const Canvas: React.FC = () => {
   );
 
   const handleGroupScaleStart = useMemoizedFn(
-    (client: { x: number; y: number }) => {
+    (client: { x: number; y: number; pointerId: number }) => {
       const selectedItems = getSelectedItems();
       if (selectedItems.length <= 1) return;
       const union = getItemsBoundingBox(selectedItems);
       if (!union) return;
       const currentSelected = new Set(selectedItems.map((item) => item.itemId));
       const startPoint = getWorldPointFromClient(client);
-      startScaleSession(currentSelected, union, startPoint);
+      startScaleSession(currentSelected, union, startPoint, client.pointerId);
     },
   );
 
   const handleItemScaleStart = useMemoizedFn(
-    (id: string, client: { x: number; y: number }) => {
+    (id: string, client: { x: number; y: number; pointerId: number }) => {
       const target = canvasState.canvasItems.find((it) => it.itemId === id);
       if (!target) return;
       const scale = target.scale || 1;
@@ -1644,20 +1844,22 @@ export const Canvas: React.FC = () => {
         height: bbox.height,
       };
       const startPoint = getWorldPointFromClient(client);
-      startScaleSession(new Set([id]), union, startPoint);
+      startScaleSession(new Set([id]), union, startPoint, client.pointerId);
     },
   );
 
   const handleRotateItemStart = useMemoizedFn(
-    (id: string, client: { x: number; y: number }) => {
+    (id: string, client: { x: number; y: number; pointerId: number }) => {
       const target = canvasState.canvasItems.find((item) => item.itemId === id);
       if (!target) return;
-      void client;
       const viewport = canvasState.canvasViewport;
       const centerX = target.x * viewport.scale + viewport.x;
       const centerY = target.y * viewport.scale + viewport.y;
 
       const onPointerMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== client.pointerId) {
+          return;
+        }
         const dx = ev.clientX - centerX;
         const dy = ev.clientY - centerY;
         const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
@@ -1670,14 +1872,19 @@ export const Canvas: React.FC = () => {
         canvasActions.updateCanvasImageSilent(id, { rotation });
       };
 
-      const onPointerUp = () => {
+      const finishRotate = (ev: PointerEvent) => {
+        if (ev.pointerId !== client.pointerId) {
+          return;
+        }
         window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointerup", finishRotate);
+        window.removeEventListener("pointercancel", finishRotate);
         canvasActions.commitCanvasChange();
       };
 
       window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointerup", finishRotate);
+      window.addEventListener("pointercancel", finishRotate);
     },
   );
 
@@ -2082,14 +2289,15 @@ export const Canvas: React.FC = () => {
         ref={svgRef}
         width={dimensions.width}
         height={dimensions.height}
-        style={{ cursor: penCursor }}
+        style={{
+          cursor: penCursor,
+          touchAction: "none",
+          userSelect: "none",
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
         onWheel={handleWheel}
       >
         <defs>
@@ -2181,6 +2389,19 @@ export const Canvas: React.FC = () => {
           )}
         </g>
       </svg>
+      {/* overlay canvas: 绘制中实时笔画预览， pointer-events:none 不拦截交互 */}
+      <canvas
+        ref={liveStrokeCanvasRef}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          display: "block",
+        }}
+      />
       {showMinimap && !shouldEnableMouseThrough && <Minimap />}
       <ConfirmModal
         isOpen={isClearModalOpen}

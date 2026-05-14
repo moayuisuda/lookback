@@ -96,20 +96,16 @@ export const CanvasPath: React.FC<CanvasPathProps> = ({
                 <>
                   <path
                     d={d}
-                    fill="none"
-                    stroke="transparent"
-                    strokeWidth={Math.max(stroke.strokeWidth + 10, 12)}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    pointerEvents="stroke"
+                    fill="transparent"
+                    fillRule="nonzero"
+                    stroke="none"
+                    pointerEvents="fill"
                   />
                   <path
                     d={d}
-                    fill="none"
-                    stroke={stroke.stroke}
-                    strokeWidth={stroke.strokeWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                    fill={stroke.stroke}
+                    fillRule="nonzero"
+                    stroke="none"
                     pointerEvents="none"
                   />
                 </>

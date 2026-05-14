@@ -351,7 +351,7 @@ export const TitleBar: React.FC = () => {
 
   const titleBarRef = useRef<HTMLDivElement>(null);
   const isIgnoringMouseRef = useRef(false);
-  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastPointerPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!snap.mouseThrough) return;
@@ -390,60 +390,65 @@ export const TitleBar: React.FC = () => {
       }
     };
 
-    if (lastMousePosRef.current) {
-      checkAndSetIgnore(lastMousePosRef.current.x, lastMousePosRef.current.y);
+    if (lastPointerPosRef.current) {
+      checkAndSetIgnore(
+        lastPointerPosRef.current.x,
+        lastPointerPosRef.current.y,
+      );
     }
 
-    const handleGlobalMouseMove = (e: MouseEvent) => {
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    const handleGlobalPointerMove = (e: PointerEvent) => {
+      lastPointerPosRef.current = { x: e.clientX, y: e.clientY };
       checkAndSetIgnore(e.clientX, e.clientY);
     };
 
-    window.addEventListener("mousemove", handleGlobalMouseMove);
+    window.addEventListener("pointermove", handleGlobalPointerMove);
     return () => {
-      window.removeEventListener("mousemove", handleGlobalMouseMove);
+      window.removeEventListener("pointermove", handleGlobalPointerMove);
     };
   }, [snap.mouseThrough, snap.isWindowResizing]);
 
-  const [mouseY, setMouseY] = useState(1000);
+  const [pointerY, setPointerY] = useState(1000);
   const [isHovering, setIsHovering] = useState(false);
-  const isMouseDownRef = useRef(false);
+  const isPointerDownRef = useRef(false);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      // If mouse is down (dragging), do not trigger titlebar by proximity
-      if (isMouseDownRef.current) return;
-      setMouseY(e.clientY);
+    const handlePointerMove = (e: PointerEvent) => {
+      // 拖拽画布或素材时不通过顶部接近触发标题栏，避免数位笔拖动中途误弹出。
+      if (isPointerDownRef.current) return;
+      setPointerY(e.clientY);
     };
 
-    const handleMouseDown = (e: MouseEvent) => {
-      // If clicking inside titlebar, let it function.
+    const handlePointerDown = (e: PointerEvent) => {
+      // 在标题栏内按下时保留原本交互，画布区域按下才视为拖拽/绘制。
       if (
         e.target instanceof Element &&
         e.target.closest(".title-bar-container")
       ) {
         return;
       }
-      isMouseDownRef.current = true;
+      isPointerDownRef.current = true;
       setIsHovering(false);
     };
 
-    const handleMouseUp = () => {
-      isMouseDownRef.current = false;
+    const handlePointerUp = () => {
+      isPointerDownRef.current = false;
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mousedown", handleMouseDown);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mousedown", handleMouseDown);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, []);
 
   const shouldShow =
-    mouseY < 48 ||
+    pointerY < 48 ||
     isHovering ||
     settingsOpen ||
     canvasMenuOpen ||
@@ -541,8 +546,8 @@ export const TitleBar: React.FC = () => {
         "flex w-full fixed left-0 right-0 z-[100] title-bar-container",
       )}
       style={{ top: shouldShow ? 0 : -32 }}
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => setIsHovering(false)}
+      onPointerEnter={() => setIsHovering(true)}
+      onPointerLeave={() => setIsHovering(false)}
     >
       <div
         ref={titleBarRef}

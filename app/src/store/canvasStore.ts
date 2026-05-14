@@ -12,6 +12,22 @@ import {
   type CanvasViewport,
 } from "../service";
 import { debounce } from "radash";
+import {
+  buildBrushCanvasPath,
+  createBrushPoint,
+  getFilteredBrushPoint,
+} from "../utils/canvasBrush";
+
+// 绘制中的实时笔画数据，存于 plain JS 完全绕过 valtio，零 React re-render
+interface LiveStrokeData {
+  itemId: string;
+  points: CanvasPoint[];
+  lastPoint: CanvasPoint;
+  color: string;
+  strokeWidth: number;
+}
+let liveStroke: LiveStrokeData | null = null;
+export const getLiveStroke = () => liveStroke;
 
 export interface ImageMeta {
   id: string;
@@ -47,6 +63,9 @@ export interface CanvasText {
 export interface CanvasPathPoint {
   x: number;
   y: number;
+  pressure?: number;
+  timestamp?: number;
+  pointerType?: string;
 }
 
 export interface CanvasPathStroke {
@@ -93,8 +112,8 @@ export interface CanvasImage extends ImageMeta {
 
 const GROUP_GAP = 40;
 const DEFAULT_CANVAS_PATH_STROKE = "#ffffff";
-const DEFAULT_CANVAS_PATH_STROKE_WIDTH = 4;
-export const CANVAS_PEN_STROKE_WIDTH_OPTIONS = [4, 12] as const;
+const DEFAULT_CANVAS_PATH_STROKE_WIDTH = 6;
+export const CANVAS_PEN_STROKE_WIDTH_OPTIONS = [6, 12] as const;
 const MIN_CANVAS_PATH_STROKE_WIDTH = 1;
 const MAX_CANVAS_PATH_STROKE_WIDTH = 32;
 const DEFAULT_CANVAS_PATH_COLOR_SLOTS = [
@@ -159,6 +178,9 @@ export interface CanvasPersistedItem {
 interface CanvasPoint {
   x: number;
   y: number;
+  pressure?: number;
+  timestamp?: number;
+  pointerType?: string;
 }
 
 type CanvasGeometryItem = {
@@ -469,17 +491,11 @@ const getCanvasPathLocalPoint = (item: CanvasPath, point: CanvasPoint) => {
   return {
     x: point.x - origin.x,
     y: point.y - origin.y,
+    pressure: point.pressure,
+    timestamp: point.timestamp,
+    pointerType: point.pointerType,
   };
 };
-
-const formatCanvasPathNumber = (value: number) =>
-  Number.isInteger(value) ? String(value) : value.toFixed(2);
-
-const getLineCommand = (point: CanvasPathPoint) =>
-  `L ${formatCanvasPathNumber(point.x)} ${formatCanvasPathNumber(point.y)}`;
-
-const getMoveCommand = (point: CanvasPathPoint) =>
-  `M ${formatCanvasPathNumber(point.x)} ${formatCanvasPathNumber(point.y)}`;
 
 const getDistanceToSegment = (
   point: CanvasPathPoint,
@@ -631,33 +647,6 @@ const isStrokeHitBySegment = (
   return false;
 };
 
-const expandCanvasPathBounds = (
-  item: CanvasPath,
-  point: CanvasPoint,
-  strokeWidth: number,
-) => {
-  const origin = getCanvasPathOrigin(item);
-  const padding = Math.max(1, strokeWidth / 2);
-  const currentMinX = item.x - item.width / 2;
-  const currentMinY = item.y - item.height / 2;
-  const currentMaxX = item.x + item.width / 2;
-  const currentMaxY = item.y + item.height / 2;
-  const minX = Math.min(currentMinX, point.x - padding);
-  const minY = Math.min(currentMinY, point.y - padding);
-  const maxX = Math.max(currentMaxX, point.x + padding);
-  const maxY = Math.max(currentMaxY, point.y + padding);
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-
-  // The SVG path commands stay relative to a fixed drawing origin. When the
-  // bounding center moves, only this offset changes; old commands are untouched.
-  item.x = centerX;
-  item.y = centerY;
-  item.offsetX = origin.x - centerX;
-  item.offsetY = origin.y - centerY;
-  item.width = Math.max(strokeWidth, maxX - minX);
-  item.height = Math.max(strokeWidth, maxY - minY);
-};
 
 const recomputeCanvasPathBounds = (item: CanvasPath) => {
   let minX = Number.POSITIVE_INFINITY;
@@ -666,7 +655,7 @@ const recomputeCanvasPathBounds = (item: CanvasPath) => {
   let maxY = Number.NEGATIVE_INFINITY;
 
   item.strokes.forEach((stroke) => {
-    const padding = Math.max(1, stroke.strokeWidth / 2);
+    const padding = Math.max(1, stroke.strokeWidth);
     getCanvasPathStrokePoints(stroke).forEach((point) => {
       const x = point.x + item.offsetX;
       const y = point.y + item.offsetY;
@@ -1597,57 +1586,77 @@ export const canvasActions = {
       canvasState.activePathItemId = item.itemId;
     }
 
-    const localPoint = getCanvasPathLocalPoint(item, point);
-    item.stroke = canvasState.penStrokeColor;
-    item.strokeWidth = Math.max(item.strokeWidth, canvasState.penStrokeWidth);
-    item.strokes.push({
-      path: getMoveCommand(localPoint),
-      pointCount: 1,
-      lastPoint: localPoint,
-      points: [localPoint],
-      stroke: canvasState.penStrokeColor,
+    // 实时笔画数据写入 plain JS，完全绕过 valtio 响应系统
+    liveStroke = {
+      itemId: item.itemId,
+      points: [point],
+      lastPoint: point,
+      color: canvasState.penStrokeColor,
       strokeWidth: canvasState.penStrokeWidth,
-    });
-    expandCanvasPathBounds(item, point, canvasState.penStrokeWidth);
+    };
 
     canvasState.canvasItems.forEach((entry) => {
-      entry.isSelected = entry.itemId === item.itemId;
+      entry.isSelected = entry.itemId === item!.itemId;
     });
     canvasState.primaryId = item.itemId;
     canvasState.multiSelectUnion = null;
     return item.itemId;
   },
 
-  appendPathPoint: (point: CanvasPoint) => {
-    if (!canvasState.isDrawingPath || !canvasState.activePathItemId) return;
-    const item = canvasState.canvasItems.find(
-      (entry): entry is CanvasPath =>
-        entry.itemId === canvasState.activePathItemId &&
-        entry.type === "path",
-    );
-    if (!item) return;
+  appendPathPoint: (point: CanvasPoint, options?: { force?: boolean }) => {
+    // 只写 plain JS，零 valtio mutation → 零 React re-render
+    if (!canvasState.isDrawingPath || !liveStroke) return;
 
-    const stroke = item.strokes[item.strokes.length - 1];
-    if (!stroke) return;
-
-    const localPoint = getCanvasPathLocalPoint(item, point);
     const scale = canvasState.canvasViewport.scale || 1;
-    const minDistance = Math.max(0.5 / scale, item.strokeWidth * 0.2);
+    const strokeWidth = liveStroke.strokeWidth;
+    const minDistance = Math.max(0.35 / scale, strokeWidth * 0.08);
     const distance = Math.hypot(
-      localPoint.x - stroke.lastPoint.x,
-      localPoint.y - stroke.lastPoint.y,
+      point.x - liveStroke.lastPoint.x,
+      point.y - liveStroke.lastPoint.y,
     );
-    if (distance < minDistance) return;
+    const shouldForceEndpoint = options?.force === true;
+    if (!shouldForceEndpoint && distance < minDistance) return;
+    if (shouldForceEndpoint && distance < 0.01 / scale) return;
 
-    stroke.path = `${stroke.path} ${getLineCommand(localPoint)}`;
-    stroke.pointCount += 1;
-    stroke.lastPoint = localPoint;
-    stroke.points.push(localPoint);
-    expandCanvasPathBounds(item, point, stroke.strokeWidth);
+    const nextPoint = shouldForceEndpoint
+      ? point
+      : getFilteredBrushPoint(
+          liveStroke.lastPoint,
+          point,
+          strokeWidth,
+          scale,
+        );
+
+    liveStroke.lastPoint = nextPoint;
+    liveStroke.points.push(nextPoint);
   },
 
   endPathStroke: () => {
-    if (canvasState.isDrawingPath && canvasState.activePathItemId) {
+    if (canvasState.isDrawingPath && liveStroke) {
+      const item = canvasState.canvasItems.find(
+        (entry): entry is CanvasPath =>
+          entry.itemId === liveStroke!.itemId &&
+          entry.type === "path",
+      );
+      if (item && liveStroke.points.length >= 1) {
+        // 世界坐标转路径本地坐标，一次性生成高质量 dab 路径
+        const localPoints = liveStroke.points.map((p) =>
+          createBrushPoint(getCanvasPathLocalPoint(item, p)),
+        );
+        const path = buildBrushCanvasPath(localPoints, liveStroke.strokeWidth);
+        item.stroke = liveStroke.color;
+        item.strokeWidth = Math.max(item.strokeWidth, liveStroke.strokeWidth);
+        item.strokes.push({
+          path,
+          pointCount: localPoints.length,
+          lastPoint: localPoints[localPoints.length - 1],
+          points: localPoints,
+          stroke: liveStroke.color,
+          strokeWidth: liveStroke.strokeWidth,
+        });
+        recomputeCanvasPathBounds(item);
+      }
+      liveStroke = null;
       canvasActions.commitCanvasChange();
     }
     canvasState.isDrawingPath = false;
