@@ -1356,6 +1356,18 @@ export const Canvas: React.FC = () => {
         isSpaceContainBlockedRef.current = true;
       }
 
+      const isSpacePan = isSpaceDownNow && e.button === 0;
+      const isMiddleButton = e.button === 1;
+      if (isSpacePan || isMiddleButton) {
+        e.preventDefault();
+        captureCanvasInteractionPointer(e);
+        isPanningRef.current = true;
+        lastPanPointRef.current = { x: e.clientX, y: e.clientY };
+        const svg = svgRef.current;
+        if (svg) svg.style.cursor = "grabbing";
+        return;
+      }
+
       if (canvasState.isPenMode) {
         if (isSpaceDownNow) return;
         if (e.button !== 0) return;
@@ -1384,18 +1396,6 @@ export const Canvas: React.FC = () => {
         startLiveStrokeRender();
         const svg = svgRef.current;
         if (svg) svg.style.cursor = "crosshair";
-        return;
-      }
-
-      const isSpacePan = isSpaceDownNow && e.button === 0;
-      const isMiddleButton = e.button === 1;
-      if (isSpacePan || isMiddleButton) {
-        e.preventDefault();
-        captureCanvasInteractionPointer(e);
-        isPanningRef.current = true;
-        lastPanPointRef.current = { x: e.clientX, y: e.clientY };
-        const svg = svgRef.current;
-        if (svg) svg.style.cursor = "grabbing";
         return;
       }
 

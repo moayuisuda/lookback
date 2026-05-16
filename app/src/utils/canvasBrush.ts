@@ -29,6 +29,12 @@ const clampNumber = (value: number, min: number, max: number) =>
 const lerpNumber = (start: number, end: number, amount: number) =>
   start + (end - start) * amount;
 
+const normalizeVector = (x: number, y: number) => {
+  const length = Math.hypot(x, y);
+  if (length <= 0.0001) return null;
+  return { x: x / length, y: y / length };
+};
+
 const isPressurePointer = (point: BrushPoint) =>
   point.pointerType === "pen" || point.pointerType === "touch";
 
@@ -188,62 +194,89 @@ const buildRoundDabPath = (sample: BrushSample) => {
   ].join(" ");
 };
 
-const getPolygonSignedArea = (points: BrushPoint[]) => {
-  let area = 0;
-  points.forEach((point, index) => {
-    const next = points[(index + 1) % points.length];
-    area += point.x * next.y - next.x * point.y;
-  });
-  return area / 2;
+const getSampleNormal = (samples: BrushSample[], index: number) => {
+  const previous = samples[index - 1] ?? null;
+  const current = samples[index];
+  const next = samples[index + 1] ?? null;
+  const previousVector = previous
+    ? normalizeVector(current.x - previous.x, current.y - previous.y)
+    : null;
+  const nextVector = next
+    ? normalizeVector(next.x - current.x, next.y - current.y)
+    : null;
+  const tangent =
+    previousVector && nextVector
+      ? (normalizeVector(
+          previousVector.x + nextVector.x,
+          previousVector.y + nextVector.y,
+        ) ?? nextVector)
+      : (previousVector ?? nextVector);
+  if (!tangent) return { x: 0, y: -1 };
+  return { x: -tangent.y, y: tangent.x };
 };
 
-const buildCapsulePath = (start: BrushSample, end: BrushSample) => {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.hypot(dx, dy);
-  if (length <= 0.001) return "";
-
-  const normalX = -dy / length;
-  const normalY = dx / length;
-  const startLeft = {
-    x: start.x + normalX * start.radius,
-    y: start.y + normalY * start.radius,
-  };
-  const endLeft = {
-    x: end.x + normalX * end.radius,
-    y: end.y + normalY * end.radius,
-  };
-  const endRight = {
-    x: end.x - normalX * end.radius,
-    y: end.y - normalY * end.radius,
-  };
-  const startRight = {
-    x: start.x - normalX * start.radius,
-    y: start.y - normalY * start.radius,
-  };
-
-  const points = [startLeft, endLeft, endRight, startRight];
-  if (getPolygonSignedArea(points) < 0) {
-    points.reverse();
-  }
-
-  return [
-    getBrushMoveCommand(points[0]),
-    `L ${formatBrushNumber(points[1].x)} ${formatBrushNumber(points[1].y)}`,
-    `L ${formatBrushNumber(points[2].x)} ${formatBrushNumber(points[2].y)}`,
-    `L ${formatBrushNumber(points[3].x)} ${formatBrushNumber(points[3].y)}`,
-    "Z",
-  ].join(" ");
+const getEndpointTangent = (
+  samples: BrushSample[],
+  index: number,
+  direction: 1 | -1,
+) => {
+  const current = samples[index];
+  const targetIndex = index + direction;
+  const target = samples[targetIndex];
+  if (!target) return { x: 1, y: 0 };
+  const tangent =
+    direction === 1
+      ? normalizeVector(target.x - current.x, target.y - current.y)
+      : normalizeVector(current.x - target.x, current.y - target.y);
+  return tangent ?? { x: 1, y: 0 };
 };
 
-const buildDabStrokePath = (samples: BrushSample[]) => {
-  const commands: string[] = [];
-  for (let index = 1; index < samples.length; index += 1) {
-    commands.push(buildCapsulePath(samples[index - 1], samples[index]));
-  }
-  samples.forEach((sample) => {
-    commands.push(buildRoundDabPath(sample));
+const formatLineToCommand = (point: BrushPoint) =>
+  `L ${formatBrushNumber(point.x)} ${formatBrushNumber(point.y)}`;
+
+const formatQuadraticCommand = (control: BrushPoint, point: BrushPoint) =>
+  `Q ${formatBrushNumber(control.x)} ${formatBrushNumber(control.y)} ${formatBrushNumber(point.x)} ${formatBrushNumber(point.y)}`;
+
+const buildOutlineStrokePath = (samples: BrushSample[]) => {
+  if (samples.length === 1) return buildRoundDabPath(samples[0]);
+
+  const left: BrushPoint[] = [];
+  const right: BrushPoint[] = [];
+
+  samples.forEach((sample, index) => {
+    const normal = getSampleNormal(samples, index);
+    left.push({
+      x: sample.x + normal.x * sample.radius,
+      y: sample.y + normal.y * sample.radius,
+    });
+    right.push({
+      x: sample.x - normal.x * sample.radius,
+      y: sample.y - normal.y * sample.radius,
+    });
   });
+
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const startTangent = getEndpointTangent(samples, 0, 1);
+  const endTangent = getEndpointTangent(samples, samples.length - 1, -1);
+  const endControl = {
+    x: last.x + endTangent.x * last.radius,
+    y: last.y + endTangent.y * last.radius,
+  };
+  const startControl = {
+    x: first.x - startTangent.x * first.radius,
+    y: first.y - startTangent.y * first.radius,
+  };
+
+  const commands = [getBrushMoveCommand(left[0])];
+  left.slice(1).forEach((point) => commands.push(formatLineToCommand(point)));
+  commands.push(formatQuadraticCommand(endControl, right[right.length - 1]));
+  right
+    .slice(0, -1)
+    .reverse()
+    .forEach((point) => commands.push(formatLineToCommand(point)));
+  commands.push(formatQuadraticCommand(startControl, left[0]));
+  commands.push("Z");
   return commands.join(" ");
 };
 
@@ -252,12 +285,14 @@ export const buildBrushCanvasPath = (
   strokeWidth: number,
 ) => {
   const cleanedPoints = removeDuplicatePoints(rawPoints.map(createBrushPoint));
-  if (cleanedPoints.length <= 1) return getBrushMoveCommand(cleanedPoints[0]);
+  if (cleanedPoints.length === 0) return "";
+  if (cleanedPoints.length === 1) return getBrushMoveCommand(cleanedPoints[0]);
 
-  const spacing = Math.max(0.7, strokeWidth * 0.09);
-  const centerline = smoothPoints(resamplePoints(cleanedPoints, spacing), 2);
+  // 最终 SVG 只保留连续轮廓，采样密度不再需要按 dab 间距铺满，避免缩放时重绘超长路径。
+  const spacing = Math.max(1.8, strokeWidth * 0.28);
+  const centerline = smoothPoints(resamplePoints(cleanedPoints, spacing), 1);
   const samples = buildSamples(centerline, strokeWidth);
-  return buildDabStrokePath(samples);
+  return buildOutlineStrokePath(samples);
 };
 
 export const getFilteredBrushPoint = (

@@ -93,22 +93,13 @@ export const CanvasPath: React.FC<CanvasPathProps> = ({
                   />
                 </>
               ) : (
-                <>
-                  <path
-                    d={d}
-                    fill="transparent"
-                    fillRule="nonzero"
-                    stroke="none"
-                    pointerEvents="fill"
-                  />
-                  <path
-                    d={d}
-                    fill={stroke.stroke}
-                    fillRule="nonzero"
-                    stroke="none"
-                    pointerEvents="none"
-                  />
-                </>
+                <path
+                  d={d}
+                  fill={stroke.stroke}
+                  fillRule="nonzero"
+                  stroke="none"
+                  pointerEvents="fill"
+                />
               )}
             </g>
           );
