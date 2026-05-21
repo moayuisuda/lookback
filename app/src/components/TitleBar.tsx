@@ -17,6 +17,7 @@ import {
 import { clsx } from "clsx";
 import { globalActions, globalState } from "../store/globalStore";
 import { canvasActions, canvasState } from "../store/canvasStore";
+import { commandState } from "../store/commandStore";
 import { versionActions, versionState } from "../store/versionStore";
 import { THEME } from "../theme";
 import { useSnapshot } from "valtio";
@@ -32,9 +33,11 @@ import {
 import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./Tooltip";
+import { findShortcutConflict } from "../utils/shortcutConflicts";
 
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
+  const commandSnap = useSnapshot(commandState);
   const versionSnap = useSnapshot(versionState);
   const { t, locale, setLocale } = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -300,44 +303,89 @@ export const TitleBar: React.FC = () => {
     globalActions.pushToast({ key: "toast.shortcutInvalid" }, "error");
   };
 
+  const hasExternalShortcutConflict = (accelerator: string) => {
+    const trimmed = accelerator.trim();
+    if (!trimmed) return false;
+    const entries = Object.entries(commandSnap.externalCommandShortcuts).map(
+      ([id, shortcut]) => ({
+        id,
+        accelerator: shortcut,
+      }),
+    );
+    return Boolean(findShortcutConflict(trimmed, entries));
+  };
+
+  const setGlobalShortcut = async (
+    accelerator: string,
+    setter: (next: string) => Promise<boolean>,
+  ) => {
+    if (hasExternalShortcutConflict(accelerator)) {
+      globalActions.pushToast({ key: "toast.shortcutConflict" }, "error");
+      return;
+    }
+    await setter(accelerator);
+  };
+
   const handleSetToggleWindowShortcut = async (accelerator: string) => {
-    await globalActions.setToggleWindowShortcut(accelerator);
+    await setGlobalShortcut(accelerator, globalActions.setToggleWindowShortcut);
   };
 
   const handleSetCanvasOpacityUpShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasOpacityUpShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setCanvasOpacityUpShortcut,
+    );
   };
 
   const handleSetCanvasOpacityDownShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasOpacityDownShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setCanvasOpacityDownShortcut,
+    );
   };
 
   const handleSetToggleMouseThroughShortcut = async (accelerator: string) => {
-    await globalActions.setToggleMouseThroughShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setToggleMouseThroughShortcut,
+    );
   };
 
   const handleSetCanvasAutoLayoutShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasAutoLayoutShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setCanvasAutoLayoutShortcut,
+    );
   };
 
   const handleSetCanvasGroupShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasGroupShortcut(accelerator);
+    await setGlobalShortcut(accelerator, globalActions.setCanvasGroupShortcut);
   };
 
   const handleSetCanvasPenShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasPenShortcut(accelerator);
+    await setGlobalShortcut(accelerator, globalActions.setCanvasPenShortcut);
   };
 
   const handleSetCanvasPenEraseShortcut = async (accelerator: string) => {
-    await globalActions.setCanvasPenEraseShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setCanvasPenEraseShortcut,
+    );
   };
 
   const handleSetZoomToFitShortcut = async (accelerator: string) => {
-    await globalActions.setZoomToFitShortcut(accelerator);
+    await setGlobalShortcut(accelerator, globalActions.setZoomToFitShortcut);
+  };
+
+  const handleSetWindowDragShortcut = async (accelerator: string) => {
+    await setGlobalShortcut(accelerator, globalActions.setWindowDragShortcut);
   };
 
   const handleSetCommandPaletteShortcut = async (accelerator: string) => {
-    await globalActions.setCommandPaletteShortcut(accelerator);
+    await setGlobalShortcut(
+      accelerator,
+      globalActions.setCommandPaletteShortcut,
+    );
   };
 
   useEffect(() => {
@@ -1020,6 +1068,7 @@ export const TitleBar: React.FC = () => {
                       onChange={(accel) =>
                         void handleSetToggleWindowShortcut(accel)
                       }
+                      onClear={() => void handleSetToggleWindowShortcut("")}
                       onInvalid={handleShortcutInvalid}
                     />
                   </div>
@@ -1033,6 +1082,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCommandPaletteShortcut(accel)
                     }
+                    onClear={() => void handleSetCommandPaletteShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1045,6 +1095,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasOpacityUpShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasOpacityUpShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1057,6 +1108,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasOpacityDownShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasOpacityDownShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1069,6 +1121,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasAutoLayoutShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasAutoLayoutShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1081,6 +1134,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasGroupShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasGroupShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1093,6 +1147,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasPenShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasPenShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1105,6 +1160,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetCanvasPenEraseShortcut(accel)
                     }
+                    onClear={() => void handleSetCanvasPenEraseShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1115,6 +1171,20 @@ export const TitleBar: React.FC = () => {
                   <ShortcutInput
                     value={snap.zoomToFitShortcut}
                     onChange={(accel) => void handleSetZoomToFitShortcut(accel)}
+                    onClear={() => void handleSetZoomToFitShortcut("")}
+                    onInvalid={handleShortcutInvalid}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-neutral-300">
+                    {t("titleBar.windowDrag")}
+                  </span>
+                  <ShortcutInput
+                    value={snap.windowDragShortcut}
+                    onChange={(accel) =>
+                      void handleSetWindowDragShortcut(accel)
+                    }
+                    onClear={() => void handleSetWindowDragShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
@@ -1127,6 +1197,7 @@ export const TitleBar: React.FC = () => {
                     onChange={(accel) =>
                       void handleSetToggleMouseThroughShortcut(accel)
                     }
+                    onClear={() => void handleSetToggleMouseThroughShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>

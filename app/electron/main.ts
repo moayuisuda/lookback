@@ -99,6 +99,12 @@ let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
 let canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
+type ManagedGlobalShortcutId =
+  | "toggle-window"
+  | "canvas-opacity-up"
+  | "canvas-opacity-down"
+  | "toggle-mouse-through";
+const managedGlobalShortcuts = new Map<ManagedGlobalShortcutId, string>();
 
 let isSettingsOpen = false;
 let isPinMode = false;
@@ -1025,25 +1031,25 @@ async function loadShortcuts(): Promise<void> {
 
     const rawToggle = (settings as Record<string, unknown>)
       .toggleWindowShortcut;
-    if (typeof rawToggle === "string" && rawToggle.trim()) {
+    if (typeof rawToggle === "string") {
       toggleWindowShortcut = rawToggle.trim();
     }
 
     const rawMouseThrough = (settings as Record<string, unknown>)
       .toggleMouseThroughShortcut;
-    if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
+    if (typeof rawMouseThrough === "string") {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
     }
 
     const rawOpacityUp = (settings as Record<string, unknown>)
       .canvasOpacityUpShortcut;
-    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
+    if (typeof rawOpacityUp === "string") {
       canvasOpacityUpShortcut = rawOpacityUp.trim();
     }
 
     const rawOpacityDown = (settings as Record<string, unknown>)
       .canvasOpacityDownShortcut;
-    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
+    if (typeof rawOpacityDown === "string") {
       canvasOpacityDownShortcut = rawOpacityDown.trim();
     }
   } catch {
@@ -1388,6 +1394,7 @@ function restoreMainWindowVisibility() {
 }
 
 function registerShortcut(
+  id: ManagedGlobalShortcutId,
   accelerator: string,
   currentVar: string,
   updateVar: (val: string) => void,
@@ -1395,11 +1402,16 @@ function registerShortcut(
   checkSettingsOpen: boolean = false,
 ): { success: boolean; error?: string; accelerator: string } {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
+  const registered = managedGlobalShortcuts.get(id);
+  const current = currentVar.trim();
   if (!next) {
-    return { success: false, error: "Empty shortcut", accelerator: currentVar };
+    if (registered || current) {
+      globalShortcut.unregister(registered ?? current);
+    }
+    managedGlobalShortcuts.delete(id);
+    updateVar("");
+    return { success: true, accelerator: "" };
   }
-
-  const prev = currentVar;
 
   // Create a handler wrapper to check for settings open
   const handler = () => {
@@ -1409,45 +1421,61 @@ function registerShortcut(
     action();
   };
 
+  const restoreRegistered = () => {
+    if (!registered) {
+      updateVar("");
+      return "";
+    }
+
+    // 用户热更新失败时恢复已注册的旧快捷键，避免一次失败把可用快捷键清空。
+    const restored = globalShortcut.register(registered, handler);
+    if (!restored) {
+      managedGlobalShortcuts.delete(id);
+      updateVar("");
+      return "";
+    }
+
+    managedGlobalShortcuts.set(id, registered);
+    updateVar(registered);
+    return registered;
+  };
+
   try {
-    // If the new shortcut is different from old one, unregister old one
-    if (prev !== next) {
-      globalShortcut.unregister(prev);
-    } else {
-      // If same, we still might need to re-register to update handler if logic changed (unlikely here but safe)
-      globalShortcut.unregister(prev);
+    if (registered) {
+      if (registered === next) {
+        updateVar(next);
+        return { success: true, accelerator: next };
+      }
+      globalShortcut.unregister(registered);
     }
 
     const ok = globalShortcut.register(next, handler);
     if (!ok) {
-      // If failed, try to restore old one
-      if (prev !== next) {
-        globalShortcut.unregister(next);
-        globalShortcut.register(prev, handler);
-      }
+      globalShortcut.unregister(next);
+      const restored = restoreRegistered();
       return {
         success: false,
         error: "Shortcut registration failed",
-        accelerator: prev,
+        accelerator: restored,
       };
     }
     updateVar(next);
+    managedGlobalShortcuts.set(id, next);
     return { success: true, accelerator: next };
   } catch (e) {
-    if (prev !== next) {
-      globalShortcut.unregister(next);
-      globalShortcut.register(prev, handler);
-    }
+    globalShortcut.unregister(next);
+    const restored = restoreRegistered();
     return {
       success: false,
       error: e instanceof Error ? e.message : String(e),
-      accelerator: prev,
+      accelerator: restored,
     };
   }
 }
 
 function registerToggleWindowShortcut(accelerator: string) {
   return registerShortcut(
+    "toggle-window",
     accelerator,
     toggleWindowShortcut,
     (v) => {
@@ -1460,6 +1488,7 @@ function registerToggleWindowShortcut(accelerator: string) {
 
 function registerToggleMouseThroughShortcut(accelerator: string) {
   return registerShortcut(
+    "toggle-mouse-through",
     accelerator,
     toggleMouseThroughShortcut,
     (v) => {
@@ -1473,6 +1502,7 @@ function registerToggleMouseThroughShortcut(accelerator: string) {
 
 function registerCanvasOpacityUpShortcut(accelerator: string) {
   return registerShortcut(
+    "canvas-opacity-up",
     accelerator,
     canvasOpacityUpShortcut,
     (v) => {
@@ -1491,6 +1521,7 @@ function registerCanvasOpacityUpShortcut(accelerator: string) {
 
 function registerCanvasOpacityDownShortcut(accelerator: string) {
   return registerShortcut(
+    "canvas-opacity-down",
     accelerator,
     canvasOpacityDownShortcut,
     (v) => {
@@ -1530,6 +1561,8 @@ function registerAnchorShortcuts() {
 }
 
 function registerGlobalShortcuts() {
+  globalShortcut.unregisterAll();
+  managedGlobalShortcuts.clear();
   registerToggleWindowShortcut(toggleWindowShortcut);
   registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
   registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);

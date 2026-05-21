@@ -8,6 +8,11 @@ import {
   type ExternalCommandRecord,
 } from "../commands/external";
 import type { CommandDefinition } from "../commands/types";
+import { globalActions, getGlobalShortcutEntries } from "./globalStore";
+import {
+  findShortcutConflict,
+  normalizeAcceleratorForConflict,
+} from "../utils/shortcutConflicts";
 
 const EXTERNAL_COMMAND_SHORTCUTS_KEY = "externalCommandShortcuts";
 const EXTERNAL_COMMAND_CONTEXT_MENUS_KEY = "externalCommandContextMenus";
@@ -124,6 +129,18 @@ export const commandActions = {
     const id = commandId.trim();
     const nextShortcut = accelerator.trim();
     if (!id || !nextShortcut) return false;
+    const externalEntries = Object.entries(commandState.externalCommandShortcuts)
+      .map(([entryId, entryShortcut]) => ({
+        id: entryId,
+        accelerator: entryShortcut,
+      }));
+    const conflict =
+      findShortcutConflict(nextShortcut, externalEntries, id) ||
+      findShortcutConflict(nextShortcut, getGlobalShortcutEntries());
+    if (conflict) {
+      globalActions.pushToast({ key: "toast.shortcutConflict" }, "error");
+      return false;
+    }
     const next = {
       ...commandState.externalCommandShortcuts,
       [id]: nextShortcut,
@@ -212,5 +229,35 @@ export const commandActions = {
     } catch (error) {
       void error;
     }
+  },
+  removeShortcutConflictsWithGlobalShortcuts: async () => {
+    const reserved = new Set(
+      getGlobalShortcutEntries()
+        .map((entry) => normalizeAcceleratorForConflict(entry.accelerator))
+        .filter(Boolean),
+    );
+    const seenExternal = new Set<string>();
+    const nextShortcuts: Record<string, string> = {};
+    let changed = false;
+
+    Object.entries(commandState.externalCommandShortcuts).forEach(
+      ([id, accelerator]) => {
+        const normalized = normalizeAcceleratorForConflict(accelerator);
+        if (!normalized) {
+          changed = true;
+          return;
+        }
+        if (reserved.has(normalized) || seenExternal.has(normalized)) {
+          changed = true;
+          return;
+        }
+        seenExternal.add(normalized);
+        nextShortcuts[id] = accelerator;
+      },
+    );
+
+    if (!changed) return;
+    commandState.externalCommandShortcuts = nextShortcuts;
+    await settingStorage.set(EXTERNAL_COMMAND_SHORTCUTS_KEY, nextShortcuts);
   },
 };

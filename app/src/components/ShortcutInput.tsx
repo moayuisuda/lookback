@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
+import { X } from 'lucide-react';
 import { useT } from '../i18n/useT';
 
 const normalizeMainKey = (key: string): string | null => {
@@ -64,6 +65,7 @@ export type ShortcutInputProps = {
   disabled?: boolean;
   onChange: (accelerator: string) => void;
   onInvalid: () => void;
+  onClear?: () => void;
 };
 
 export const ShortcutInput: React.FC<ShortcutInputProps> = ({
@@ -71,6 +73,7 @@ export const ShortcutInput: React.FC<ShortcutInputProps> = ({
   disabled,
   onChange,
   onInvalid,
+  onClear,
 }) => {
   const { t } = useT();
   const [recording, setRecording] = useState(false);
@@ -110,17 +113,34 @@ export const ShortcutInput: React.FC<ShortcutInputProps> = ({
   }, [onChange, onInvalid, recording]);
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => setRecording(true)}
-      className={clsx(
-        'h-6 px-2 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-200 transition-colors',
-        'disabled:opacity-60 disabled:hover:bg-neutral-800',
+    <div className="group relative flex items-center">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setRecording(true)}
+        className={clsx(
+          'h-6 px-2 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-200 transition-colors',
+          'disabled:opacity-60 disabled:hover:bg-neutral-800',
+        )}
+        title={t('titleBar.shortcutClickToRecord')}
+      >
+        {displayText}
+      </button>
+      {value && onClear && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClear();
+          }}
+          className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-600 bg-neutral-900 text-neutral-300 opacity-0 transition-colors hover:border-neutral-400 hover:text-white focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-0"
+          title={t('commandPalette.shortcutClear')}
+          aria-label={t('commandPalette.shortcutClear')}
+        >
+          <X size={10} strokeWidth={2} />
+        </button>
       )}
-      title={t('titleBar.shortcutClickToRecord')}
-    >
-      {displayText}
-    </button>
+    </div>
   );
 };

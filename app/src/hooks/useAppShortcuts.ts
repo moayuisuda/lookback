@@ -48,6 +48,7 @@ export const useAppShortcuts = () => {
   const canvasPenHotkey = acceleratorToHotkey(snap.canvasPenShortcut);
   const canvasPenEraseShortcut = snap.canvasPenEraseShortcut.trim();
   const zoomToFitHotkey = acceleratorToHotkey(snap.zoomToFitShortcut);
+  const windowDragShortcut = snap.windowDragShortcut.trim();
   const commandPaletteShortcut = snap.commandPaletteShortcut;
 
   useHotkeys(
@@ -89,6 +90,46 @@ export const useAppShortcuts = () => {
     { preventDefault: true, enabled: Boolean(zoomToFitHotkey) },
     [zoomToFitHotkey],
   );
+
+  useEffect(() => {
+    const finishWindowDrag = () => {
+      if (globalState.isWindowDragMode) {
+        globalActions.setWindowDragMode(false);
+      }
+    };
+
+    if (!windowDragShortcut || isCommandPaletteOpen) {
+      finishWindowDrag();
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || isEditableShortcutTarget(e.target)) return;
+      if (!isAcceleratorMatch(e, windowDragShortcut)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      globalActions.setWindowDragMode(true);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (!isAcceleratorMainKeyEvent(e, windowDragShortcut)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      finishWindowDrag();
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("blur", finishWindowDrag);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("blur", finishWindowDrag);
+      finishWindowDrag();
+    };
+  }, [isCommandPaletteOpen, windowDragShortcut]);
 
   // Tap toggles eraser; holding the shortcut makes eraser momentary.
   useEffect(() => {

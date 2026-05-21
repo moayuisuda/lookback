@@ -65,6 +65,8 @@ const bootstrap = async () => {
     canvasActions.hydrateSettings(),
     commandActions.hydrateSettings(),
   ]);
+  await globalActions.removeDuplicateGlobalShortcuts();
+  await commandActions.removeShortcutConflictsWithGlobalShortcuts();
 
   window.electron?.setPinMode?.(
     globalState.pinMode,

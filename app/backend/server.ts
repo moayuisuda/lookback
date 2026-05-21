@@ -14,6 +14,7 @@ import { createTempRouter } from "./routes/temp";
 import { createShellRouter } from "./routes/shell";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
 import { calculateTone, getDominantColor } from "./imageAnalysis";
+import { normalizeImportedImageUrl } from "../shared/imageUrl";
 import AdmZip from "adm-zip";
 
 export type RendererChannel =
@@ -260,6 +261,16 @@ const cleanupCanvasAssets = async () => {
 function downloadImage(url: string, dest: string): Promise<void> {
   const REQUEST_TIMEOUT_MS = 15000;
   const MAX_RETRY_ATTEMPTS = 3;
+  const REMOTE_REFERER_RULES = [
+    {
+      hostSuffixes: ["xhscdn.com", "xiaohongshu.com"],
+      referer: "https://www.xiaohongshu.com",
+    },
+    {
+      hostSuffixes: ["huaban.com", "hbimg.com", "huabanimg.com"],
+      referer: "https://huaban.com",
+    },
+  ] as const;
 
   const copyFromLocalPath = async (targetUrl: string): Promise<void> => {
     let srcPath = targetUrl;
@@ -291,47 +302,18 @@ function downloadImage(url: string, dest: string): Promise<void> {
     return /socket hang up|timeout|network/i.test(error.message);
   };
 
-  const normalizeRemoteUrl = (rawUrl: string): string => {
-    try {
-      const parsed = new URL(rawUrl);
-      const hostname = parsed.hostname.toLowerCase();
-      if (hostname.endsWith("pinimg.com")) {
-        const segments = parsed.pathname.split("/").filter(Boolean);
-        if (
-          segments.length >= 5 &&
-          segments[0] !== "originals" &&
-          /^\d+x\d*$/i.test(segments[0])
-        ) {
-          segments[0] = "originals";
-          parsed.pathname = `/${segments.join("/")}`;
-        }
-      }
-      // X/Twitter 拖拽经常只给 media path，补齐参数后稳定命中原图。
-      if (
-        hostname === "pbs.twimg.com" &&
-        parsed.pathname.startsWith("/media/")
-      ) {
-        parsed.searchParams.set("name", "orig");
-        if (!parsed.searchParams.has("format")) {
-          const ext = path.extname(parsed.pathname).replace(".", "");
-          if (ext) {
-            parsed.searchParams.set("format", ext);
-          }
-        }
-      }
-      return parsed.toString();
-    } catch {
-      return rawUrl;
-    }
-  };
+  const normalizeRemoteUrl = (rawUrl: string): string =>
+    normalizeImportedImageUrl(rawUrl);
 
   const requestRemoteOnce = async (targetUrl: string): Promise<void> => {
     const referer = (() => {
       try {
         const { hostname, origin } = new URL(targetUrl);
-        // 小红书 CDN 域名需要使用小红书主站作为 Referer，否则返回 403
-        if (hostname.endsWith("xhscdn.com") || hostname.endsWith("xiaohongshu.com")) {
-          return "https://www.xiaohongshu.com";
+        const rule = REMOTE_REFERER_RULES.find((item) =>
+          item.hostSuffixes.some((suffix) => hostname.endsWith(suffix))
+        );
+        if (rule) {
+          return rule.referer;
         }
         return origin;
       } catch {

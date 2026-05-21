@@ -191,6 +191,9 @@ function App() {
       )}
     >
       <WindowResizer />
+      {globalSnap.isWindowDragMode && (
+        <div className="fixed inset-0 z-[10001] draggable bg-transparent" />
+      )}
       <TitleBar />
       {globalSnap.toasts.length > 0 && (
         <div className="fixed right-4 top-10 z-[9999] flex flex-col gap-2 no-drag">

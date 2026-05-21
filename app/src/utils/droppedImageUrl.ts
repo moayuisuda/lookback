@@ -1,51 +1,8 @@
-const PINTEREST_SIZE_SEGMENT_RE = /^\d+x\d*$/i;
-const X_IMAGE_HOSTNAME = "pbs.twimg.com";
+import { normalizeImportedImageUrl } from "../../shared/imageUrl";
 
 export const isHttpUrl = (value: string) => /^https?:\/\//i.test(value);
 
-const normalizePinterestImageUrl = (parsed: URL): void => {
-  if (!parsed.hostname.toLowerCase().endsWith("pinimg.com")) {
-    return;
-  }
-
-  const segments = parsed.pathname.split("/").filter(Boolean);
-  if (segments.length < 5 || segments[0] === "originals") {
-    return;
-  }
-
-  if (PINTEREST_SIZE_SEGMENT_RE.test(segments[0])) {
-    segments[0] = "originals";
-    parsed.pathname = `/${segments.join("/")}`;
-  }
-};
-
-const normalizeXImageUrl = (parsed: URL): void => {
-  if (parsed.hostname.toLowerCase() !== X_IMAGE_HOSTNAME) {
-    return;
-  }
-
-  parsed.searchParams.set("name", "orig");
-  if (!parsed.searchParams.has("format")) {
-    const ext = parsed.pathname
-      .split("/")
-      .pop()
-      ?.match(/\.([a-z0-9]{1,10})$/i)?.[1];
-    if (ext) {
-      parsed.searchParams.set("format", ext.toLowerCase());
-    }
-  }
-};
-
-export const normalizeDroppedImageUrl = (value: string): string => {
-  try {
-    const parsed = new URL(value);
-    normalizePinterestImageUrl(parsed);
-    normalizeXImageUrl(parsed);
-    return parsed.toString();
-  } catch {
-    return value;
-  }
-};
+export const normalizeDroppedImageUrl = normalizeImportedImageUrl;
 
 const pickHttpUrl = (values: Array<string | null | undefined>): string | null => {
   for (const value of values) {
