@@ -71,6 +71,10 @@ export const en = {
   "titleBar.dataFolder": "Data Folder",
   "titleBar.dataFolder.default": "Not configured, using default directory",
   "titleBar.change": "Change",
+  "titleBar.log": "Logs",
+  "titleBar.log.description": "Export the current application log file",
+  "titleBar.log.export": "Export",
+  "titleBar.log.exporting": "Exporting...",
   "titleBar.version": "Version",
   "titleBar.version.current": "Current",
   "titleBar.version.latest": "Latest",
@@ -129,6 +133,8 @@ export const en = {
   "toast.reactError": "Something went wrong: {{message}}",
   "toast.logCopied": "Log copied to clipboard",
   "toast.logCopyFailed": "Failed to copy log",
+  "toast.logExported": "Log exported",
+  "toast.logExportFailed": "Failed to export log: {{error}}",
   "toast.tagRenamed": "Tag renamed",
   "toast.tagRenameFailed": "Failed to rename tag",
   "toast.updateTagsFailed": "Failed to update tags",
@@ -255,6 +261,7 @@ export const en = {
 
   "dialog.chooseStorageFolderTitle": "Choose LookBack storage folder",
   "dialog.saveImageTitle": "Save stitched image",
+  "dialog.saveLogTitle": "Export application log",
 
   "toast.globalError": "Error: {{message}}",
   "toast.unhandledRejection": "Unhandled Promise Rejection: {{reason}}",

@@ -13,6 +13,7 @@ import {
   Check,
   ChevronDown,
   Info,
+  Download,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { globalActions, globalState } from "../store/globalStore";
@@ -48,6 +49,7 @@ export const TitleBar: React.FC = () => {
   const [storageDir, setStorageDir] = useState("");
   const [loadingStorageDir, setLoadingStorageDir] = useState(false);
   const [updatingStorageDir, setUpdatingStorageDir] = useState(false);
+  const [exportingLog, setExportingLog] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
 
   const canvasMenuRef = useRef<HTMLDivElement>(null);
@@ -267,6 +269,41 @@ export const TitleBar: React.FC = () => {
     }
 
     await versionActions.checkForUpdates();
+  };
+
+  const handleExportLog = async () => {
+    if (!window.electron?.exportLogFile) return;
+
+    setExportingLog(true);
+    try {
+      const result = await window.electron.exportLogFile();
+      if (result.success) {
+        globalActions.pushToast({ key: "toast.logExported" }, "success");
+        return;
+      }
+      if (result.canceled) {
+        return;
+      }
+      globalActions.pushToast(
+        {
+          key: "toast.logExportFailed",
+          params: { error: result.error ?? t("common.notSet") },
+        },
+        "error",
+      );
+    } catch (error) {
+      globalActions.pushToast(
+        {
+          key: "toast.logExportFailed",
+          params: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+        "error",
+      );
+    } finally {
+      setExportingLog(false);
+    }
   };
 
   const handleToggleMouseThrough = () => {
@@ -1201,6 +1238,30 @@ export const TitleBar: React.FC = () => {
                     onInvalid={handleShortcutInvalid}
                   />
                 </div>
+              </div>
+            </div>
+
+            <div className="bg-neutral-800/30 p-2 rounded border border-neutral-800">
+              <div className="text-[11px] text-neutral-400 mb-1">
+                {t("titleBar.log")}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] text-neutral-300">
+                  {t("titleBar.log.description")}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleExportLog()}
+                  disabled={exportingLog}
+                  className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-[10px] disabled:opacity-60 border border-neutral-700 transition-colors"
+                >
+                  <Download size={10} />
+                  <span>
+                    {exportingLog
+                      ? t("titleBar.log.exporting")
+                      : t("titleBar.log.export")}
+                  </span>
+                </button>
               </div>
             </div>
           </div>

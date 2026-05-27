@@ -71,6 +71,12 @@ interface Window {
       dataUrl: string,
       defaultName?: string
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
+    exportLogFile: () => Promise<{
+      success: boolean;
+      canceled?: boolean;
+      path?: string;
+      error?: string;
+    }>;
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
     log: (level: string, ...args: unknown[]) => void;
     getLogContent: () => Promise<string>;

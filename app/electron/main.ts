@@ -1681,6 +1681,43 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle("export-log-file", async () => {
+  try {
+    const logPath = log.transports.file.getFile().path;
+    const hasLogFile = await lockedFs.pathExists(logPath);
+    if (!hasLogFile) {
+      return { success: false, error: "Log file not found" };
+    }
+
+    const locale = await getLocale();
+    const parsedLogPath = path.parse(logPath);
+    const defaultName = parsedLogPath.base || `lookback-${Date.now()}.log`;
+    const result = await dialog.showSaveDialog({
+      title: translate(locale, "dialog.saveLogTitle"),
+      defaultPath: path.join(getStorageDir(), defaultName),
+      filters: [{ name: "Log", extensions: ["log"] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, canceled: true };
+    }
+
+    const targetPath = result.filePath.toLowerCase().endsWith(".log")
+      ? result.filePath
+      : `${result.filePath}.log`;
+
+    // 导出时复用文件锁，避免日志写入与复制同时发生导致文件损坏。
+    await lockedFs.copy(logPath, targetPath);
+    return { success: true, path: targetPath };
+  } catch (error) {
+    log.error("Failed to export log file:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
 app.whenReady().then(async () => {
   log.info("App starting...");
   log.info("Log file location:", log.transports.file.getFile().path);

@@ -40,6 +40,7 @@ import { ipcRenderer } from 'electron';
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>
     ipcRenderer.invoke('save-image-file', { dataUrl, defaultName }),
+  exportLogFile: () => ipcRenderer.invoke('export-log-file'),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   onImageUpdated: (callback: (data: unknown) => void) => {
     const handler = (_: unknown, data: unknown) => callback(data);

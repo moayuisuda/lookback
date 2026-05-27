@@ -292,4 +292,11 @@ export const zh = {
   "settings.llm.baseUrl": "基础地址 (Base URL)",
   "settings.llm.key": "API 密钥",
   "settings.llm.model": "模型名称",
+  "titleBar.log": "日志",
+  "titleBar.log.description": "导出当前应用日志文件",
+  "titleBar.log.export": "导出",
+  "titleBar.log.exporting": "导出中...",
+  "toast.logExported": "日志已导出",
+  "toast.logExportFailed": "导出日志失败：{{error}}",
+  "dialog.saveLogTitle": "导出应用日志",
 };
