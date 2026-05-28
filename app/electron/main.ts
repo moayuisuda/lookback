@@ -117,6 +117,8 @@ let localServerStartTask: Promise<number> | null = null;
 let isQuitting = false;
 let isWindowIpcBound = false;
 let hasPendingSecondInstanceRestore = false;
+const MIN_WINDOW_WIDTH = 400;
+const MIN_WINDOW_HEIGHT = 300;
 const LOOKBACK_PROTOCOL_SCHEME = "lookback";
 const LOOKBACK_IMPORT_HOST = "import-command";
 const LOOKBACK_IMPORT_QUERY_KEY = "url";
@@ -1093,11 +1095,14 @@ function loadMainWindow() {
   }
 }
 
-async function saveWindowBounds() {
+async function saveWindowState() {
   if (!mainWindow) return;
-  if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
+  if (mainWindow.isMinimized()) return;
   try {
-    const bounds = mainWindow.getBounds();
+    const isMaximized = mainWindow.isMaximized();
+    const bounds = isMaximized
+      ? mainWindow.getNormalBounds()
+      : mainWindow.getBounds();
     const settingsPath = path.join(getStorageDir(), "settings.json");
     const settings = (await lockedFs
       .readJson(settingsPath)
@@ -1106,21 +1111,81 @@ async function saveWindowBounds() {
     await lockedFs.writeJson(settingsPath, {
       ...settings,
       windowBounds: bounds,
+      windowMaximized: isMaximized,
     });
   } catch (e) {
-    log.error("Failed to save window bounds", e);
+    log.error("Failed to save window state", e);
   }
 }
 
-const debouncedSaveWindowBounds = debounce({ delay: 1000 }, saveWindowBounds);
+const debouncedSaveWindowState = debounce({ delay: 1000 }, saveWindowState);
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getDefaultWindowBounds(): Electron.Rectangle {
+  const display = screen.getPrimaryDisplay();
+  const width = Math.max(
+    MIN_WINDOW_WIDTH,
+    Math.floor(display.workArea.width * 0.6),
+  );
+  const height = Math.max(
+    MIN_WINDOW_HEIGHT,
+    Math.floor(display.workArea.height * 0.8),
+  );
+
+  return {
+    width: Math.min(width, display.workArea.width),
+    height: Math.min(height, display.workArea.height),
+    x: display.workArea.x,
+    y: display.workArea.y,
+  };
+}
+
+function normalizeWindowBounds(
+  bounds: Partial<Electron.Rectangle>,
+): Electron.Rectangle {
+  const defaults = getDefaultWindowBounds();
+  const width = Math.max(
+    MIN_WINDOW_WIDTH,
+    Math.round(toFiniteNumber(bounds.width) ?? defaults.width),
+  );
+  const height = Math.max(
+    MIN_WINDOW_HEIGHT,
+    Math.round(toFiniteNumber(bounds.height) ?? defaults.height),
+  );
+
+  const candidate = {
+    x: Math.round(toFiniteNumber(bounds.x) ?? defaults.x),
+    y: Math.round(toFiniteNumber(bounds.y) ?? defaults.y),
+    width,
+    height,
+  };
+  const display = screen.getDisplayMatching(candidate);
+  const { x, y, width: maxWidth, height: maxHeight } = display.workArea;
+  const normalizedWidth = Math.min(candidate.width, maxWidth);
+  const normalizedHeight = Math.min(candidate.height, maxHeight);
+
+  return {
+    x: clamp(candidate.x, x, x + maxWidth - normalizedWidth),
+    y: clamp(candidate.y, y, y + maxHeight - normalizedHeight),
+    width: normalizedWidth,
+    height: normalizedHeight,
+  };
+}
 
 async function createWindow(options?: { load?: boolean }) {
   log.info("Creating main window...");
   log.info("Storage dir for window state:", getStorageDir());
   isAppHidden = false;
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
   let windowState: Partial<Electron.Rectangle> = {};
+  let windowMaximized = false;
   try {
     const settingsPath = path.join(getStorageDir(), "settings.json");
     if (await lockedFs.pathExists(settingsPath)) {
@@ -1128,21 +1193,25 @@ async function createWindow(options?: { load?: boolean }) {
       if (settingsRaw && typeof settingsRaw === "object") {
         const settings = settingsRaw as {
           windowBounds?: Electron.Rectangle;
+          windowMaximized?: boolean;
         };
         if (settings.windowBounds) {
           windowState = settings.windowBounds;
         }
+        windowMaximized = settings.windowMaximized === true;
       }
     }
   } catch (e) {
-    log.error("Failed to load window bounds", e);
+    log.error("Failed to load window state", e);
   }
 
+  const initialBounds = normalizeWindowBounds(windowState);
+
   mainWindow = new BrowserWindow({
-    width: windowState.width || Math.floor(width * 0.6),
-    height: windowState.height || Math.floor(height * 0.8),
-    x: windowState.x,
-    y: windowState.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    x: initialBounds.x,
+    y: initialBounds.y,
     icon: path.join(__dirname, "../resources/icon.png"),
     webPreferences: {
       nodeIntegration: true,
@@ -1159,8 +1228,14 @@ async function createWindow(options?: { load?: boolean }) {
     show: false,
   });
 
-  mainWindow.on("resize", debouncedSaveWindowBounds);
-  mainWindow.on("move", debouncedSaveWindowBounds);
+  mainWindow.on("resize", debouncedSaveWindowState);
+  mainWindow.on("move", debouncedSaveWindowState);
+  mainWindow.on("maximize", () => {
+    void saveWindowState();
+  });
+  mainWindow.on("unmaximize", () => {
+    void saveWindowState();
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -1193,6 +1268,10 @@ async function createWindow(options?: { load?: boolean }) {
 
   if (options?.load !== false) {
     loadMainWindow();
+  }
+
+  if (windowMaximized) {
+    mainWindow.maximize();
   }
 
   if (!isWindowIpcBound) {
@@ -1251,12 +1330,12 @@ async function createWindow(options?: { load?: boolean }) {
       if (!mainWindow) return;
       const [w, h] = mainWindow.getSize();
       const [x, y] = mainWindow.getPosition();
-      mainWindow.setBounds({
+      mainWindow.setBounds(normalizeWindowBounds({
         x: x - Math.round(deltaWidth),
         y: y,
         width: w + Math.round(deltaWidth),
         height: h,
-      });
+      }));
     });
 
     ipcMain.on(
@@ -1264,12 +1343,12 @@ async function createWindow(options?: { load?: boolean }) {
       (_event, bounds: Partial<Electron.Rectangle>) => {
         if (!mainWindow) return;
         const current = mainWindow.getBounds();
-        mainWindow.setBounds({
+        mainWindow.setBounds(normalizeWindowBounds({
           x: bounds.x ?? current.x,
           y: bounds.y ?? current.y,
           width: bounds.width ?? current.width,
           height: bounds.height ?? current.height,
-        });
+        }));
       },
     );
 
