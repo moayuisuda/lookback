@@ -23,6 +23,75 @@ const apiFetch = async (endpoint: string, init?: RequestInit): Promise<Response>
   return fetch(`${baseUrl}${endpoint}`, init);
 };
 
+const buildHttpErrorMessage = (res: Response): string => {
+  const statusText = res.statusText.trim();
+  return statusText
+    ? `Request failed with status ${res.status}: ${statusText}`
+    : `Request failed with status ${res.status}`;
+};
+
+const getPayloadMessage = (payload: unknown): string => {
+  if (typeof payload === "string") return payload.trim();
+  if (!payload || typeof payload !== "object") return "";
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["error", "message", "details"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+};
+
+const readApiErrorMessage = async (res: Response): Promise<string> => {
+  const fallback = buildHttpErrorMessage(res);
+
+  try {
+    const text = (await res.text()).trim();
+    if (!text) return fallback;
+
+    const contentType = res.headers.get("Content-Type") || "";
+    if (contentType.includes("application/json")) {
+      const payload = JSON.parse(text) as unknown;
+      return getPayloadMessage(payload) || fallback;
+    }
+
+    return text;
+  } catch {
+    return fallback;
+  }
+};
+
+const logApiError = (
+  endpoint: string,
+  method: string,
+  status: number,
+  message: string,
+): void => {
+  try {
+    window.electron?.log?.("error", "[api] request failed", {
+      endpoint,
+      method,
+      status,
+      error: message,
+    });
+  } catch {
+    void 0;
+  }
+};
+
+const throwApiError = async (
+  endpoint: string,
+  method: string,
+  res: Response,
+): Promise<never> => {
+  const message = await readApiErrorMessage(res);
+  logApiError(endpoint, method, res.status, message);
+  throw new Error(message);
+};
+
 let apiAuthTokenCache: string | null = null;
 const getApiAuthToken = async (): Promise<string> => {
   if (apiAuthTokenCache) return apiAuthTokenCache;
@@ -239,7 +308,7 @@ export async function uploadTempImageBinary(
     body: file,
   });
   if (!res.ok) {
-    throw new Error(`Request failed with status ${res.status}`);
+    await throwApiError(endpoint, "POST", res);
   }
   return (await res.json()) as UploadTempImageResponse;
 }
@@ -254,16 +323,7 @@ export async function downloadTempImageUrl(
     body: JSON.stringify({ url, canvasName }),
   });
   if (!res.ok) {
-    let errorMessage = `Request failed with status ${res.status}`;
-    try {
-      const payload = (await res.json()) as DownloadTempImageResponse;
-      if (typeof payload.error === "string" && payload.error.trim()) {
-        errorMessage = payload.error.trim();
-      }
-    } catch {
-      // 保留 HTTP 状态，避免错误响应不是 JSON 时吞掉真正失败。
-    }
-    throw new Error(errorMessage);
+    await throwApiError("/api/download-url", "POST", res);
   }
   return (await res.json()) as DownloadTempImageResponse;
 }
@@ -413,7 +473,7 @@ export async function localApi<TResponse>(
   const res = await apiFetch(endpoint, fetchOptions);
 
   if (!res.ok) {
-    throw new Error(`Request failed with status ${res.status}`);
+    await throwApiError(endpoint, method, res);
   }
 
   try {
