@@ -40,6 +40,8 @@ const BUNDLED_NPM_BIN: Record<string, string> = {
   npx: "npx-cli.js",
 };
 
+const ELECTRON_NODE_COMMAND = "node";
+
 const sanitizeCommand = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -102,7 +104,7 @@ const isAuthorized = (actual: string, expected: string): boolean => {
 
 const normalizeCommandName = (command: string): string => {
   const normalized = path.basename(command).toLowerCase();
-  return normalized.replace(/\.(cmd|ps1)$/i, "");
+  return normalized.replace(/\.(cmd|ps1|exe)$/i, "");
 };
 
 const getShellLogContext = (
@@ -115,17 +117,31 @@ const getShellLogContext = (
   timeoutMs,
 });
 
-const getBundledNpmCliPath = (command: string): string | null => {
-  const binFile = BUNDLED_NPM_BIN[normalizeCommandName(command)];
+const getBundledNpmCliPath = (commandName: string): string | null => {
+  const binFile = BUNDLED_NPM_BIN[commandName];
   if (!binFile) return null;
   return path.join(app.getAppPath(), "node_modules", "npm", "bin", binFile);
 };
+
+const getElectronNodeEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  ELECTRON_RUN_AS_NODE: "1",
+});
 
 const resolveShellCommand = (
   command: string,
   args: string[],
 ): ResolvedShellCommand => {
-  const bundledNpmCli = getBundledNpmCliPath(command);
+  const commandName = normalizeCommandName(command);
+  if (commandName === ELECTRON_NODE_COMMAND) {
+    return {
+      command: process.execPath,
+      args,
+      env: getElectronNodeEnv(),
+    };
+  }
+
+  const bundledNpmCli = getBundledNpmCliPath(commandName);
   if (!bundledNpmCli) {
     return {
       command,
@@ -137,10 +153,7 @@ const resolveShellCommand = (
   return {
     command: process.execPath,
     args: [bundledNpmCli, ...args],
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-    },
+    env: getElectronNodeEnv(),
   };
 };
 

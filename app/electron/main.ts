@@ -117,6 +117,7 @@ let localServerStartTask: Promise<number> | null = null;
 let isQuitting = false;
 let isWindowIpcBound = false;
 let hasPendingSecondInstanceRestore = false;
+let shouldRestoreWindowMaximized = false;
 const MIN_WINDOW_WIDTH = 400;
 const MIN_WINDOW_HEIGHT = 300;
 const LOOKBACK_PROTOCOL_SCHEME = "lookback";
@@ -218,10 +219,11 @@ pendingDeepLinkUrls.push(
   ),
 );
 
-function requestAppQuit() {
+async function requestAppQuit() {
   // 统一退出入口，避免重复触发 app.quit 导致生命周期逻辑重复执行。
   if (isQuitting) return;
   isQuitting = true;
+  await saveWindowState();
   app.quit();
 }
 
@@ -1095,23 +1097,198 @@ function loadMainWindow() {
   }
 }
 
+type WindowDisplayState = {
+  id: number;
+  bounds: Electron.Rectangle;
+  workArea: Electron.Rectangle;
+  scaleFactor: number;
+  rotation: number;
+};
+
+type WindowStateSettings = {
+  windowBounds?: Electron.Rectangle;
+  windowMaximized?: boolean;
+  windowDisplay?: WindowDisplayState;
+};
+
+function isFiniteRectangle(value: unknown): value is Electron.Rectangle {
+  if (!value || typeof value !== "object") return false;
+  const rect = value as Partial<Electron.Rectangle>;
+  return (
+    toFiniteNumber(rect.x) !== null &&
+    toFiniteNumber(rect.y) !== null &&
+    toFiniteNumber(rect.width) !== null &&
+    toFiniteNumber(rect.height) !== null
+  );
+}
+
+function cloneRectangle(rect: Electron.Rectangle): Electron.Rectangle {
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function readRectangle(value: unknown): Electron.Rectangle | undefined {
+  return isFiniteRectangle(value) ? cloneRectangle(value) : undefined;
+}
+
+function readDisplayState(value: unknown): WindowDisplayState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const display = value as Partial<WindowDisplayState>;
+  const bounds = readRectangle(display.bounds);
+  const workArea = readRectangle(display.workArea);
+  if (
+    toFiniteNumber(display.id) === null ||
+    toFiniteNumber(display.scaleFactor) === null ||
+    toFiniteNumber(display.rotation) === null ||
+    !bounds ||
+    !workArea
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: display.id,
+    bounds,
+    workArea,
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function getDisplayState(display: Electron.Display): WindowDisplayState {
+  return {
+    id: display.id,
+    bounds: cloneRectangle(display.bounds),
+    workArea: cloneRectangle(display.workArea),
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function formatDisplayForLog(display: Electron.Display | null | undefined) {
+  if (!display) return null;
+
+  return {
+    id: display.id,
+    bounds: cloneRectangle(display.bounds),
+    workArea: cloneRectangle(display.workArea),
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function getRectangleCenter(rect: Electron.Rectangle) {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function getIntersectionArea(
+  a: Electron.Rectangle,
+  b: Electron.Rectangle,
+): number {
+  const width = Math.max(
+    0,
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
+  );
+  const height = Math.max(
+    0,
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
+  );
+
+  return width * height;
+}
+
+function getDisplayMatchScore(
+  display: Electron.Display,
+  stored: WindowDisplayState,
+): number {
+  const displayCenter = getRectangleCenter(display.workArea);
+  const storedCenter = getRectangleCenter(stored.workArea);
+  const distance =
+    (displayCenter.x - storedCenter.x) ** 2 +
+    (displayCenter.y - storedCenter.y) ** 2;
+
+  return (
+    (display.id === stored.id ? 1_000_000 : 0) +
+    getIntersectionArea(display.bounds, stored.bounds) +
+    getIntersectionArea(display.workArea, stored.workArea) -
+    distance / 10_000
+  );
+}
+
+function findDisplayByState(displayState: WindowDisplayState | undefined) {
+  if (!displayState) return null;
+
+  const displays = screen.getAllDisplays();
+  let bestDisplay: Electron.Display | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const display of displays) {
+    const score = getDisplayMatchScore(display, displayState);
+    if (score > bestScore) {
+      bestScore = score;
+      bestDisplay = display;
+    }
+  }
+
+  return bestDisplay;
+}
+
+async function readWindowStateSettings(): Promise<WindowStateSettings> {
+  const settingsPath = path.join(getStorageDir(), "settings.json");
+  if (!(await lockedFs.pathExists(settingsPath))) {
+    log.info("[window-state] no saved settings file");
+    return {};
+  }
+
+  const settingsRaw = await lockedFs.readJson(settingsPath);
+  if (!settingsRaw || typeof settingsRaw !== "object") {
+    return {};
+  }
+
+  const settings = settingsRaw as WindowStateSettings;
+  const windowState = {
+    windowBounds: readRectangle(settings.windowBounds),
+    windowMaximized: settings.windowMaximized === true,
+    windowDisplay: readDisplayState(settings.windowDisplay),
+  };
+  log.info("[window-state] loaded", windowState);
+  return windowState;
+}
+
 async function saveWindowState() {
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) return;
   try {
     const isMaximized = mainWindow.isMaximized();
-    const bounds = isMaximized
-      ? mainWindow.getNormalBounds()
-      : mainWindow.getBounds();
+    const currentBounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(currentBounds);
+    const bounds = normalizeWindowBounds(
+      isMaximized ? mainWindow.getNormalBounds() : currentBounds,
+      { preferredDisplay: display },
+    );
     const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = (await lockedFs
-      .readJson(settingsPath)
-      .catch(() => ({}))) as object;
+    const settings = {
+      ...((await lockedFs.readJson(settingsPath).catch(() => ({}))) as object),
+    } as Record<string, unknown>;
+    delete settings.windowDisplayId;
 
     await lockedFs.writeJson(settingsPath, {
       ...settings,
       windowBounds: bounds,
       windowMaximized: isMaximized,
+      windowDisplay: getDisplayState(display),
+    });
+    log.info("[window-state] saved", {
+      bounds,
+      isMaximized,
+      display: formatDisplayForLog(display),
     });
   } catch (e) {
     log.error("Failed to save window state", e);
@@ -1128,8 +1305,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function getDefaultWindowBounds(): Electron.Rectangle {
-  const display = screen.getPrimaryDisplay();
+function getDefaultWindowBounds(display = screen.getPrimaryDisplay()): Electron.Rectangle {
   const width = Math.max(
     MIN_WINDOW_WIDTH,
     Math.floor(display.workArea.width * 0.6),
@@ -1149,8 +1325,9 @@ function getDefaultWindowBounds(): Electron.Rectangle {
 
 function normalizeWindowBounds(
   bounds: Partial<Electron.Rectangle>,
+  options?: { preferredDisplay?: Electron.Display | null },
 ): Electron.Rectangle {
-  const defaults = getDefaultWindowBounds();
+  const defaults = getDefaultWindowBounds(options?.preferredDisplay ?? undefined);
   const width = Math.max(
     MIN_WINDOW_WIDTH,
     Math.round(toFiniteNumber(bounds.width) ?? defaults.width),
@@ -1166,7 +1343,9 @@ function normalizeWindowBounds(
     width,
     height,
   };
-  const display = screen.getDisplayMatching(candidate);
+  const display =
+    options?.preferredDisplay ??
+    screen.getDisplayMatching(candidate);
   const { x, y, width: maxWidth, height: maxHeight } = display.workArea;
   const normalizedWidth = Math.min(candidate.width, maxWidth);
   const normalizedHeight = Math.min(candidate.height, maxHeight);
@@ -1184,28 +1363,25 @@ async function createWindow(options?: { load?: boolean }) {
   log.info("Storage dir for window state:", getStorageDir());
   isAppHidden = false;
 
-  let windowState: Partial<Electron.Rectangle> = {};
-  let windowMaximized = false;
+  let windowState: WindowStateSettings = {};
   try {
-    const settingsPath = path.join(getStorageDir(), "settings.json");
-    if (await lockedFs.pathExists(settingsPath)) {
-      const settingsRaw = await lockedFs.readJson(settingsPath);
-      if (settingsRaw && typeof settingsRaw === "object") {
-        const settings = settingsRaw as {
-          windowBounds?: Electron.Rectangle;
-          windowMaximized?: boolean;
-        };
-        if (settings.windowBounds) {
-          windowState = settings.windowBounds;
-        }
-        windowMaximized = settings.windowMaximized === true;
-      }
-    }
+    windowState = await readWindowStateSettings();
   } catch (e) {
     log.error("Failed to load window state", e);
   }
 
-  const initialBounds = normalizeWindowBounds(windowState);
+  const targetDisplay = findDisplayByState(windowState.windowDisplay);
+  const initialBounds = normalizeWindowBounds(windowState.windowBounds ?? {}, {
+    preferredDisplay: targetDisplay,
+  });
+  shouldRestoreWindowMaximized = windowState.windowMaximized === true;
+  log.info("[window-state] resolved initial window state", {
+    savedBounds: windowState.windowBounds,
+    savedMaximized: windowState.windowMaximized === true,
+    savedDisplay: windowState.windowDisplay,
+    matchedDisplay: formatDisplayForLog(targetDisplay),
+    initialBounds,
+  });
 
   mainWindow = new BrowserWindow({
     width: initialBounds.width,
@@ -1235,6 +1411,11 @@ async function createWindow(options?: { load?: boolean }) {
   });
   mainWindow.on("unmaximize", () => {
     void saveWindowState();
+  });
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    void requestAppQuit();
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -1270,10 +1451,6 @@ async function createWindow(options?: { load?: boolean }) {
     loadMainWindow();
   }
 
-  if (windowMaximized) {
-    mainWindow.maximize();
-  }
-
   if (!isWindowIpcBound) {
     isWindowIpcBound = true;
 
@@ -1285,7 +1462,9 @@ async function createWindow(options?: { load?: boolean }) {
         mainWindow?.maximize();
       }
     });
-    ipcMain.on("window-close", () => requestAppQuit());
+    ipcMain.on("window-close", () => {
+      void requestAppQuit();
+    });
     ipcMain.on("window-focus", () => mainWindow?.focus());
 
     ipcMain.on("toggle-always-on-top", (_event, flag) => {
@@ -1426,6 +1605,39 @@ async function createWindow(options?: { load?: boolean }) {
       }
     });
   }
+}
+
+function restoreSavedMaximizedState() {
+  if (!mainWindow || !shouldRestoreWindowMaximized) return;
+  shouldRestoreWindowMaximized = false;
+  if (!mainWindow.isMaximized()) {
+    log.info("[window-state] restoring maximized state after show", {
+      boundsBeforeMaximize: mainWindow.getBounds(),
+      display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+    });
+    mainWindow.maximize();
+    log.info("[window-state] maximized state restored", {
+      boundsAfterMaximize: mainWindow.getBounds(),
+      display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+    });
+  }
+  void saveWindowState();
+}
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  if (isPinMode) {
+    mainWindow.showInactive();
+  } else {
+    mainWindow.show();
+  }
+  log.info("[window-state] window shown", {
+    isPinMode,
+    bounds: mainWindow.getBounds(),
+    isMaximized: mainWindow.isMaximized(),
+    display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+  });
+  restoreSavedMaximizedState();
 }
 
 function toggleMainWindowVisibility() {
@@ -1824,13 +2036,7 @@ app.whenReady().then(async () => {
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
 
   applyPinStateToWindow();
-  // 置顶模式下用 showInactive 显示窗口，不激活 app，避免 macOS 退出全屏 Space。
-  // 非置顶模式正常 show() 激活窗口。
-  if (isPinMode) {
-    mainWindow?.showInactive();
-  } else {
-    mainWindow?.show();
-  }
+  showMainWindow();
   await flushPendingDeepLinks();
 
   registerGlobalShortcuts();
@@ -1856,6 +2062,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow().then(() => {
         applyPinStateToWindow();
+        showMainWindow();
         registerGlobalShortcuts();
         emitUpdaterState();
       });
@@ -1951,6 +2158,12 @@ ipcMain.on("settings-open-changed", (_event, open: boolean) => {
   isSettingsOpen = Boolean(open);
 });
 
+app.on("before-quit", (event) => {
+  if (isQuitting) return;
+  event.preventDefault();
+  void requestAppQuit();
+});
+
 app.on("will-quit", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
@@ -1959,6 +2172,6 @@ app.on("will-quit", () => {
 app.on("window-all-closed", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
-  requestAppQuit();
+  void requestAppQuit();
 });
 // restart trigger 3
