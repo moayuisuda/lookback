@@ -353,6 +353,61 @@ export const TitleBar: React.FC = () => {
   const isIgnoringMouseRef = useRef(false);
   const lastPointerPosRef = useRef<{ x: number; y: number } | null>(null);
 
+  // 手写笔/触控手动拖拽窗口：-webkit-app-region: drag 对 pen/touch 输入不生效
+  const penDragRef = useRef<{
+    active: boolean;
+    pointerId: number;
+    startScreenX: number;
+    startScreenY: number;
+    startWinX: number;
+    startWinY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const handlePenDragMove = (e: PointerEvent) => {
+      const drag = penDragRef.current;
+      if (!drag?.active || e.pointerId !== drag.pointerId) return;
+
+      const dx = e.screenX - drag.startScreenX;
+      const dy = e.screenY - drag.startScreenY;
+      window.electron?.setWindowBounds({
+        x: drag.startWinX + dx,
+        y: drag.startWinY + dy,
+      });
+    };
+
+    const handlePenDragEnd = (e: PointerEvent) => {
+      const drag = penDragRef.current;
+      if (!drag?.active || e.pointerId !== drag.pointerId) return;
+      penDragRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePenDragMove);
+    window.addEventListener("pointerup", handlePenDragEnd);
+    window.addEventListener("pointercancel", handlePenDragEnd);
+    return () => {
+      window.removeEventListener("pointermove", handlePenDragMove);
+      window.removeEventListener("pointerup", handlePenDragEnd);
+      window.removeEventListener("pointercancel", handlePenDragEnd);
+    };
+  }, []);
+
+  const handleDragAreaPointerDown = (e: React.PointerEvent) => {
+    // 仅对 pen/touch 输入手动实现窗口拖拽，mouse 走原生 -webkit-app-region: drag
+    if (e.pointerType === "mouse") return;
+
+    e.preventDefault();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    penDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startScreenX: e.screenX,
+      startScreenY: e.screenY,
+      startWinX: window.screenX,
+      startWinY: window.screenY,
+    };
+  };
+
   useEffect(() => {
     if (!snap.mouseThrough) return;
 
@@ -557,7 +612,11 @@ export const TitleBar: React.FC = () => {
         )}
       >
         {/* Draggable area - leaves top 8px (top-2) for window resizing */}
-        <div className="absolute inset-x-0 bottom-0 top-2 draggable" />
+        {/* pen/touch 输入手动拖拽，mouse 走 -webkit-app-region: drag */}
+        <div
+          className="absolute inset-x-0 bottom-0 top-2 draggable touch-none"
+          onPointerDown={handleDragAreaPointerDown}
+        />
 
         <div className="relative z-10 flex items-center gap-2 text-neutral-400 text-xs font-bold mr-2">
           <span
