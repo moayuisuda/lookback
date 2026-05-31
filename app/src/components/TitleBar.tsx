@@ -434,123 +434,42 @@ export const TitleBar: React.FC = () => {
     return cleanup;
   }, []);
 
-  const titleBarRef = useRef<HTMLDivElement>(null);
-  const isIgnoringMouseRef = useRef(false);
-  const lastPointerPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // 手写笔/触控手动拖拽窗口：-webkit-app-region: drag 对 pen/touch 输入不生效
-  const penDragRef = useRef<{
-    active: boolean;
-    pointerId: number;
-  } | null>(null);
-
-  useEffect(() => {
-    const handlePenDragMove = (e: PointerEvent) => {
-      const drag = penDragRef.current;
-      if (!drag?.active || e.pointerId !== drag.pointerId) return;
-
-      window.electron?.moveWindowAction();
-    };
-
-    const handlePenDragEnd = (e: PointerEvent) => {
-      const drag = penDragRef.current;
-      if (!drag?.active || e.pointerId !== drag.pointerId) return;
-      penDragRef.current = null;
-      window.electron?.endWindowAction();
-    };
-
-    window.addEventListener("pointermove", handlePenDragMove);
-    window.addEventListener("pointerup", handlePenDragEnd);
-    window.addEventListener("pointercancel", handlePenDragEnd);
-    return () => {
-      window.removeEventListener("pointermove", handlePenDragMove);
-      window.removeEventListener("pointerup", handlePenDragEnd);
-      window.removeEventListener("pointercancel", handlePenDragEnd);
-    };
-  }, []);
-
-  const handleDragAreaPointerDown = (e: React.PointerEvent) => {
-    // 仅对 pen/touch 输入手动实现窗口拖拽，mouse 走原生 -webkit-app-region: drag
-    if (e.pointerType === "mouse") return;
-
-    e.preventDefault();
-    (e.target as Element).setPointerCapture(e.pointerId);
-
-    penDragRef.current = {
-      active: true,
-      pointerId: e.pointerId,
-    };
-    window.electron?.startWindowAction({ type: "drag" });
-  };
-
   useEffect(() => {
     if (!snap.mouseThrough) return;
 
+    // 穿透模式下标题栏完全禁用，只保留窗口穿透状态。
     window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-    isIgnoringMouseRef.current = true;
-
-    const checkAndSetIgnore = (clientX: number, clientY: number) => {
-      if (snap.isWindowResizing) {
-        if (isIgnoringMouseRef.current) {
-          window.electron?.setIgnoreMouseEvents?.(false);
-          isIgnoringMouseRef.current = false;
-        }
-        return;
-      }
-
-      if (!titleBarRef.current) return;
-
-      const rect = titleBarRef.current.getBoundingClientRect();
-      const inTitleBar =
-        clientX >= rect.left &&
-        clientX <= rect.right &&
-        clientY >= rect.top &&
-        clientY <= rect.bottom;
-
-      if (inTitleBar) {
-        if (isIgnoringMouseRef.current) {
-          window.electron?.setIgnoreMouseEvents?.(false);
-          isIgnoringMouseRef.current = false;
-        }
-      } else {
-        if (!isIgnoringMouseRef.current) {
-          window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-          isIgnoringMouseRef.current = true;
-        }
-      }
-    };
-
-    if (lastPointerPosRef.current) {
-      checkAndSetIgnore(
-        lastPointerPosRef.current.x,
-        lastPointerPosRef.current.y,
-      );
-    }
-
-    const handleGlobalPointerMove = (e: PointerEvent) => {
-      lastPointerPosRef.current = { x: e.clientX, y: e.clientY };
-      checkAndSetIgnore(e.clientX, e.clientY);
-    };
-
-    window.addEventListener("pointermove", handleGlobalPointerMove);
-    return () => {
-      window.removeEventListener("pointermove", handleGlobalPointerMove);
-    };
-  }, [snap.mouseThrough, snap.isWindowResizing]);
+  }, [snap.mouseThrough]);
 
   const [pointerY, setPointerY] = useState(1000);
   const [isHovering, setIsHovering] = useState(false);
   const isPointerDownRef = useRef(false);
 
   useEffect(() => {
+    if (!snap.mouseThrough) return;
+
+    setSettingsOpen(false);
+    setCanvasMenuOpen(false);
+    setPinMenuOpen(false);
+    setIsCreatingCanvas(false);
+    setEditingCanvas(null);
+    setDeleteConfirmCanvas(null);
+    setIsHovering(false);
+    setPointerY(1000);
+    isPointerDownRef.current = false;
+  }, [snap.mouseThrough]);
+
+  useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
       // 拖拽画布或素材时不通过顶部接近触发标题栏，避免数位笔拖动中途误弹出。
+      if (globalState.mouseThrough) return;
       if (isPointerDownRef.current) return;
       setPointerY(e.clientY);
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       // 在标题栏内按下时保留原本交互，画布区域按下才视为拖拽/绘制。
+      if (globalState.mouseThrough) return;
       if (
         e.target instanceof Element &&
         e.target.closest(".title-bar-container")
@@ -565,34 +484,28 @@ export const TitleBar: React.FC = () => {
       isPointerDownRef.current = false;
     };
 
-    // 窗口获焦时重置 pointerDown 状态，防止失焦时丢失 pointerup 导致 titlebar 永远不显示
-    const handleWindowFocus = () => {
-      isPointerDownRef.current = false;
-    };
-
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerUp);
-    window.addEventListener("focus", handleWindowFocus);
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
-      window.removeEventListener("focus", handleWindowFocus);
     };
   }, []);
 
   const shouldShow =
-    pointerY < 48 ||
-    isHovering ||
-    settingsOpen ||
-    canvasMenuOpen ||
-    pinMenuOpen ||
-    isCreatingCanvas ||
-    !!editingCanvas ||
-    !!deleteConfirmCanvas;
+    !snap.mouseThrough &&
+    (pointerY < 48 ||
+      isHovering ||
+      settingsOpen ||
+      canvasMenuOpen ||
+      pinMenuOpen ||
+      isCreatingCanvas ||
+      !!editingCanvas ||
+      !!deleteConfirmCanvas);
   const hasVersionUpdate =
     versionSnap.updateStatus === "available" ||
     versionSnap.updateStatus === "downloading" ||
@@ -677,28 +590,24 @@ export const TitleBar: React.FC = () => {
     globalActions.setCanvasOpacity(val);
   };
 
+  if (snap.mouseThrough) return null;
+
   return (
     <div
       className={clsx(
-        "flex w-full fixed left-0 right-0 z-[100] title-bar-container",
+        "flex w-full fixed left-0 right-0 z-[100] title-bar-container draggable",
       )}
-      style={{ top: shouldShow ? 0 : -32 }}
       onPointerEnter={() => setIsHovering(true)}
       onPointerLeave={() => setIsHovering(false)}
     >
       <div
-        ref={titleBarRef}
+        style={{ top: shouldShow ? 0 : -32 }}
         className={clsx(
           "relative z-[100] bg-neutral-900 h-8 transition-all inline-flex items-center select-none border-b border-neutral-800",
           "justify-between w-auto flex-1 pr-2 pl-2",
         )}
       >
-        {/* Draggable area - leaves top 8px (top-2) for window resizing */}
         {/* pen/touch 输入手动拖拽，mouse 走 -webkit-app-region: drag */}
-        <div
-          className="absolute inset-x-0 bottom-0 top-2 draggable touch-none"
-          onPointerDown={handleDragAreaPointerDown}
-        />
 
         <div className="relative z-10 flex items-center gap-2 text-neutral-400 text-xs font-bold mr-2">
           <span
@@ -1237,9 +1146,7 @@ export const TitleBar: React.FC = () => {
                   </span>
                   <ShortcutInput
                     value={snap.canvasPenShortcut}
-                    onChange={(accel) =>
-                      void handleSetCanvasPenShortcut(accel)
-                    }
+                    onChange={(accel) => void handleSetCanvasPenShortcut(accel)}
                     onClear={() => void handleSetCanvasPenShortcut("")}
                     onInvalid={handleShortcutInvalid}
                   />

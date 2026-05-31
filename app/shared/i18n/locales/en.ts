@@ -14,6 +14,7 @@ export const en = {
   "common.reset": "Reset",
   "common.search": "Search",
   "common.back": "Back",
+  "windowResizer.resize": "Resize window",
 
   "upload.progress.title": "Uploading...",
   "upload.progress.counter": "{{completed}} / {{total}}",

@@ -1404,6 +1404,7 @@ async function createWindow(options?: { load?: boolean }) {
     },
     frame: false,
     transparent: true,
+    resizable:false,
     backgroundColor: "#00000000",
     alwaysOnTop: false,
     hasShadow: true,

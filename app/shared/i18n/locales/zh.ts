@@ -14,6 +14,7 @@ export const zh = {
   "common.reset": "重置",
   "common.search": "搜索",
   "common.back": "返回",
+  "windowResizer.resize": "调整窗口大小",
 
   "upload.progress.title": "上传中...",
   "upload.progress.counter": "{{completed}} / {{total}}",
