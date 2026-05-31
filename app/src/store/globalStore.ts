@@ -2,6 +2,11 @@ import { proxy } from 'valtio';
 import { THEME } from '../theme';
 import { settingStorage, getSettingsSnapshot, readSetting } from '../service';
 import type { I18nMessage } from '../../shared/i18n/types';
+import {
+  findShortcutConflict,
+  normalizeAcceleratorForConflict,
+  type ShortcutEntry,
+} from '../utils/shortcutConflicts';
 
 
 
@@ -49,9 +54,11 @@ export interface GlobalState {
   canvasPenShortcut: string;
   canvasPenEraseShortcut: string;
   zoomToFitShortcut: string;
+  windowDragShortcut: string;
   commandPaletteShortcut: string;
   isAppHidden: boolean;
   isWindowResizing: boolean;
+  isWindowDragMode: boolean;
   isTitleBarVisible: boolean;
 }
 
@@ -99,7 +106,23 @@ const DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+Shift+G' : 'Ctrl+Shift+G';
 const DEFAULT_CANVAS_PEN_SHORTCUT = isMac ? 'Command+P' : 'Ctrl+P';
 const DEFAULT_CANVAS_PEN_ERASE_SHORTCUT = 'E';
+const DEFAULT_WINDOW_DRAG_SHORTCUT = '';
 const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
+const GLOBAL_SHORTCUT_FIELDS = [
+  'toggleWindowShortcut',
+  'canvasOpacityUpShortcut',
+  'canvasOpacityDownShortcut',
+  'toggleMouseThroughShortcut',
+  'canvasAutoLayoutShortcut',
+  'canvasGroupShortcut',
+  'canvasPenShortcut',
+  'canvasPenEraseShortcut',
+  'zoomToFitShortcut',
+  'windowDragShortcut',
+  'commandPaletteShortcut',
+] as const;
+
+type GlobalShortcutField = (typeof GLOBAL_SHORTCUT_FIELDS)[number];
 
 export const globalState = proxy<GlobalState>({
   tagColors: {},
@@ -127,11 +150,31 @@ export const globalState = proxy<GlobalState>({
   canvasPenShortcut: DEFAULT_CANVAS_PEN_SHORTCUT,
   canvasPenEraseShortcut: DEFAULT_CANVAS_PEN_ERASE_SHORTCUT,
   zoomToFitShortcut: '',
+  windowDragShortcut: DEFAULT_WINDOW_DRAG_SHORTCUT,
   commandPaletteShortcut: DEFAULT_COMMAND_PALETTE_SHORTCUT,
   isAppHidden: false,
   isWindowResizing: false,
+  isWindowDragMode: false,
   isTitleBarVisible: true,
 });
+
+export const getGlobalShortcutEntries = (): ShortcutEntry[] =>
+  GLOBAL_SHORTCUT_FIELDS.map((field) => ({
+    id: field,
+    accelerator: globalState[field],
+  })).filter((entry) => entry.accelerator.trim());
+
+const isGlobalShortcutAvailable = (
+  field: GlobalShortcutField,
+  accelerator: string,
+) => {
+  if (!accelerator.trim()) return true;
+  return !findShortcutConflict(accelerator, getGlobalShortcutEntries(), field);
+};
+
+const notifyShortcutConflict = () => {
+  globalActions.pushToast({ key: 'toast.shortcutConflict' }, 'error');
+};
 
 export const globalActions = {
   hydrateSettings: async () => {
@@ -198,6 +241,11 @@ export const globalActions = {
         'zoomToFitShortcut',
         '',
       );
+      const rawWindowDragShortcut = readSetting<unknown>(
+        settings,
+        'windowDragShortcut',
+        DEFAULT_WINDOW_DRAG_SHORTCUT,
+      );
 
       const nextTagColors: Record<string, string> = {};
       for (const [k, v] of Object.entries(rawTagColors)) {
@@ -234,7 +282,7 @@ export const globalActions = {
         globalState.pinTransparent = rawPinTransparent;
       }
 
-      if (typeof rawToggleWindowShortcut === 'string' && rawToggleWindowShortcut.trim()) {
+      if (typeof rawToggleWindowShortcut === 'string') {
         globalState.toggleWindowShortcut = rawToggleWindowShortcut.trim();
       }
 
@@ -246,48 +294,39 @@ export const globalActions = {
         globalState.mouseThrough = rawMouseThrough;
       }
 
-      if (typeof rawCanvasOpacityUpShortcut === 'string' && rawCanvasOpacityUpShortcut.trim()) {
+      if (typeof rawCanvasOpacityUpShortcut === 'string') {
         globalState.canvasOpacityUpShortcut = rawCanvasOpacityUpShortcut.trim();
       }
 
-      if (typeof rawCanvasOpacityDownShortcut === 'string' && rawCanvasOpacityDownShortcut.trim()) {
+      if (typeof rawCanvasOpacityDownShortcut === 'string') {
         globalState.canvasOpacityDownShortcut = rawCanvasOpacityDownShortcut.trim();
       }
 
-      if (typeof rawToggleMouseThroughShortcut === 'string' && rawToggleMouseThroughShortcut.trim()) {
+      if (typeof rawToggleMouseThroughShortcut === 'string') {
         globalState.toggleMouseThroughShortcut = rawToggleMouseThroughShortcut.trim();
       }
 
-      if (
-        typeof rawCanvasAutoLayoutShortcut === 'string' &&
-        rawCanvasAutoLayoutShortcut.trim()
-      ) {
+      if (typeof rawCanvasAutoLayoutShortcut === 'string') {
         globalState.canvasAutoLayoutShortcut = rawCanvasAutoLayoutShortcut.trim();
       }
 
-      if (typeof rawCanvasGroupShortcut === 'string' && rawCanvasGroupShortcut.trim()) {
+      if (typeof rawCanvasGroupShortcut === 'string') {
         globalState.canvasGroupShortcut = rawCanvasGroupShortcut.trim();
       }
-      if (typeof rawCanvasPenShortcut === 'string' && rawCanvasPenShortcut.trim()) {
+      if (typeof rawCanvasPenShortcut === 'string') {
         globalState.canvasPenShortcut = rawCanvasPenShortcut.trim();
       }
-      if (
-        typeof rawCanvasPenEraseShortcut === 'string' &&
-        rawCanvasPenEraseShortcut.trim()
-      ) {
+      if (typeof rawCanvasPenEraseShortcut === 'string') {
         globalState.canvasPenEraseShortcut = rawCanvasPenEraseShortcut.trim();
       }
-      if (
-        typeof rawCommandPaletteShortcut === 'string' &&
-        rawCommandPaletteShortcut.trim()
-      ) {
+      if (typeof rawCommandPaletteShortcut === 'string') {
         globalState.commandPaletteShortcut = rawCommandPaletteShortcut.trim();
       }
-      if (
-        typeof rawZoomToFitShortcut === 'string' &&
-        rawZoomToFitShortcut.trim()
-      ) {
+      if (typeof rawZoomToFitShortcut === 'string') {
         globalState.zoomToFitShortcut = rawZoomToFitShortcut.trim();
+      }
+      if (typeof rawWindowDragShortcut === 'string') {
+        globalState.windowDragShortcut = rawWindowDragShortcut.trim();
       }
 
     } catch (error) {
@@ -426,15 +465,18 @@ export const globalActions = {
 
   setToggleWindowShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
-    const prev = globalState.toggleWindowShortcut;
+    if (!isGlobalShortcutAvailable('toggleWindowShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.toggleWindowShortcut = next;
     await settingStorage.set('toggleWindowShortcut', next);
 
     const res = await window.electron?.setToggleWindowShortcut?.(next);
     if (res && res.success !== true) {
-      globalState.toggleWindowShortcut = prev;
-      await settingStorage.set('toggleWindowShortcut', prev);
+      const fallback = res.accelerator ?? "";
+      globalState.toggleWindowShortcut = fallback;
+      await settingStorage.set('toggleWindowShortcut', fallback);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -458,15 +500,18 @@ export const globalActions = {
 
   setCanvasOpacityUpShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
-    const prev = globalState.canvasOpacityUpShortcut;
+    if (!isGlobalShortcutAvailable('canvasOpacityUpShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasOpacityUpShortcut = next;
     await settingStorage.set('canvasOpacityUpShortcut', next);
 
     const res = await window.electron?.setCanvasOpacityUpShortcut?.(next);
     if (res && res.success !== true) {
-      globalState.canvasOpacityUpShortcut = prev;
-      await settingStorage.set('canvasOpacityUpShortcut', prev);
+      const fallback = res.accelerator ?? "";
+      globalState.canvasOpacityUpShortcut = fallback;
+      await settingStorage.set('canvasOpacityUpShortcut', fallback);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -478,15 +523,18 @@ export const globalActions = {
 
   setCanvasOpacityDownShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
-    const prev = globalState.canvasOpacityDownShortcut;
+    if (!isGlobalShortcutAvailable('canvasOpacityDownShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasOpacityDownShortcut = next;
     await settingStorage.set('canvasOpacityDownShortcut', next);
 
     const res = await window.electron?.setCanvasOpacityDownShortcut?.(next);
     if (res && res.success !== true) {
-      globalState.canvasOpacityDownShortcut = prev;
-      await settingStorage.set('canvasOpacityDownShortcut', prev);
+      const fallback = res.accelerator ?? "";
+      globalState.canvasOpacityDownShortcut = fallback;
+      await settingStorage.set('canvasOpacityDownShortcut', fallback);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -498,15 +546,18 @@ export const globalActions = {
 
   setToggleMouseThroughShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
-    const prev = globalState.toggleMouseThroughShortcut;
+    if (!isGlobalShortcutAvailable('toggleMouseThroughShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.toggleMouseThroughShortcut = next;
     await settingStorage.set('toggleMouseThroughShortcut', next);
 
     const res = await window.electron?.setToggleMouseThroughShortcut?.(next);
     if (res && res.success !== true) {
-      globalState.toggleMouseThroughShortcut = prev;
-      await settingStorage.set('toggleMouseThroughShortcut', prev);
+      const fallback = res.accelerator ?? "";
+      globalState.toggleMouseThroughShortcut = fallback;
+      await settingStorage.set('toggleMouseThroughShortcut', fallback);
       globalActions.pushToast(
         { key: 'toast.shortcutUpdateFailed', params: { error: res.error ?? '' } },
         'error',
@@ -518,7 +569,10 @@ export const globalActions = {
 
   setCanvasAutoLayoutShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('canvasAutoLayoutShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasAutoLayoutShortcut = next;
     await settingStorage.set('canvasAutoLayoutShortcut', next);
     return true;
@@ -526,35 +580,60 @@ export const globalActions = {
 
   setCanvasGroupShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('canvasGroupShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasGroupShortcut = next;
     await settingStorage.set('canvasGroupShortcut', next);
     return true;
   },
   setCanvasPenShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('canvasPenShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasPenShortcut = next;
     await settingStorage.set('canvasPenShortcut', next);
     return true;
   },
   setCanvasPenEraseShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('canvasPenEraseShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.canvasPenEraseShortcut = next;
     await settingStorage.set('canvasPenEraseShortcut', next);
     return true;
   },
   setZoomToFitShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('zoomToFitShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.zoomToFitShortcut = next;
     await settingStorage.set('zoomToFitShortcut', next);
     return true;
   },
+  setWindowDragShortcut: async (accelerator: string) => {
+    const next = accelerator.trim();
+    if (!isGlobalShortcutAvailable('windowDragShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
+    globalState.windowDragShortcut = next;
+    await settingStorage.set('windowDragShortcut', next);
+    return true;
+  },
   setCommandPaletteShortcut: async (accelerator: string) => {
     const next = accelerator.trim();
-    if (!next) return false;
+    if (!isGlobalShortcutAvailable('commandPaletteShortcut', next)) {
+      notifyShortcutConflict();
+      return false;
+    }
     globalState.commandPaletteShortcut = next;
     await settingStorage.set('commandPaletteShortcut', next);
     return true;
@@ -562,6 +641,45 @@ export const globalActions = {
 
   setWindowResizing: (active: boolean) => {
     globalState.isWindowResizing = active;
+  },
+
+  removeDuplicateGlobalShortcuts: async () => {
+    const seen = new Set<string>();
+    const cleared: GlobalShortcutField[] = [];
+
+    for (const field of GLOBAL_SHORTCUT_FIELDS) {
+      const accelerator = globalState[field].trim();
+      if (!accelerator) continue;
+      const normalized = normalizeAcceleratorForConflict(accelerator);
+      if (!normalized) continue;
+      if (seen.has(normalized)) {
+        globalState[field] = '';
+        cleared.push(field);
+        continue;
+      }
+      seen.add(normalized);
+    }
+
+    await Promise.all(
+      cleared.map((field) => settingStorage.set(field, globalState[field])),
+    );
+
+    if (cleared.includes('toggleWindowShortcut')) {
+      await window.electron?.setToggleWindowShortcut?.('');
+    }
+    if (cleared.includes('canvasOpacityUpShortcut')) {
+      await window.electron?.setCanvasOpacityUpShortcut?.('');
+    }
+    if (cleared.includes('canvasOpacityDownShortcut')) {
+      await window.electron?.setCanvasOpacityDownShortcut?.('');
+    }
+    if (cleared.includes('toggleMouseThroughShortcut')) {
+      await window.electron?.setToggleMouseThroughShortcut?.('');
+    }
+  },
+
+  setWindowDragMode: (active: boolean) => {
+    globalState.isWindowDragMode = active;
   },
 
   setAppHidden: (hidden: boolean) => {

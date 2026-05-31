@@ -99,6 +99,20 @@ let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;
 let canvasOpacityDownShortcut = DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT;
 let toggleMouseThroughShortcut = DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT;
+type ManagedGlobalShortcutId =
+  | "toggle-window"
+  | "canvas-opacity-up"
+  | "canvas-opacity-down"
+  | "toggle-mouse-through";
+const managedGlobalShortcuts = new Map<ManagedGlobalShortcutId, string>();
+
+interface WindowAction {
+  type: "drag" | "resize";
+  direction?: string;
+  startPoint: Electron.Point;
+  startBounds: Electron.Rectangle;
+}
+let activeWindowAction: WindowAction | null = null;
 
 let isSettingsOpen = false;
 let isPinMode = false;
@@ -111,6 +125,9 @@ let localServerStartTask: Promise<number> | null = null;
 let isQuitting = false;
 let isWindowIpcBound = false;
 let hasPendingSecondInstanceRestore = false;
+let shouldRestoreWindowMaximized = false;
+const MIN_WINDOW_WIDTH = 400;
+const MIN_WINDOW_HEIGHT = 300;
 const LOOKBACK_PROTOCOL_SCHEME = "lookback";
 const LOOKBACK_IMPORT_HOST = "import-command";
 const LOOKBACK_IMPORT_QUERY_KEY = "url";
@@ -210,10 +227,11 @@ pendingDeepLinkUrls.push(
   ),
 );
 
-function requestAppQuit() {
+async function requestAppQuit() {
   // 统一退出入口，避免重复触发 app.quit 导致生命周期逻辑重复执行。
   if (isQuitting) return;
   isQuitting = true;
+  await saveWindowState();
   app.quit();
 }
 
@@ -1025,25 +1043,25 @@ async function loadShortcuts(): Promise<void> {
 
     const rawToggle = (settings as Record<string, unknown>)
       .toggleWindowShortcut;
-    if (typeof rawToggle === "string" && rawToggle.trim()) {
+    if (typeof rawToggle === "string") {
       toggleWindowShortcut = rawToggle.trim();
     }
 
     const rawMouseThrough = (settings as Record<string, unknown>)
       .toggleMouseThroughShortcut;
-    if (typeof rawMouseThrough === "string" && rawMouseThrough.trim()) {
+    if (typeof rawMouseThrough === "string") {
       toggleMouseThroughShortcut = rawMouseThrough.trim();
     }
 
     const rawOpacityUp = (settings as Record<string, unknown>)
       .canvasOpacityUpShortcut;
-    if (typeof rawOpacityUp === "string" && rawOpacityUp.trim()) {
+    if (typeof rawOpacityUp === "string") {
       canvasOpacityUpShortcut = rawOpacityUp.trim();
     }
 
     const rawOpacityDown = (settings as Record<string, unknown>)
       .canvasOpacityDownShortcut;
-    if (typeof rawOpacityDown === "string" && rawOpacityDown.trim()) {
+    if (typeof rawOpacityDown === "string") {
       canvasOpacityDownShortcut = rawOpacityDown.trim();
     }
   } catch {
@@ -1087,56 +1105,297 @@ function loadMainWindow() {
   }
 }
 
-async function saveWindowBounds() {
+type WindowDisplayState = {
+  id: number;
+  bounds: Electron.Rectangle;
+  workArea: Electron.Rectangle;
+  scaleFactor: number;
+  rotation: number;
+};
+
+type WindowStateSettings = {
+  windowBounds?: Electron.Rectangle;
+  windowMaximized?: boolean;
+  windowDisplay?: WindowDisplayState;
+};
+
+function isFiniteRectangle(value: unknown): value is Electron.Rectangle {
+  if (!value || typeof value !== "object") return false;
+  const rect = value as Partial<Electron.Rectangle>;
+  return (
+    toFiniteNumber(rect.x) !== null &&
+    toFiniteNumber(rect.y) !== null &&
+    toFiniteNumber(rect.width) !== null &&
+    toFiniteNumber(rect.height) !== null
+  );
+}
+
+function cloneRectangle(rect: Electron.Rectangle): Electron.Rectangle {
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function readRectangle(value: unknown): Electron.Rectangle | undefined {
+  return isFiniteRectangle(value) ? cloneRectangle(value) : undefined;
+}
+
+function readDisplayState(value: unknown): WindowDisplayState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const display = value as Partial<WindowDisplayState>;
+  const bounds = readRectangle(display.bounds);
+  const workArea = readRectangle(display.workArea);
+  if (
+    toFiniteNumber(display.id) === null ||
+    toFiniteNumber(display.scaleFactor) === null ||
+    toFiniteNumber(display.rotation) === null ||
+    !bounds ||
+    !workArea
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: display.id,
+    bounds,
+    workArea,
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function getDisplayState(display: Electron.Display): WindowDisplayState {
+  return {
+    id: display.id,
+    bounds: cloneRectangle(display.bounds),
+    workArea: cloneRectangle(display.workArea),
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function formatDisplayForLog(display: Electron.Display | null | undefined) {
+  if (!display) return null;
+
+  return {
+    id: display.id,
+    bounds: cloneRectangle(display.bounds),
+    workArea: cloneRectangle(display.workArea),
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+  };
+}
+
+function getRectangleCenter(rect: Electron.Rectangle) {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function getIntersectionArea(
+  a: Electron.Rectangle,
+  b: Electron.Rectangle,
+): number {
+  const width = Math.max(
+    0,
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
+  );
+  const height = Math.max(
+    0,
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
+  );
+
+  return width * height;
+}
+
+function getDisplayMatchScore(
+  display: Electron.Display,
+  stored: WindowDisplayState,
+): number {
+  const displayCenter = getRectangleCenter(display.workArea);
+  const storedCenter = getRectangleCenter(stored.workArea);
+  const distance =
+    (displayCenter.x - storedCenter.x) ** 2 +
+    (displayCenter.y - storedCenter.y) ** 2;
+
+  return (
+    (display.id === stored.id ? 1_000_000 : 0) +
+    getIntersectionArea(display.bounds, stored.bounds) +
+    getIntersectionArea(display.workArea, stored.workArea) -
+    distance / 10_000
+  );
+}
+
+function findDisplayByState(displayState: WindowDisplayState | undefined) {
+  if (!displayState) return null;
+
+  const displays = screen.getAllDisplays();
+  let bestDisplay: Electron.Display | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const display of displays) {
+    const score = getDisplayMatchScore(display, displayState);
+    if (score > bestScore) {
+      bestScore = score;
+      bestDisplay = display;
+    }
+  }
+
+  return bestDisplay;
+}
+
+async function readWindowStateSettings(): Promise<WindowStateSettings> {
+  const settingsPath = path.join(getStorageDir(), "settings.json");
+  if (!(await lockedFs.pathExists(settingsPath))) {
+    log.info("[window-state] no saved settings file");
+    return {};
+  }
+
+  const settingsRaw = await lockedFs.readJson(settingsPath);
+  if (!settingsRaw || typeof settingsRaw !== "object") {
+    return {};
+  }
+
+  const settings = settingsRaw as WindowStateSettings;
+  const windowState = {
+    windowBounds: readRectangle(settings.windowBounds),
+    windowMaximized: settings.windowMaximized === true,
+    windowDisplay: readDisplayState(settings.windowDisplay),
+  };
+  log.info("[window-state] loaded", windowState);
+  return windowState;
+}
+
+async function saveWindowState() {
   if (!mainWindow) return;
-  if (mainWindow.isMinimized() || mainWindow.isMaximized()) return;
+  if (mainWindow.isMinimized()) return;
   try {
-    const bounds = mainWindow.getBounds();
+    const isMaximized = mainWindow.isMaximized();
+    const currentBounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(currentBounds);
+    const bounds = normalizeWindowBounds(
+      isMaximized ? mainWindow.getNormalBounds() : currentBounds,
+      { preferredDisplay: display },
+    );
     const settingsPath = path.join(getStorageDir(), "settings.json");
-    const settings = (await lockedFs
-      .readJson(settingsPath)
-      .catch(() => ({}))) as object;
+    const settings = {
+      ...((await lockedFs.readJson(settingsPath).catch(() => ({}))) as object),
+    } as Record<string, unknown>;
+    delete settings.windowDisplayId;
 
     await lockedFs.writeJson(settingsPath, {
       ...settings,
       windowBounds: bounds,
+      windowMaximized: isMaximized,
+      windowDisplay: getDisplayState(display),
+    });
+    log.info("[window-state] saved", {
+      bounds,
+      isMaximized,
+      display: formatDisplayForLog(display),
     });
   } catch (e) {
-    log.error("Failed to save window bounds", e);
+    log.error("Failed to save window state", e);
   }
 }
 
-const debouncedSaveWindowBounds = debounce({ delay: 1000 }, saveWindowBounds);
+const debouncedSaveWindowState = debounce({ delay: 1000 }, saveWindowState);
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getDefaultWindowBounds(display = screen.getPrimaryDisplay()): Electron.Rectangle {
+  const width = Math.max(
+    MIN_WINDOW_WIDTH,
+    Math.floor(display.workArea.width * 0.6),
+  );
+  const height = Math.max(
+    MIN_WINDOW_HEIGHT,
+    Math.floor(display.workArea.height * 0.8),
+  );
+
+  return {
+    width: Math.min(width, display.workArea.width),
+    height: Math.min(height, display.workArea.height),
+    x: display.workArea.x,
+    y: display.workArea.y,
+  };
+}
+
+function normalizeWindowBounds(
+  bounds: Partial<Electron.Rectangle>,
+  options?: { preferredDisplay?: Electron.Display | null },
+): Electron.Rectangle {
+  const defaults = getDefaultWindowBounds(options?.preferredDisplay ?? undefined);
+  const width = Math.max(
+    MIN_WINDOW_WIDTH,
+    Math.round(toFiniteNumber(bounds.width) ?? defaults.width),
+  );
+  const height = Math.max(
+    MIN_WINDOW_HEIGHT,
+    Math.round(toFiniteNumber(bounds.height) ?? defaults.height),
+  );
+
+  const candidate = {
+    x: Math.round(toFiniteNumber(bounds.x) ?? defaults.x),
+    y: Math.round(toFiniteNumber(bounds.y) ?? defaults.y),
+    width,
+    height,
+  };
+  const display =
+    options?.preferredDisplay ??
+    screen.getDisplayMatching(candidate);
+  const { x, y, width: maxWidth, height: maxHeight } = display.workArea;
+  const normalizedWidth = Math.min(candidate.width, maxWidth);
+  const normalizedHeight = Math.min(candidate.height, maxHeight);
+
+  return {
+    x: clamp(candidate.x, x, x + maxWidth - normalizedWidth),
+    y: clamp(candidate.y, y, y + maxHeight - normalizedHeight),
+    width: normalizedWidth,
+    height: normalizedHeight,
+  };
+}
 
 async function createWindow(options?: { load?: boolean }) {
   log.info("Creating main window...");
   log.info("Storage dir for window state:", getStorageDir());
   isAppHidden = false;
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
-  let windowState: Partial<Electron.Rectangle> = {};
+  let windowState: WindowStateSettings = {};
   try {
-    const settingsPath = path.join(getStorageDir(), "settings.json");
-    if (await lockedFs.pathExists(settingsPath)) {
-      const settingsRaw = await lockedFs.readJson(settingsPath);
-      if (settingsRaw && typeof settingsRaw === "object") {
-        const settings = settingsRaw as {
-          windowBounds?: Electron.Rectangle;
-        };
-        if (settings.windowBounds) {
-          windowState = settings.windowBounds;
-        }
-      }
-    }
+    windowState = await readWindowStateSettings();
   } catch (e) {
-    log.error("Failed to load window bounds", e);
+    log.error("Failed to load window state", e);
   }
 
+  const targetDisplay = findDisplayByState(windowState.windowDisplay);
+  const initialBounds = normalizeWindowBounds(windowState.windowBounds ?? {}, {
+    preferredDisplay: targetDisplay,
+  });
+  shouldRestoreWindowMaximized = windowState.windowMaximized === true;
+  log.info("[window-state] resolved initial window state", {
+    savedBounds: windowState.windowBounds,
+    savedMaximized: windowState.windowMaximized === true,
+    savedDisplay: windowState.windowDisplay,
+    matchedDisplay: formatDisplayForLog(targetDisplay),
+    initialBounds,
+  });
+
   mainWindow = new BrowserWindow({
-    width: windowState.width || Math.floor(width * 0.6),
-    height: windowState.height || Math.floor(height * 0.8),
-    x: windowState.x,
-    y: windowState.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    x: initialBounds.x,
+    y: initialBounds.y,
     icon: path.join(__dirname, "../resources/icon.png"),
     webPreferences: {
       nodeIntegration: true,
@@ -1153,10 +1412,22 @@ async function createWindow(options?: { load?: boolean }) {
     show: false,
   });
 
-  mainWindow.on("resize", debouncedSaveWindowBounds);
-  mainWindow.on("move", debouncedSaveWindowBounds);
+  mainWindow.on("resize", debouncedSaveWindowState);
+  mainWindow.on("move", debouncedSaveWindowState);
+  mainWindow.on("maximize", () => {
+    void saveWindowState();
+  });
+  mainWindow.on("unmaximize", () => {
+    void saveWindowState();
+  });
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    void requestAppQuit();
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
+    activeWindowAction = null;
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -1200,7 +1471,9 @@ async function createWindow(options?: { load?: boolean }) {
         mainWindow?.maximize();
       }
     });
-    ipcMain.on("window-close", () => requestAppQuit());
+    ipcMain.on("window-close", () => {
+      void requestAppQuit();
+    });
     ipcMain.on("window-focus", () => mainWindow?.focus());
 
     ipcMain.on("toggle-always-on-top", (_event, flag) => {
@@ -1245,12 +1518,12 @@ async function createWindow(options?: { load?: boolean }) {
       if (!mainWindow) return;
       const [w, h] = mainWindow.getSize();
       const [x, y] = mainWindow.getPosition();
-      mainWindow.setBounds({
+      mainWindow.setBounds(normalizeWindowBounds({
         x: x - Math.round(deltaWidth),
         y: y,
         width: w + Math.round(deltaWidth),
         height: h,
-      });
+      }));
     });
 
     ipcMain.on(
@@ -1258,14 +1531,86 @@ async function createWindow(options?: { load?: boolean }) {
       (_event, bounds: Partial<Electron.Rectangle>) => {
         if (!mainWindow) return;
         const current = mainWindow.getBounds();
+        // 拖拽/缩放时直接设置，不经过 normalizeWindowBounds：
+        // normalize 的 Math.round 和 clamp 会在高频调用中产生 ±1px 抖动
         mainWindow.setBounds({
           x: bounds.x ?? current.x,
           y: bounds.y ?? current.y,
-          width: bounds.width ?? current.width,
-          height: bounds.height ?? current.height,
+          width: Math.max(MIN_WINDOW_WIDTH, bounds.width ?? current.width),
+          height: Math.max(MIN_WINDOW_HEIGHT, bounds.height ?? current.height),
         });
       },
     );
+
+    ipcMain.handle("get-window-bounds", () => {
+      if (!mainWindow) return null;
+      return mainWindow.getBounds();
+    });
+
+    ipcMain.on(
+      "window-action-start",
+      (_event, payload: { type: "drag" | "resize"; direction?: string }) => {
+        if (!mainWindow) return;
+        const startPoint = screen.getCursorScreenPoint();
+        const startBounds = mainWindow.getBounds();
+        activeWindowAction = {
+          type: payload.type,
+          direction: payload.direction,
+          startPoint,
+          startBounds,
+        };
+      },
+    );
+
+    ipcMain.on("window-action-move", () => {
+      if (!mainWindow || !activeWindowAction) return;
+      const currentPoint = screen.getCursorScreenPoint();
+      const dx = currentPoint.x - activeWindowAction.startPoint.x;
+      const dy = currentPoint.y - activeWindowAction.startPoint.y;
+
+      const startBounds = activeWindowAction.startBounds;
+
+      if (activeWindowAction.type === "drag") {
+        mainWindow.setBounds({
+          x: startBounds.x + dx,
+          y: startBounds.y + dy,
+          width: startBounds.width,
+          height: startBounds.height,
+        });
+      } else if (activeWindowAction.type === "resize" && activeWindowAction.direction) {
+        const direction = activeWindowAction.direction;
+        const newBounds = { ...startBounds };
+
+        if (direction.includes("e")) {
+          newBounds.width = Math.round(
+            Math.max(MIN_WINDOW_WIDTH, startBounds.width + dx),
+          );
+        }
+        if (direction.includes("s")) {
+          newBounds.height = Math.round(
+            Math.max(MIN_WINDOW_HEIGHT, startBounds.height + dy),
+          );
+        }
+        if (direction.includes("w")) {
+          newBounds.width = Math.round(
+            Math.max(MIN_WINDOW_WIDTH, startBounds.width - dx),
+          );
+          newBounds.x = startBounds.x + startBounds.width - newBounds.width;
+        }
+        if (direction.includes("n")) {
+          newBounds.height = Math.round(
+            Math.max(MIN_WINDOW_HEIGHT, startBounds.height - dy),
+          );
+          newBounds.y = startBounds.y + startBounds.height - newBounds.height;
+        }
+
+        mainWindow.setBounds(newBounds);
+      }
+    });
+
+    ipcMain.on("window-action-end", () => {
+      activeWindowAction = null;
+    });
 
     ipcMain.on("log-message", (_event, level: string, ...args: unknown[]) => {
       if (typeof log[level as keyof typeof log] === "function") {
@@ -1343,6 +1688,39 @@ async function createWindow(options?: { load?: boolean }) {
   }
 }
 
+function restoreSavedMaximizedState() {
+  if (!mainWindow || !shouldRestoreWindowMaximized) return;
+  shouldRestoreWindowMaximized = false;
+  if (!mainWindow.isMaximized()) {
+    log.info("[window-state] restoring maximized state after show", {
+      boundsBeforeMaximize: mainWindow.getBounds(),
+      display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+    });
+    mainWindow.maximize();
+    log.info("[window-state] maximized state restored", {
+      boundsAfterMaximize: mainWindow.getBounds(),
+      display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+    });
+  }
+  void saveWindowState();
+}
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  if (isPinMode) {
+    mainWindow.showInactive();
+  } else {
+    mainWindow.show();
+  }
+  log.info("[window-state] window shown", {
+    isPinMode,
+    bounds: mainWindow.getBounds(),
+    isMaximized: mainWindow.isMaximized(),
+    display: formatDisplayForLog(screen.getDisplayMatching(mainWindow.getBounds())),
+  });
+  restoreSavedMaximizedState();
+}
+
 function toggleMainWindowVisibility() {
   if (!mainWindow) return;
 
@@ -1388,6 +1766,7 @@ function restoreMainWindowVisibility() {
 }
 
 function registerShortcut(
+  id: ManagedGlobalShortcutId,
   accelerator: string,
   currentVar: string,
   updateVar: (val: string) => void,
@@ -1395,11 +1774,16 @@ function registerShortcut(
   checkSettingsOpen: boolean = false,
 ): { success: boolean; error?: string; accelerator: string } {
   const next = typeof accelerator === "string" ? accelerator.trim() : "";
+  const registered = managedGlobalShortcuts.get(id);
+  const current = currentVar.trim();
   if (!next) {
-    return { success: false, error: "Empty shortcut", accelerator: currentVar };
+    if (registered || current) {
+      globalShortcut.unregister(registered ?? current);
+    }
+    managedGlobalShortcuts.delete(id);
+    updateVar("");
+    return { success: true, accelerator: "" };
   }
-
-  const prev = currentVar;
 
   // Create a handler wrapper to check for settings open
   const handler = () => {
@@ -1409,45 +1793,61 @@ function registerShortcut(
     action();
   };
 
+  const restoreRegistered = () => {
+    if (!registered) {
+      updateVar("");
+      return "";
+    }
+
+    // 用户热更新失败时恢复已注册的旧快捷键，避免一次失败把可用快捷键清空。
+    const restored = globalShortcut.register(registered, handler);
+    if (!restored) {
+      managedGlobalShortcuts.delete(id);
+      updateVar("");
+      return "";
+    }
+
+    managedGlobalShortcuts.set(id, registered);
+    updateVar(registered);
+    return registered;
+  };
+
   try {
-    // If the new shortcut is different from old one, unregister old one
-    if (prev !== next) {
-      globalShortcut.unregister(prev);
-    } else {
-      // If same, we still might need to re-register to update handler if logic changed (unlikely here but safe)
-      globalShortcut.unregister(prev);
+    if (registered) {
+      if (registered === next) {
+        updateVar(next);
+        return { success: true, accelerator: next };
+      }
+      globalShortcut.unregister(registered);
     }
 
     const ok = globalShortcut.register(next, handler);
     if (!ok) {
-      // If failed, try to restore old one
-      if (prev !== next) {
-        globalShortcut.unregister(next);
-        globalShortcut.register(prev, handler);
-      }
+      globalShortcut.unregister(next);
+      const restored = restoreRegistered();
       return {
         success: false,
         error: "Shortcut registration failed",
-        accelerator: prev,
+        accelerator: restored,
       };
     }
     updateVar(next);
+    managedGlobalShortcuts.set(id, next);
     return { success: true, accelerator: next };
   } catch (e) {
-    if (prev !== next) {
-      globalShortcut.unregister(next);
-      globalShortcut.register(prev, handler);
-    }
+    globalShortcut.unregister(next);
+    const restored = restoreRegistered();
     return {
       success: false,
       error: e instanceof Error ? e.message : String(e),
-      accelerator: prev,
+      accelerator: restored,
     };
   }
 }
 
 function registerToggleWindowShortcut(accelerator: string) {
   return registerShortcut(
+    "toggle-window",
     accelerator,
     toggleWindowShortcut,
     (v) => {
@@ -1460,6 +1860,7 @@ function registerToggleWindowShortcut(accelerator: string) {
 
 function registerToggleMouseThroughShortcut(accelerator: string) {
   return registerShortcut(
+    "toggle-mouse-through",
     accelerator,
     toggleMouseThroughShortcut,
     (v) => {
@@ -1473,6 +1874,7 @@ function registerToggleMouseThroughShortcut(accelerator: string) {
 
 function registerCanvasOpacityUpShortcut(accelerator: string) {
   return registerShortcut(
+    "canvas-opacity-up",
     accelerator,
     canvasOpacityUpShortcut,
     (v) => {
@@ -1491,6 +1893,7 @@ function registerCanvasOpacityUpShortcut(accelerator: string) {
 
 function registerCanvasOpacityDownShortcut(accelerator: string) {
   return registerShortcut(
+    "canvas-opacity-down",
     accelerator,
     canvasOpacityDownShortcut,
     (v) => {
@@ -1530,6 +1933,8 @@ function registerAnchorShortcuts() {
 }
 
 function registerGlobalShortcuts() {
+  globalShortcut.unregisterAll();
+  managedGlobalShortcuts.clear();
   registerToggleWindowShortcut(toggleWindowShortcut);
   registerCanvasOpacityUpShortcut(canvasOpacityUpShortcut);
   registerCanvasOpacityDownShortcut(canvasOpacityDownShortcut);
@@ -1648,6 +2053,43 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle("export-log-file", async () => {
+  try {
+    const logPath = log.transports.file.getFile().path;
+    const hasLogFile = await lockedFs.pathExists(logPath);
+    if (!hasLogFile) {
+      return { success: false, error: "Log file not found" };
+    }
+
+    const locale = await getLocale();
+    const parsedLogPath = path.parse(logPath);
+    const defaultName = parsedLogPath.base || `lookback-${Date.now()}.log`;
+    const result = await dialog.showSaveDialog({
+      title: translate(locale, "dialog.saveLogTitle"),
+      defaultPath: path.join(getStorageDir(), defaultName),
+      filters: [{ name: "Log", extensions: ["log"] }],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, canceled: true };
+    }
+
+    const targetPath = result.filePath.toLowerCase().endsWith(".log")
+      ? result.filePath
+      : `${result.filePath}.log`;
+
+    // 导出时复用文件锁，避免日志写入与复制同时发生导致文件损坏。
+    await lockedFs.copy(logPath, targetPath);
+    return { success: true, path: targetPath };
+  } catch (error) {
+    log.error("Failed to export log file:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
 app.whenReady().then(async () => {
   log.info("App starting...");
   log.info("Log file location:", log.transports.file.getFile().path);
@@ -1675,13 +2117,7 @@ app.whenReady().then(async () => {
   await Promise.all([taskLoadPin, taskLoadShortcuts, taskCreateWindow]);
 
   applyPinStateToWindow();
-  // 置顶模式下用 showInactive 显示窗口，不激活 app，避免 macOS 退出全屏 Space。
-  // 非置顶模式正常 show() 激活窗口。
-  if (isPinMode) {
-    mainWindow?.showInactive();
-  } else {
-    mainWindow?.show();
-  }
+  showMainWindow();
   await flushPendingDeepLinks();
 
   registerGlobalShortcuts();
@@ -1707,6 +2143,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow().then(() => {
         applyPinStateToWindow();
+        showMainWindow();
         registerGlobalShortcuts();
         emitUpdaterState();
       });
@@ -1802,6 +2239,12 @@ ipcMain.on("settings-open-changed", (_event, open: boolean) => {
   isSettingsOpen = Boolean(open);
 });
 
+app.on("before-quit", (event) => {
+  if (isQuitting) return;
+  event.preventDefault();
+  void requestAppQuit();
+});
+
 app.on("will-quit", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
@@ -1810,6 +2253,6 @@ app.on("will-quit", () => {
 app.on("window-all-closed", () => {
   stopPinByAppWatcher();
   unregisterGlobalShortcuts();
-  requestAppQuit();
+  void requestAppQuit();
 });
 // restart trigger 3

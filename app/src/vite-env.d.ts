@@ -31,6 +31,7 @@ interface Window {
     setPinTransparent: (enabled: boolean) => void;
     resizeWindowBy: (delta: number) => void;
     setWindowBounds: (bounds: { x?: number; y?: number; width?: number; height?: number }) => void;
+    getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
     setToggleWindowShortcut: (
       accelerator: string,
     ) => Promise<{ success: boolean; error?: string; accelerator?: string }>;
@@ -71,6 +72,12 @@ interface Window {
       dataUrl: string,
       defaultName?: string
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
+    exportLogFile: () => Promise<{
+      success: boolean;
+      canceled?: boolean;
+      path?: string;
+      error?: string;
+    }>;
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
     log: (level: string, ...args: unknown[]) => void;
     getLogContent: () => Promise<string>;
@@ -80,5 +87,8 @@ interface Window {
       error?: string;
       partialSuccess?: boolean;
     }>;
+    startWindowAction: (payload: { type: 'drag' | 'resize'; direction?: string }) => void;
+    moveWindowAction: () => void;
+    endWindowAction: () => void;
   };
 }

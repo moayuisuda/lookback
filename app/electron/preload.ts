@@ -12,6 +12,8 @@ import { ipcRenderer } from 'electron';
   resizeWindowBy: (delta: number) => ipcRenderer.send('resize-window-by', delta),
   setWindowBounds: (bounds: { x?: number; y?: number; width?: number; height?: number }) =>
     ipcRenderer.send('set-window-bounds', bounds),
+  getWindowBounds: () =>
+    ipcRenderer.invoke('get-window-bounds') as Promise<{ x: number; y: number; width: number; height: number } | null>,
   setToggleWindowShortcut: (accelerator: string) =>
     ipcRenderer.invoke('set-toggle-window-shortcut', accelerator),
   setCanvasOpacityUpShortcut: (accelerator: string) =>
@@ -40,6 +42,7 @@ import { ipcRenderer } from 'electron';
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>
     ipcRenderer.invoke('save-image-file', { dataUrl, defaultName }),
+  exportLogFile: () => ipcRenderer.invoke('export-log-file'),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   onImageUpdated: (callback: (data: unknown) => void) => {
     const handler = (_: unknown, data: unknown) => callback(data);
@@ -80,4 +83,10 @@ import { ipcRenderer } from 'electron';
   getLogContent: () => ipcRenderer.invoke('get-log-content'),
   ensureModelReady: () => ipcRenderer.invoke('ensure-model-ready'),
   importCommand: () => ipcRenderer.invoke('import-command'),
+  startWindowAction: (payload: { type: 'drag' | 'resize'; direction?: string }) =>
+    ipcRenderer.send('window-action-start', payload),
+  moveWindowAction: () =>
+    ipcRenderer.send('window-action-move'),
+  endWindowAction: () =>
+    ipcRenderer.send('window-action-end'),
 };

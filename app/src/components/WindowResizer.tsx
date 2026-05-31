@@ -7,73 +7,38 @@ export const WindowResizer: React.FC = () => {
   const [isResizing, setIsResizing] = React.useState(false);
   const resizingRef = useRef<{
     active: boolean;
-    direction: Direction | null;
-    startX: number;
-    startY: number;
-    startBounds: { x: number; y: number; width: number; height: number };
+    pointerId: number;
   }>({
     active: false,
-    direction: null,
-    startX: 0,
-    startY: 0,
-    startBounds: { x: 0, y: 0, width: 0, height: 0 },
+    pointerId: -1,
   });
 
   const isHoveringRef = useRef(false);
 
   useEffect(() => {
-    // 使用 pointer 事件代替 mouse 事件，以支持手写笔/触控输入
     const handlePointerMove = (e: PointerEvent) => {
-      if (!resizingRef.current.active || !resizingRef.current.direction) return;
+      const state = resizingRef.current;
+      if (!state.active || e.pointerId !== state.pointerId) return;
 
-      const { startX, startY, startBounds, direction } = resizingRef.current;
-      const deltaX = e.screenX - startX;
-      const deltaY = e.screenY - startY;
-
-      const newBounds = { ...startBounds };
-
-      if (direction.includes("e")) {
-        newBounds.width = Math.max(400, startBounds.width + deltaX);
-      }
-      if (direction.includes("s")) {
-        newBounds.height = Math.max(300, startBounds.height + deltaY);
-      }
-      if (direction.includes("w")) {
-        const w = Math.max(400, startBounds.width - deltaX);
-        newBounds.width = w;
-        newBounds.x = startBounds.x + (startBounds.width - w);
-      }
-      if (direction.includes("n")) {
-        const h = Math.max(300, startBounds.height - deltaY);
-        newBounds.height = h;
-        newBounds.y = startBounds.y + (startBounds.height - h);
-      }
-
-      window.electron?.setWindowBounds(newBounds);
+      window.electron?.moveWindowAction();
     };
 
     const handlePointerUp = (e: PointerEvent) => {
-      if (resizingRef.current.active) {
-        resizingRef.current.active = false;
-        resizingRef.current.direction = null;
-        setIsResizing(false);
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        globalActions.setWindowResizing(false);
+      const state = resizingRef.current;
+      if (!state.active || e.pointerId !== state.pointerId) return;
 
-        // 释放 pointer capture
-        if (e.target instanceof Element) {
-          try {
-            (e.target as Element).releasePointerCapture(e.pointerId);
-          } catch {
-            // 可能已自动释放
-          }
-        }
+      state.active = false;
+      state.pointerId = -1;
+      setIsResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      globalActions.setWindowResizing(false);
 
-        // 鼠标穿透模式下，拖拽结束后若鼠标已离开 resizer 区域则恢复穿透
-        if (!isHoveringRef.current && globalState.mouseThrough) {
-          window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
-        }
+      window.electron?.endWindowAction();
+
+      // 鼠标穿透模式下，拖拽结束后若鼠标已离开 resizer 区域则恢复穿透
+      if (!isHoveringRef.current && globalState.mouseThrough) {
+        window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
       }
     };
 
@@ -96,25 +61,17 @@ export const WindowResizer: React.FC = () => {
       // 捕获 pointer，确保拖拽期间即使指针移出元素也能持续接收事件
       (e.target as Element).setPointerCapture(e.pointerId);
 
-      const startBounds = {
-        x: window.screenX,
-        y: window.screenY,
-        width: window.outerWidth,
-        height: window.outerHeight,
-      };
-
       resizingRef.current = {
         active: true,
-        direction,
-        startX: e.screenX,
-        startY: e.screenY,
-        startBounds,
+        pointerId: e.pointerId,
       };
       setIsResizing(true);
       globalActions.setWindowResizing(true);
       if (globalState.mouseThrough) {
         window.electron?.setIgnoreMouseEvents?.(false);
       }
+
+      window.electron?.startWindowAction({ type: "resize", direction });
 
       let cursor = "default";
       if (direction === "nw" || direction === "se") cursor = "nwse-resize";

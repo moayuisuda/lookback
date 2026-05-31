@@ -7,6 +7,7 @@ import { timingSafeEqual } from "node:crypto";
 const DEFAULT_TIMEOUT_MS = 15000;
 const MAX_TIMEOUT_MS = 120000;
 const MAX_OUTPUT_LENGTH = 1024 * 1024;
+const LOG_OUTPUT_LENGTH = 4000;
 const SHELL_AUTH_HEADER = "x-lookback-token";
 
 type ShellRequestBody = {
@@ -38,6 +39,8 @@ const BUNDLED_NPM_BIN: Record<string, string> = {
   npm: "npm-cli.js",
   npx: "npx-cli.js",
 };
+
+const ELECTRON_NODE_COMMAND = "node";
 
 const sanitizeCommand = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
@@ -82,6 +85,15 @@ const appendChunk = (current: string, chunk: Buffer): string => {
   return current + chunk.toString("utf8", 0, remain);
 };
 
+const createRequestId = (): string =>
+  `${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+
+const toLogTail = (value: string): string => {
+  const text = String(value || "").trim();
+  if (text.length <= LOG_OUTPUT_LENGTH) return text;
+  return `[truncated ${text.length - LOG_OUTPUT_LENGTH} chars]\n${text.slice(-LOG_OUTPUT_LENGTH)}`;
+};
+
 const isAuthorized = (actual: string, expected: string): boolean => {
   if (!actual || !expected) return false;
   const a = Buffer.from(actual, "utf8");
@@ -92,20 +104,44 @@ const isAuthorized = (actual: string, expected: string): boolean => {
 
 const normalizeCommandName = (command: string): string => {
   const normalized = path.basename(command).toLowerCase();
-  return normalized.replace(/\.(cmd|ps1)$/i, "");
+  return normalized.replace(/\.(cmd|ps1|exe)$/i, "");
 };
 
-const getBundledNpmCliPath = (command: string): string | null => {
-  const binFile = BUNDLED_NPM_BIN[normalizeCommandName(command)];
+const getShellLogContext = (
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+): Record<string, unknown> => ({
+  command: normalizeCommandName(command),
+  cwd,
+  timeoutMs,
+});
+
+const getBundledNpmCliPath = (commandName: string): string | null => {
+  const binFile = BUNDLED_NPM_BIN[commandName];
   if (!binFile) return null;
   return path.join(app.getAppPath(), "node_modules", "npm", "bin", binFile);
 };
+
+const getElectronNodeEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  ELECTRON_RUN_AS_NODE: "1",
+});
 
 const resolveShellCommand = (
   command: string,
   args: string[],
 ): ResolvedShellCommand => {
-  const bundledNpmCli = getBundledNpmCliPath(command);
+  const commandName = normalizeCommandName(command);
+  if (commandName === ELECTRON_NODE_COMMAND) {
+    return {
+      command: process.execPath,
+      args,
+      env: getElectronNodeEnv(),
+    };
+  }
+
+  const bundledNpmCli = getBundledNpmCliPath(commandName);
   if (!bundledNpmCli) {
     return {
       command,
@@ -117,10 +153,7 @@ const resolveShellCommand = (
   return {
     command: process.execPath,
     args: [bundledNpmCli, ...args],
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-    },
+    env: getElectronNodeEnv(),
   };
 };
 
@@ -183,6 +216,7 @@ export const createShellRouter = (deps: ShellRouteDeps) => {
   const router = express.Router();
 
   router.post("/api/shell", async (req, res) => {
+    const requestId = createRequestId();
     const authHeader = req.get(SHELL_AUTH_HEADER) || "";
     const expectedToken = deps.getApiAuthToken();
     if (!isAuthorized(authHeader, expectedToken)) {
@@ -218,6 +252,18 @@ export const createShellRouter = (deps: ShellRouteDeps) => {
           ? null
           : result.stderr.trim() || `Command exited with code ${result.code ?? "null"}`;
 
+      if (!success) {
+        console.error(`[shell][${requestId}] failed`, {
+          ...getShellLogContext(command, cwd, timeoutMs),
+          code: result.code,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          error,
+          stdout: toLogTail(result.stdout),
+          stderr: toLogTail(result.stderr),
+        });
+      }
+
       res.json({
         success,
         code: result.code,
@@ -229,6 +275,10 @@ export const createShellRouter = (deps: ShellRouteDeps) => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error(`[shell][${requestId}] failed to start`, {
+        ...getShellLogContext(command, cwd, timeoutMs),
+        error: message,
+      });
       res.status(500).json({
         success: false,
         code: null,

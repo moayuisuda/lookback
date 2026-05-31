@@ -7,17 +7,8 @@ import {
   getCommandMarketDisplay,
   siteActions,
   siteState,
-  type FaqPlatform,
-  type Platform,
 } from "./store/siteStore";
 import sitePackage from "../package.json";
-
-function detectPlatform(): Platform {
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("mac")) return "mac";
-  if (ua.includes("win")) return "win";
-  return "other";
-}
 
 function App() {
   const { locale, setLocale, t } = useT();
@@ -26,11 +17,11 @@ function App() {
   useEffect(() => {
     // 先显示本地版本，随后异步刷新为最新 release 版本。
     siteActions.setLocalVersion(sitePackage.version);
-    siteActions.setFaqPlatform(detectPlatform() === "win" ? "win" : "mac");
     siteActions.syncRouteFromLocation();
     const onHashChange = () => siteActions.syncRouteFromLocation();
     window.addEventListener("hashchange", onHashChange);
     void siteActions.loadLatestRelease();
+    void siteActions.loadPiCaptainRelease();
     return () => {
       window.removeEventListener("hashchange", onHashChange);
     };
@@ -49,14 +40,13 @@ function App() {
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function downloadByPlatform() {
-    const platform = detectPlatform();
-    const downloadUrl = await siteActions.resolveDownloadUrl(platform);
+  async function downloadWindowsInstaller() {
+    const downloadUrl = await siteActions.resolveDownloadUrl();
     window.location.assign(downloadUrl);
   }
 
-  function switchFaqPlatform(platform: FaqPlatform) {
-    siteActions.setFaqPlatform(platform);
+  function downloadPiCaptainWindowsInstaller() {
+    window.location.assign(siteState.picaptainDownloadUrl);
   }
 
   useEffect(() => {
@@ -128,9 +118,20 @@ function App() {
                 ? t("nav.llmTextCopyFailed", { error: snap.llmTextError })
                 : snap.llmTextCopied
                   ? t("nav.llmTextCopied")
-                  : t("nav.llmTextTooltip")}
+              : t("nav.llmTextTooltip")}
             </span>
           </div>
+          <button
+            type="button"
+            className={
+              snap.route === "/picaptain"
+                ? "topbar-nav-btn active"
+                : "topbar-nav-btn"
+            }
+            onClick={() => siteActions.goToRoute("/picaptain")}
+          >
+            {t("nav.picaptain")}
+          </button>
           <button
             type="button"
             className="topbar-nav-btn"
@@ -155,7 +156,7 @@ function App() {
                   <button
                     type="button"
                     className="hero-btn primary"
-                    onClick={downloadByPlatform}
+                    onClick={downloadWindowsInstaller}
                   >
                     {`${t("hero.primary")} ${t("hero.version", { version: snap.releaseVersion })}`}
                   </button>
@@ -266,7 +267,7 @@ function App() {
                   <button
                     type="button"
                     className="hero-btn primary"
-                    onClick={downloadByPlatform}
+                    onClick={downloadWindowsInstaller}
                   >
                     {`${t("hero.primary")} ${t("hero.version", { version: snap.releaseVersion })}`}
                   </button>
@@ -300,63 +301,19 @@ function App() {
               >
                 <div className="download-faq-head">
                   <h3 id="download-faq-title">{t("download.faq.title")}</h3>
-                  <div
-                    className="download-faq-tabs"
-                    role="tablist"
-                    aria-label={t("download.faq.tabLabel")}
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={snap.faqPlatform === "mac"}
-                      className={
-                        snap.faqPlatform === "mac"
-                          ? "download-faq-tab active"
-                          : "download-faq-tab"
-                      }
-                      onClick={() => switchFaqPlatform("mac")}
-                    >
-                      {t("download.faq.tab.mac")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={snap.faqPlatform === "win"}
-                      className={
-                        snap.faqPlatform === "win"
-                          ? "download-faq-tab active"
-                          : "download-faq-tab"
-                      }
-                      onClick={() => switchFaqPlatform("win")}
-                    >
-                      {t("download.faq.tab.win")}
-                    </button>
-                  </div>
                 </div>
                 <p className="download-faq-desc">{t("download.faq.desc")}</p>
                 <article className="download-faq-item">
-                  <h4>
-                    {snap.faqPlatform === "mac"
-                      ? t("download.faq.mac.title")
-                      : t("download.faq.win.title")}
-                  </h4>
+                  <h4>{t("download.faq.win.title")}</h4>
                   <ol>
-                    <li>
-                      {snap.faqPlatform === "mac"
-                        ? t("download.faq.mac.step.1")
-                        : t("download.faq.win.step.1")}
-                    </li>
-                    <li>
-                      {snap.faqPlatform === "mac"
-                        ? t("download.faq.mac.step.2")
-                        : t("download.faq.win.step.2")}
-                    </li>
+                    <li>{t("download.faq.win.step.1")}</li>
+                    <li>{t("download.faq.win.step.2")}</li>
                   </ol>
                 </article>
               </div>
             </section>
           </>
-        ) : (
+        ) : snap.route === "/market" ? (
           <section
             className="command-market command-market-page"
             aria-labelledby="command-market-title"
@@ -471,6 +428,54 @@ function App() {
                 src="/shortcut-binding-demo.webp"
                 alt={t("commandMarket.shortcutDemo.alt")}
               />
+            </figure>
+          </section>
+        ) : (
+          <section
+            className="picaptain-page"
+            aria-labelledby="picaptain-title"
+          >
+            <div className="picaptain-copy">
+              <p className="picaptain-badge">{t("picaptain.badge")}</p>
+              <h2 id="picaptain-title">{t("picaptain.title")}</h2>
+              <p className="picaptain-subtitle">{t("picaptain.subtitle")}</p>
+              <p className="picaptain-desc">{t("picaptain.desc")}</p>
+              <div
+                className="picaptain-pill-list"
+                aria-label={t("picaptain.pillAria")}
+              >
+                <span>{t("picaptain.pill.local")}</span>
+                <span>{t("picaptain.pill.tag")}</span>
+                <span>{t("picaptain.pill.search")}</span>
+              </div>
+              <div className="picaptain-actions">
+                <button
+                  type="button"
+                  className="hero-btn primary"
+                  onClick={downloadPiCaptainWindowsInstaller}
+                >
+                  {`${t("picaptain.download")} ${t("hero.version", { version: snap.picaptainReleaseVersion })}`}
+                </button>
+                <a
+                  className="download-guide-release"
+                  href={snap.picaptainReleasePage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t("download.release")}
+                </a>
+              </div>
+            </div>
+
+            <figure className="picaptain-preview">
+              <img
+                src="/picaptain-preview.webp"
+                alt={t("picaptain.imageAlt")}
+              />
+              <figcaption>
+                <strong>{t("picaptain.previewTitle")}</strong>
+                <span>{t("picaptain.previewDesc")}</span>
+              </figcaption>
             </figure>
           </section>
         )}

@@ -5,10 +5,8 @@ export const LATEST_RELEASE_API =
   "https://api.github.com/repos/moayuisuda/lookback-release/releases/latest";
 export const LATEST_RELEASE_PAGE =
   "https://github.com/moayuisuda/lookback-release/releases/latest";
-const GITHUB_RELEASE_DOWNLOAD_PREFIX =
-  "https://github.com/moayuisuda/lookback-release/releases/download/";
-const MIRROR_RELEASE_DOWNLOAD_PREFIX =
-  "https://xget.xi-xu.me/gh/moayuisuda/lookback-release/releases/download/";
+export const PICAPTAIN_RELEASE_API =
+  "https://api.github.com/repos/moayuisuda/OnlyRef/releases/latest";
 const COMMAND_MARKET_TREE_API =
   "https://api.github.com/repos/moayuisuda/lookback/git/trees/main?recursive=1";
 const COMMAND_MARKET_RAW_PREFIX =
@@ -20,9 +18,7 @@ const LOOKBACK_IMPORT_DEEP_LINK = "lookback://import-command";
 const LOOKBACK_IMPORT_FALLBACK_MS = 1800;
 const LLM_TEXT_COPIED_VISIBLE_MS = 1800;
 
-export type Platform = "mac" | "win" | "other";
-export type FaqPlatform = "mac" | "win";
-export type SiteRoute = "/" | "/market";
+export type SiteRoute = "/" | "/market" | "/picaptain";
 
 type ReleaseAsset = {
   name: string;
@@ -69,7 +65,6 @@ type SiteState = {
   activeFeatureId: number;
   release: LatestRelease | null;
   releaseVersion: string;
-  faqPlatform: FaqPlatform;
   route: SiteRoute;
   commandMarketItems: CommandMarketItem[];
   commandMarketHasLoaded: boolean;
@@ -79,6 +74,10 @@ type SiteState = {
   llmTextCopying: boolean;
   llmTextCopied: boolean;
   llmTextError: string;
+  picaptainRelease: LatestRelease | null;
+  picaptainReleaseVersion: string;
+  picaptainReleasePage: string;
+  picaptainDownloadUrl: string;
 };
 
 export const siteState = proxy<SiteState>({
@@ -86,7 +85,6 @@ export const siteState = proxy<SiteState>({
   activeFeatureId: 0,
   release: null,
   releaseVersion: "",
-  faqPlatform: "mac",
   route: "/",
   commandMarketItems: [],
   commandMarketHasLoaded: false,
@@ -96,6 +94,10 @@ export const siteState = proxy<SiteState>({
   llmTextCopying: false,
   llmTextCopied: false,
   llmTextError: "",
+  picaptainRelease: null,
+  picaptainReleaseVersion: "1.0.0",
+  picaptainReleasePage: "https://github.com/moayuisuda/OnlyRef/releases/tag/v1.0.0",
+  picaptainDownloadUrl: "https://xget.xi-xu.me/gh/moayuisuda/OnlyRef/releases/download/v1.0.0/PiCaptain.Setup.1.0.0.exe",
 });
 
 function normalizeVersion(tagName: string) {
@@ -104,12 +106,12 @@ function normalizeVersion(tagName: string) {
 
 function resolveMirrorDownloadUrl(downloadUrl: string) {
   // 统一将 GitHub release 直链替换为镜像加速链路。
-  if (!downloadUrl.startsWith(GITHUB_RELEASE_DOWNLOAD_PREFIX))
-    return downloadUrl;
-  return downloadUrl.replace(
-    GITHUB_RELEASE_DOWNLOAD_PREFIX,
-    MIRROR_RELEASE_DOWNLOAD_PREFIX,
-  );
+  const githubPrefix = "https://github.com/";
+  const mirrorPrefix = "https://xget.xi-xu.me/gh/";
+  if (downloadUrl.startsWith(githubPrefix)) {
+    return downloadUrl.replace(githubPrefix, mirrorPrefix);
+  }
+  return downloadUrl;
 }
 
 import { DEFAULT_COMMAND_FILES } from "../../../app/shared/constants";
@@ -132,6 +134,7 @@ function toBaseName(fileName: string) {
 function toLocalRoute(hash: string): SiteRoute {
   const normalized = hash.replace(/^#/, "").replace(/\/+$/, "");
   if (normalized === "/market") return "/market";
+  if (normalized === "/picaptain") return "/picaptain";
   return "/";
 }
 
@@ -393,9 +396,6 @@ export const siteActions = {
   setLocalVersion(version: string) {
     siteState.releaseVersion = version;
   },
-  setFaqPlatform(platform: FaqPlatform) {
-    siteState.faqPlatform = platform;
-  },
   syncRouteFromLocation() {
     siteState.route = toLocalRoute(window.location.hash);
   },
@@ -424,6 +424,34 @@ export const siteActions = {
       return null;
     }
   },
+  async loadPiCaptainRelease() {
+    try {
+      const resp = await fetch(PICAPTAIN_RELEASE_API);
+      if (!resp.ok) return null;
+      const raw = (await resp.json()) as LatestReleaseApi;
+      const release: LatestRelease = {
+        tagName: raw.tag_name,
+        htmlUrl: raw.html_url,
+        assets: raw.assets,
+      };
+      const version = normalizeVersion(release.tagName);
+      const asset = siteActions.pickWindowsAsset(release.assets);
+      const downloadPage = release.htmlUrl;
+      siteState.picaptainRelease = release;
+      siteState.picaptainReleaseVersion = version;
+      siteState.picaptainReleasePage = downloadPage;
+      if (asset) {
+        siteState.picaptainDownloadUrl = resolveMirrorDownloadUrl(
+          asset.browser_download_url,
+        );
+      } else {
+        siteState.picaptainDownloadUrl = downloadPage;
+      }
+      return release;
+    } catch {
+      return null;
+    }
+  },
   async copyLlmText() {
     if (siteState.llmTextCopying) return;
     siteState.llmTextCopying = true;
@@ -443,26 +471,39 @@ export const siteActions = {
       siteState.llmTextCopying = false;
     }
   },
-  pickPlatformAsset(assets: ReleaseAsset[], platform: Platform) {
-    if (platform === "mac") {
-      return (
-        assets.find((asset) => asset.name.toLowerCase().endsWith(".dmg")) ??
-        null
-      );
+  pickWindowsAsset(assets: ReleaseAsset[]) {
+    // 判断当前系统架构，优先选择匹配架构的安装包
+    const ua = navigator.userAgent.toLowerCase();
+    let arch: "arm64" | "x64" | "" = "";
+    const uaData = (navigator as Navigator & { userAgentData?: { architecture?: string } }).userAgentData;
+    if (uaData?.architecture) {
+      const archRaw = uaData.architecture;
+      if (archRaw === "arm64") arch = "arm64";
+      else if (archRaw === "x86_64" || archRaw === "x64") arch = "x64";
+    } else {
+      if (ua.includes("arm64")) arch = "arm64";
+      else if (ua.includes("win64") || ua.includes("x64")) arch = "x64";
     }
-    if (platform === "win") {
-      return (
-        assets.find((asset) => asset.name.toLowerCase().endsWith(".exe")) ??
-        null
+    if (arch === "arm64") {
+      const arm = assets.find(
+        (a) => /arm64/i.test(a.name) && a.name.toLowerCase().endsWith(".exe"),
       );
+      if (arm) return arm;
     }
-    return null;
+    // 默认优先 x64
+    const x64 = assets.find(
+      (a) =>
+        /x64|win64|amd64/i.test(a.name) && a.name.toLowerCase().endsWith(".exe"),
+    );
+    if (x64) return x64;
+    // 兜底找第一个 exe
+    return assets.find((a) => a.name.toLowerCase().endsWith(".exe")) ?? null;
   },
-  async resolveDownloadUrl(platform: Platform) {
+  async resolveDownloadUrl() {
     const release =
       siteState.release ?? (await siteActions.loadLatestRelease());
     if (!release) return LATEST_RELEASE_PAGE;
-    const asset = siteActions.pickPlatformAsset(release.assets, platform);
+    const asset = siteActions.pickWindowsAsset(release.assets);
     if (!asset) return release.htmlUrl;
     return resolveMirrorDownloadUrl(asset.browser_download_url);
   },
@@ -470,7 +511,6 @@ export const siteActions = {
     siteState.commandMarketLoading = true;
     siteState.commandMarketError = "";
     try {
-      // Git tree recursive 接口可直接返回 commands 目录全量文件路径。
       const resp = await fetch(COMMAND_MARKET_TREE_API);
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);

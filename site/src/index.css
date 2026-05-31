@@ -669,33 +669,6 @@ body {
   line-height: 1.7;
 }
 
-.download-faq-tabs {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px;
-  border-radius: 999px;
-  border: 1px solid rgba(57, 197, 187, 0.24);
-  background: rgba(255, 255, 255, 0.03);
-  gap: 4px;
-}
-
-.download-faq-tab {
-  border: 0;
-  border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #9db2cd;
-  background: transparent;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.download-faq-tab.active {
-  color: #032725;
-  background: linear-gradient(135deg, #7bf0e7 0%, #39c5bb 100%);
-}
-
 .download-faq-item {
   margin-top: 12px;
   border-radius: 12px;
@@ -1173,6 +1146,153 @@ body {
   box-shadow: 0 18px 36px rgba(2, 6, 14, 0.34);
 }
 
+.picaptain-page {
+  position: relative;
+  margin-top: 10px;
+  border-radius: 26px;
+  border: 1px solid rgba(126, 152, 184, 0.26);
+  background:
+    radial-gradient(circle at 12% 16%, rgba(57, 197, 187, 0.24), transparent 34%),
+    radial-gradient(circle at 92% 8%, rgba(44, 119, 255, 0.22), transparent 32%),
+    linear-gradient(145deg, rgba(9, 16, 29, 0.96), rgba(5, 10, 20, 0.92));
+  overflow: hidden;
+  isolation: isolate;
+  padding: clamp(22px, 4vw, 42px);
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  gap: clamp(22px, 4vw, 44px);
+  align-items: center;
+  animation: fade-up 0.58s ease both;
+}
+
+.picaptain-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.18;
+  background-image:
+    linear-gradient(rgba(145, 181, 219, 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(145, 181, 219, 0.28) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(circle at 72% 44%, black 0%, transparent 68%);
+}
+
+.picaptain-copy {
+  display: grid;
+  gap: 14px;
+  align-content: center;
+}
+
+.picaptain-badge {
+  margin: 0;
+  width: fit-content;
+  border-radius: 999px;
+  border: 1px solid rgba(57, 197, 187, 0.38);
+  background: rgba(57, 197, 187, 0.13);
+  color: #b1f4ee;
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.picaptain-copy h2 {
+  margin: 0;
+  max-width: 10ch;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: clamp(38px, 5.4vw, 72px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  background: linear-gradient(180deg, #f4f8ff 0%, #c6dbf2 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.picaptain-subtitle {
+  margin: 0;
+  color: #c9e8ff;
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 700;
+}
+
+.picaptain-desc {
+  margin: 0;
+  max-width: 58ch;
+  color: var(--text-sub);
+  line-height: 1.78;
+}
+
+.picaptain-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.picaptain-pill-list span {
+  border-radius: 999px;
+  border: 1px solid rgba(126, 152, 184, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8ebff;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.picaptain-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.picaptain-preview {
+  position: relative;
+  margin: 0;
+  border-radius: 24px;
+  border: 1px solid rgba(147, 182, 216, 0.26);
+  background: rgba(7, 13, 24, 0.68);
+  box-shadow: 0 30px 70px rgba(2, 6, 14, 0.48);
+  overflow: hidden;
+  transform: rotate(1deg);
+}
+
+.picaptain-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 26%);
+}
+
+.picaptain-preview img {
+  width: 100%;
+  display: block;
+}
+
+.picaptain-preview figcaption {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px 16px;
+  background:
+    linear-gradient(145deg, rgba(57, 197, 187, 0.12), rgba(44, 119, 255, 0.08)),
+    rgba(7, 13, 24, 0.9);
+}
+
+.picaptain-preview figcaption strong {
+  color: #edf7ff;
+  font-size: 15px;
+}
+
+.picaptain-preview figcaption span {
+  color: var(--text-sub);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .footer {
   max-width: 1220px;
   margin: 44px auto 10px;
@@ -1351,6 +1471,14 @@ body {
   .command-shortcut-demo {
     grid-template-columns: 1fr;
   }
+
+  .picaptain-page {
+    grid-template-columns: 1fr;
+  }
+
+  .picaptain-copy h2 {
+    max-width: 13ch;
+  }
 }
 
 @media (max-width: 700px) {
@@ -1422,6 +1550,18 @@ body {
 
   .command-shortcut-demo h3 {
     font-size: clamp(22px, 8vw, 30px);
+  }
+
+  .picaptain-page {
+    padding: 18px;
+  }
+
+  .picaptain-copy h2 {
+    font-size: clamp(34px, 12vw, 48px);
+  }
+
+  .picaptain-preview {
+    transform: none;
   }
 
   .footer-meta {
