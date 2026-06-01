@@ -4,7 +4,6 @@ import {
   Square,
   X,
   Settings,
-  Settings2,
   Pin,
   Ghost,
   Plus,
@@ -617,28 +616,6 @@ export const TitleBar: React.FC = () => {
           >
             LookBack
           </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              canvasActions.toggleCanvasToolbarExpanded();
-            }}
-            className={clsx(
-              "p-1 hover:bg-neutral-800 rounded transition-colors text-neutral-400 hover:text-white no-drag",
-              canvasSnap.isCanvasToolbarExpanded && "bg-neutral-800",
-            )}
-            style={{
-              color: canvasSnap.isCanvasToolbarExpanded
-                ? THEME.primary
-                : undefined,
-            }}
-            title={
-              canvasSnap.isCanvasToolbarExpanded
-                ? t("canvas.toolbar.collapse")
-                : t("canvas.toolbar.expand")
-            }
-          >
-            <Settings2 size={14} />
-          </button>
         </div>
 
         <div className="relative z-10 flex items-center gap-1 no-drag">

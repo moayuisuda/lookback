@@ -204,7 +204,6 @@ export const Canvas: React.FC = () => {
     canvasGroups,
     canvasFilters,
     showMinimap,
-    isCanvasToolbarExpanded,
     isPenMode,
     penTool,
     penStrokeColor,
@@ -2183,7 +2182,6 @@ export const Canvas: React.FC = () => {
       <CanvasToolbar
         canvasFilters={canvasFilters}
         showMinimap={showMinimap}
-        isExpanded={isCanvasToolbarExpanded}
         isPenMode={isPenMode}
         penTool={penTool}
         penStrokeColor={penStrokeColor}

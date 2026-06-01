@@ -18,7 +18,6 @@ import { CANVAS_PEN_STROKE_WIDTH_OPTIONS } from "../../store/canvasStore";
 interface CanvasToolbarProps {
   canvasFilters: readonly string[];
   showMinimap: boolean;
-  isExpanded: boolean;
   isPenMode: boolean;
   penTool: "draw" | "erase";
   penStrokeColor: string;
@@ -117,14 +116,15 @@ const PenControls: React.FC<{
         {penColorSlots.map((color, index) => {
           const isSelected = penStrokeColor === color.toLowerCase();
           return (
-            <div key={`${index}_${color}`} className="relative h-5 w-5">
+            <div
+              key={`${index}_${color}`}
+              className="relative flex h-5 w-5 items-center justify-center"
+            >
               <button
                 type="button"
                 className={clsx(
-                  "h-5 w-5 rounded flex items-center justify-center transition-colors border",
-                  isSelected
-                    ? "border-primary bg-neutral-800"
-                    : "border-transparent hover:border-neutral-700",
+                  "flex h-5 w-5 items-center justify-center rounded-sm border p-[1px] transition-colors",
+                  isSelected ? "border-primary" : "border-transparent",
                 )}
                 title={t("canvas.toolbar.penColor")}
                 onClick={() => {
@@ -136,7 +136,10 @@ const PenControls: React.FC<{
                 }}
               >
                 <span
-                  className="h-3.5 w-3.5 rounded-sm border border-white/20"
+                  className={clsx(
+                    "h-full w-full rounded-[2px] border",
+                    isSelected ? "border-white" : "border-white/20",
+                  )}
                   style={{ backgroundColor: color }}
                 />
               </button>
@@ -254,7 +257,6 @@ const AnchorControls: React.FC = () => {
 export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   canvasFilters,
   showMinimap,
-  isExpanded,
   isPenMode,
   penTool,
   penStrokeColor,
@@ -280,15 +282,14 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   if (hideCanvasButtons) return null;
 
   return (
-    <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10 flex flex-col items-start gap-2">
-      {/* Expanded Toolbar Content */}
+    <div className="group absolute left-0 top-0 z-10 h-full w-16 pointer-events-none">
+      <div className="absolute left-0 top-0 h-full w-6 pointer-events-auto" />
       <div
         className={clsx(
-          "flex flex-col items-center p-2 gap-2 transition-all duration-300 ease-out origin-left",
+          "absolute left-2 top-1/2 flex -translate-y-1/2 flex-col items-center p-2 gap-2 origin-left",
+          "pointer-events-none opacity-0 -translate-x-4 scale-95 invisible transition-all duration-200 ease-out",
+          "group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-hover:translate-x-0 group-hover:scale-100",
           "bg-neutral-900/90 backdrop-blur-md border border-neutral-800/80 rounded-lg shadow-xl",
-          isExpanded
-            ? "opacity-100 translate-x-0 scale-100"
-            : "opacity-0 -translate-x-4 scale-95 pointer-events-none hidden",
         )}
       >
         <FilterSelector

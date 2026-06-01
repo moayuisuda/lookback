@@ -209,8 +209,6 @@ export const en = {
 
   "tag.setColor": "Set Color",
 
-  "canvas.toolbar.expand": "Expand Toolbar",
-  "canvas.toolbar.collapse": "Collapse Toolbar",
   "canvas.toolbar.filters": "Filters",
   "canvas.filters.grayscale": "Grayscale",
   "canvas.filters.posterize": "Posterize",

@@ -779,7 +779,6 @@ interface CanvasStoreState {
   canvasViewport: CanvasViewport;
   canvasFilters: string[];
   showMinimap: boolean;
-  isCanvasToolbarExpanded: boolean;
   isPenMode: boolean;
   isDrawingPath: boolean;
   activePathItemId: string | null;
@@ -824,7 +823,6 @@ export const canvasState = proxy<CanvasStoreState>({
   canvasViewport: DEFAULT_CANVAS_VIEWPORT,
   canvasFilters: [],
   showMinimap: true,
-  isCanvasToolbarExpanded: true,
   isPenMode: false,
   isDrawingPath: false,
   activePathItemId: null,
@@ -1143,11 +1141,6 @@ export const canvasActions = {
         "showMinimap",
         canvasState.showMinimap,
       );
-      const rawIsCanvasToolbarExpanded = readSetting<unknown>(
-        settings,
-        "isCanvasToolbarExpanded",
-        canvasState.isCanvasToolbarExpanded,
-      );
       const rawPenStrokeColor = readSetting<unknown>(
         settings,
         "penStrokeColor",
@@ -1170,10 +1163,6 @@ export const canvasActions = {
 
       if (typeof rawShowMinimap === "boolean") {
         canvasState.showMinimap = rawShowMinimap;
-      }
-
-      if (typeof rawIsCanvasToolbarExpanded === "boolean") {
-        canvasState.isCanvasToolbarExpanded = rawIsCanvasToolbarExpanded;
       }
 
       canvasState.penColorSlots = normalizeCanvasPathColorSlots(rawPenColorSlots);
@@ -2297,14 +2286,6 @@ export const canvasActions = {
   setCanvasFilters: (filters: string[]) => {
     canvasState.canvasFilters = filters;
     void settingStorage.set("canvasFilters", filters);
-  },
-
-  toggleCanvasToolbarExpanded: () => {
-    canvasState.isCanvasToolbarExpanded = !canvasState.isCanvasToolbarExpanded;
-    void settingStorage.set(
-      "isCanvasToolbarExpanded",
-      canvasState.isCanvasToolbarExpanded,
-    );
   },
 
   toggleMinimap: () => {

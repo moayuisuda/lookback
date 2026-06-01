@@ -18,6 +18,18 @@ interface CanvasPathProps {
   onContain: () => void;
 }
 
+const getPathHitRect = (width: number, height: number) => {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+
+  return {
+    x: -width / 2,
+    y: -height / 2,
+    width,
+    height,
+  };
+};
+
 export const CanvasPath: React.FC<CanvasPathProps> = ({
   item,
   onDragStart,
@@ -28,6 +40,7 @@ export const CanvasPath: React.FC<CanvasPathProps> = ({
 }) => {
   useVisualRenderCheck(`CanvasPath:${item.itemId}`);
   const itemSnap = useSnapshot(item);
+  const hitRect = getPathHitRect(itemSnap.width, itemSnap.height);
 
   const handleSelect = (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
@@ -61,6 +74,16 @@ export const CanvasPath: React.FC<CanvasPathProps> = ({
       onSelect={handleSelect}
       onDoubleClick={handleDoubleClick}
     >
+      {hitRect && (
+        <rect
+          x={hitRect.x}
+          y={hitRect.y}
+          width={hitRect.width}
+          height={hitRect.height}
+          fill="transparent"
+          pointerEvents="all"
+        />
+      )}
       <g
         ref={
           useVisualRenderCheck(

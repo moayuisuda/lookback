@@ -215,8 +215,6 @@ export const zh = {
 
   "tag.setColor": "设置颜色",
 
-  "canvas.toolbar.expand": "展开工具栏",
-  "canvas.toolbar.collapse": "收起工具栏",
   "canvas.toolbar.filters": "滤镜",
   "canvas.filters.grayscale": "灰度",
   "canvas.filters.posterize": "色调分离",
