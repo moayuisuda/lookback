@@ -13,7 +13,7 @@ import { anchorState, anchorActions } from "../../store/anchorStore";
 import { useT } from "../../i18n/useT";
 import { FilterSelector } from "./FilterSelector";
 import clsx from "clsx";
-import { CANVAS_PEN_STROKE_WIDTH_OPTIONS } from "../../store/canvasStore";
+import { CANVAS_PEN_STROKE_WIDTH_RANGE } from "../../store/canvasStore";
 
 interface CanvasToolbarProps {
   canvasFilters: readonly string[];
@@ -66,6 +66,61 @@ const ToolbarButton: React.FC<{
 
 const ToolbarDivider = () => <div className="h-px w-4 bg-neutral-600" />;
 
+const PEN_STROKE_SLIDER_HEIGHT = 54;
+
+const PenStrokeWidthSlider: React.FC<{
+  penStrokeColor: string;
+  penStrokeWidth: number;
+  onPenStrokeWidthChange: (width: number) => void;
+}> = ({ penStrokeColor, penStrokeWidth, onPenStrokeWidthChange }) => {
+  const { t } = useT();
+  const { min, max, step } = CANVAS_PEN_STROKE_WIDTH_RANGE;
+  const value = Math.max(min, Math.min(max, penStrokeWidth));
+  const percent = (value - min) / (max - min);
+  const thumbTop = `${(1 - percent) * 100}%`;
+
+  return (
+    <div
+      className="flex w-8 flex-col items-center gap-1"
+      title={t("canvas.toolbar.penStrokeWidth")}
+    >
+      <div
+        className="relative w-8"
+        style={{ height: PEN_STROKE_SLIDER_HEIGHT }}
+      >
+        <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 rounded-full bg-neutral-700" />
+        <div
+          className="absolute left-1/2 rounded-full border border-white/50 shadow-[0_0_0_2px_rgba(23,23,23,0.9)]"
+          style={{
+            top: thumbTop,
+            width: value,
+            height: value,
+            backgroundColor: penStrokeColor,
+            transform: "translate(-50%, -50%)",
+          }}
+        />
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          aria-label={t("canvas.toolbar.penStrokeWidth")}
+          className="absolute left-1/2 top-1/2 cursor-ns-resize opacity-0"
+          style={{
+            width: PEN_STROKE_SLIDER_HEIGHT,
+            height: 32,
+            transform: "translate(-50%, -50%) rotate(-90deg)",
+          }}
+          onChange={(event) =>
+            onPenStrokeWidthChange(Number(event.target.value))
+          }
+        />
+      </div>
+    </div>
+  );
+};
+
 const PenControls: React.FC<{
   penTool: "draw" | "erase";
   penStrokeColor: string;
@@ -90,27 +145,11 @@ const PenControls: React.FC<{
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className="flex flex-col items-center gap-1">
-        {CANVAS_PEN_STROKE_WIDTH_OPTIONS.map((width) => (
-          <button
-            key={width}
-            type="button"
-            className={clsx(
-              "h-5 w-5 rounded flex items-center justify-center transition-colors",
-              penStrokeWidth === width
-                ? "bg-primary/90"
-                : "hover:bg-neutral-800 text-neutral-400",
-            )}
-            title={t("canvas.toolbar.penStrokeWidth")}
-            onClick={() => onPenStrokeWidthChange(width)}
-          >
-            <span
-              className="rounded-full bg-current"
-              style={{ width: width + 3, height: width + 3 }}
-            />
-          </button>
-        ))}
-      </div>
+      <PenStrokeWidthSlider
+        penStrokeColor={penStrokeColor}
+        penStrokeWidth={penStrokeWidth}
+        onPenStrokeWidthChange={onPenStrokeWidthChange}
+      />
 
       <div className="flex flex-col items-center gap-1">
         {penColorSlots.map((color, index) => {
@@ -207,7 +246,7 @@ const AnchorControls: React.FC = () => {
         const isAnimating = animatingSlot === slot;
 
         return (
-          <div key={slot} className="relative group flex items-center">
+          <div key={slot} className="relative group/anchor-slot flex items-center">
             <button
               className={clsx(
                 "h-4 w-5 flex items-center justify-center rounded text-xs font-medium transition-all duration-200",
@@ -237,7 +276,7 @@ const AnchorControls: React.FC = () => {
             </button>
             {hasAnchor && (
               <button
-                className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-neutral-800 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200 border border-neutral-600 hover:bg-red-900/80 hover:border-red-700 shadow-md z-10"
+                className="pointer-events-none absolute -top-1 -right-1 z-10 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-600 bg-neutral-800 opacity-0 shadow-md transition-all duration-200 group-hover/anchor-slot:pointer-events-auto group-hover/anchor-slot:opacity-100 hover:border-red-700 hover:bg-red-900/80"
                 onClick={(e) => {
                   e.stopPropagation();
                   anchorActions.deleteAnchor(slot);
@@ -282,13 +321,13 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
   if (hideCanvasButtons) return null;
 
   return (
-    <div className="group absolute left-0 top-0 z-10 h-full w-16 pointer-events-none">
+    <div className="group/toolbar absolute left-0 top-0 z-10 h-full w-16 pointer-events-none">
       <div className="absolute left-0 top-0 h-full w-6 pointer-events-auto" />
       <div
         className={clsx(
           "absolute left-2 top-1/2 flex -translate-y-1/2 flex-col items-center p-2 gap-2 origin-left",
           "pointer-events-none opacity-0 -translate-x-4 scale-95 invisible transition-all duration-200 ease-out",
-          "group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-hover:translate-x-0 group-hover:scale-100",
+          "group-hover/toolbar:pointer-events-auto group-hover/toolbar:visible group-hover/toolbar:opacity-100 group-hover/toolbar:translate-x-0 group-hover/toolbar:scale-100",
           "bg-neutral-900/90 backdrop-blur-md border border-neutral-800/80 rounded-lg shadow-xl",
         )}
       >

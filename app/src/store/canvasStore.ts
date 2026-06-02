@@ -113,9 +113,11 @@ export interface CanvasImage extends ImageMeta {
 const GROUP_GAP = 40;
 const DEFAULT_CANVAS_PATH_STROKE = "#ffffff";
 const DEFAULT_CANVAS_PATH_STROKE_WIDTH = 6;
-export const CANVAS_PEN_STROKE_WIDTH_OPTIONS = [6, 12] as const;
-const MIN_CANVAS_PATH_STROKE_WIDTH = 1;
-const MAX_CANVAS_PATH_STROKE_WIDTH = 32;
+export const CANVAS_PEN_STROKE_WIDTH_RANGE = {
+  min: 6,
+  max: 24,
+  step: 1,
+} as const;
 const DEFAULT_CANVAS_PATH_COLOR_SLOTS = [
   "#ffffff",
   "#39c5bb",
@@ -439,16 +441,15 @@ const clonePlain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const clampCanvasPathStrokeWidth = (value: number) => {
   if (!Number.isFinite(value)) return DEFAULT_CANVAS_PATH_STROKE_WIDTH;
+  const { min, max, step } = CANVAS_PEN_STROKE_WIDTH_RANGE;
   const clamped = Math.max(
-    MIN_CANVAS_PATH_STROKE_WIDTH,
-    Math.min(MAX_CANVAS_PATH_STROKE_WIDTH, value),
+    min,
+    Math.min(max, value),
   );
-  return CANVAS_PEN_STROKE_WIDTH_OPTIONS.reduce(
-    (closest, option) =>
-      Math.abs(option - clamped) < Math.abs(closest - clamped)
-        ? option
-        : closest,
-    CANVAS_PEN_STROKE_WIDTH_OPTIONS[0],
+  const stepped = min + Math.round((clamped - min) / step) * step;
+  return Math.max(
+    min,
+    Math.min(max, stepped),
   );
 };
 
@@ -688,9 +689,9 @@ const recomputeCanvasPathBounds = (item: CanvasPath) => {
   item.y += scaledX * sin + scaledY * cos;
   item.offsetX -= localCenterX;
   item.offsetY -= localCenterY;
-  const maxStrokeWidth = item.strokes.reduce(
+  const maxStrokeWidth = item.strokes.reduce<number>(
     (max, stroke) => Math.max(max, stroke.strokeWidth),
-    MIN_CANVAS_PATH_STROKE_WIDTH,
+    CANVAS_PEN_STROKE_WIDTH_RANGE.min,
   );
   item.strokeWidth = maxStrokeWidth;
   item.width = Math.max(maxStrokeWidth, maxX - minX);
