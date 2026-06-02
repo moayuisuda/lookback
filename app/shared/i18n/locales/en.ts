@@ -134,6 +134,8 @@ export const en = {
   "toast.reactError": "Something went wrong: {{message}}",
   "toast.logCopied": "Log copied to clipboard",
   "toast.logCopyFailed": "Failed to copy log",
+  "toast.clickToCopy": "Click to copy",
+  "toast.copyContentFailed": "Failed to copy content: {{error}}",
   "toast.logExported": "Log exported",
   "toast.logExportFailed": "Failed to export log: {{error}}",
   "toast.tagRenamed": "Tag renamed",

@@ -123,6 +123,8 @@ export const zh = {
   "toast.reactError": "发生错误：{{message}}",
   "toast.logCopied": "日志已复制到剪贴板",
   "toast.logCopyFailed": "复制日志失败",
+  "toast.clickToCopy": "点击复制",
+  "toast.copyContentFailed": "复制内容失败：{{error}}",
   "toast.tagRenamed": "标签已重命名",
   "toast.tagRenameFailed": "重命名标签失败",
   "toast.updateTagsFailed": "更新标签失败",

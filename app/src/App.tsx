@@ -17,6 +17,7 @@ import { useT } from "./i18n/useT";
 import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { versionActions } from "./store/versionStore";
+import { writeTextToClipboard } from "./utils/clipboard";
 
 import { WindowResizer } from "./components/WindowResizer";
 import { CommandPalette } from "./components/CommandPalette";
@@ -182,6 +183,22 @@ function App() {
   const uploadPercentClamped = Math.max(0, Math.min(100, uploadPercent));
   const uploadPercentLabel = Math.round(uploadPercentClamped);
 
+  const handleToastCopy = async (text: string) => {
+    try {
+      await writeTextToClipboard(text);
+    } catch (error) {
+      globalActions.pushToast(
+        {
+          key: "toast.copyContentFailed",
+          params: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+        "error",
+      );
+    }
+  };
+
   return (
     <div
       className={clsx(
@@ -206,14 +223,17 @@ function App() {
                   : toast.type === "warning"
                     ? "border-yellow-700/60 bg-yellow-950/80 text-yellow-100"
                     : "border-neutral-700/70 bg-neutral-900/90 text-neutral-100";
+            const toastText = t(toast.message.key, toast.message.params);
             return (
               <button
                 key={toast.id}
                 type="button"
-                className={`max-w-[320px] rounded border px-3 py-2 text-left text-xs shadow-lg backdrop-blur transition-colors hover:bg-neutral-800/90 ${tone}`}
-                onClick={() => globalActions.removeToast(toast.id)}
+                className={`max-w-[320px] cursor-copy rounded border px-3 py-2 text-left text-xs shadow-lg backdrop-blur transition-colors hover:bg-neutral-800/90 ${tone}`}
+                title={t("toast.clickToCopy")}
+                aria-label={t("toast.clickToCopy")}
+                onClick={() => void handleToastCopy(toastText)}
               >
-                {t(toast.message.key, toast.message.params)}
+                {toastText}
               </button>
             );
           })}

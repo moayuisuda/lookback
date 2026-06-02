@@ -93,7 +93,7 @@ const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT =
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT =
   process.platform === "darwin" ? "Command+Down" : "Ctrl+Down";
 const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT =
-  process.platform === "darwin" ? "Command+T" : "Ctrl+T";
+  process.platform === "darwin" ? "Command+I" : "Ctrl+I";
 
 let toggleWindowShortcut = DEFAULT_TOGGLE_WINDOW_SHORTCUT;
 let canvasOpacityUpShortcut = DEFAULT_CANVAS_OPACITY_UP_SHORTCUT;

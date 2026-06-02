@@ -101,7 +101,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(na
 const DEFAULT_TOGGLE_WINDOW_SHORTCUT = isMac ? 'Command+L' : 'Ctrl+L';
 const DEFAULT_CANVAS_OPACITY_UP_SHORTCUT = isMac ? 'Command+Up' : 'Ctrl+Up';
 const DEFAULT_CANVAS_OPACITY_DOWN_SHORTCUT = isMac ? 'Command+Down' : 'Ctrl+Down';
-const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+T' : 'Ctrl+T';
+const DEFAULT_TOGGLE_MOUSE_THROUGH_SHORTCUT = isMac ? 'Command+I' : 'Ctrl+I';
 const DEFAULT_CANVAS_AUTO_LAYOUT_SHORTCUT = isMac ? 'Command+G' : 'Ctrl+G';
 const DEFAULT_CANVAS_GROUP_SHORTCUT = isMac ? 'Command+Shift+G' : 'Ctrl+Shift+G';
 const DEFAULT_CANVAS_PEN_SHORTCUT = isMac ? 'Command+P' : 'Ctrl+P';
@@ -290,8 +290,10 @@ export const globalActions = {
         globalState.canvasOpacity = rawCanvasOpacity;
       }
 
-      if (typeof rawMouseThrough === 'boolean') {
-        globalState.mouseThrough = rawMouseThrough;
+      // 鼠标穿透只作为当前会话状态，重启后必须恢复可交互窗口。
+      globalState.mouseThrough = false;
+      if (rawMouseThrough === true) {
+        void settingStorage.set('mouseThrough', false);
       }
 
       if (typeof rawCanvasOpacityUpShortcut === 'string') {
@@ -336,10 +338,7 @@ export const globalActions = {
 
   pushToast: (message: I18nMessage, type: ToastType = 'info', timeoutMs = 3200) => {
     const id = `toast_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    globalState.toasts = [
-      ...globalState.toasts,
-      { id, message, type, createdAt: Date.now() },
-    ];
+    globalState.toasts.push({ id, message, type, createdAt: Date.now() });
     if (timeoutMs > 0) {
       window.setTimeout(() => {
         globalActions.removeToast(id);
@@ -348,7 +347,10 @@ export const globalActions = {
   },
 
   removeToast: (id: string) => {
-    globalState.toasts = globalState.toasts.filter((t) => t.id !== id);
+    const index = globalState.toasts.findIndex((toast) => toast.id === id);
+    if (index >= 0) {
+      globalState.toasts.splice(index, 1);
+    }
   },
 
   beginUploadProgress: (total: number) => {
