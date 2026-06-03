@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useSnapshot } from "valtio";
 import { FEATURE_LIST } from "./data/features";
+import { PICAPTAIN_FEATURE_LIST } from "./data/picaptainFeatures";
 import { useT } from "./i18n/useT";
 import {
   LATEST_RELEASE_PAGE,
@@ -448,6 +449,17 @@ function App() {
                 <span>{t("picaptain.pill.tag")}</span>
                 <span>{t("picaptain.pill.search")}</span>
               </div>
+              <ul
+                className="picaptain-feature-list"
+                aria-label={t("picaptain.featureAria")}
+              >
+                {PICAPTAIN_FEATURE_LIST.map((feature) => (
+                  <li key={feature.id} className="picaptain-feature-item">
+                    <h3>{t(feature.titleKey)}</h3>
+                    <p>{t(feature.descKey)}</p>
+                  </li>
+                ))}
+              </ul>
               <div className="picaptain-actions">
                 <button
                   type="button"

@@ -69,17 +69,30 @@ export const zh = {
 
   'picaptain.badge': 'PiCaptain',
   'picaptain.title': '你的智能素材收集助手',
-  'picaptain.subtitle': '纯本地 · 自动 tag · 语义搜索',
+  'picaptain.subtitle': '纯本地 · 文字索引 · 语义搜索',
   'picaptain.desc':
-    'PiCaptain 面向灵感图、参考图和项目素材的日常收集：图片保存在本地文件系统中，自动生成可检索标签，并通过语义搜索快速找回“像这个感觉”的素材。',
+    'PiCaptain 面向灵感图、参考图和项目素材的日常收集：图片保存在本地文件系统中，生成可文字搜索的索引，并通过语义搜索快速找回“像这个感觉”的素材。',
   'picaptain.pillAria': 'PiCaptain 核心能力',
   'picaptain.pill.local': '纯本地',
-  'picaptain.pill.tag': '自动 tag',
+  'picaptain.pill.tag': '文字索引',
   'picaptain.pill.search': '语义搜索',
+  'picaptain.featureAria': 'PiCaptain 功能点',
+  'picaptain.feature.daily.title': '日常一键收集',
+  'picaptain.feature.daily.desc':
+    '灵感图、参考图和项目素材随手归档，本地沉淀成可持续增长的个人素材库。',
+  'picaptain.feature.colorTone.title': '色调搜图',
+  'picaptain.feature.colorTone.desc':
+    '按画面主色与色彩倾向检索，快速找出同一色彩氛围的素材。',
+  'picaptain.feature.valueTone.title': '调子搜图',
+  'picaptain.feature.valueTone.desc':
+    '依据明暗关系与黑白调子查找图片，更适合对比构图、光影和画面节奏。',
+  'picaptain.feature.imageSearch.title': '以图搜图',
+  'picaptain.feature.imageSearch.desc':
+    '用一张参考图发起相似素材检索，按视觉语义找回接近的内容。',
   'picaptain.download': '下载 Windows',
   'picaptain.imageAlt': 'PiCaptain 素材收集界面预览',
   'picaptain.previewTitle': '把素材变成可搜索的灵感库',
-  'picaptain.previewDesc': '收集、标记、召回都在本地完成，适合长期沉淀个人素材资产。',
+  'picaptain.previewDesc': '收集、索引、召回都在本地完成，适合长期沉淀个人素材资产。',
 
   'commandMarket.badge': '命令市场',
   'commandMarket.title': '拓展画布能力',
@@ -178,18 +191,31 @@ export const en = {
 
   'picaptain.badge': 'PiCaptain',
   'picaptain.title': 'Your intelligent asset collection assistant',
-  'picaptain.subtitle': 'Local-first · Auto tags · Semantic search',
+  'picaptain.subtitle': 'Local-first · Text indexes · Semantic search',
   'picaptain.desc':
-    'PiCaptain is built for collecting inspiration images, references, and project assets. Files stay on your machine, tags are generated automatically, and semantic search helps you rediscover assets by intent and feeling.',
+    'PiCaptain is built for collecting inspiration images, references, and project assets. Files stay on your machine, text-searchable indexes are generated, and semantic search helps you rediscover assets by intent and feeling.',
   'picaptain.pillAria': 'PiCaptain core capabilities',
   'picaptain.pill.local': 'Local-first',
-  'picaptain.pill.tag': 'Auto tags',
+  'picaptain.pill.tag': 'Text indexes',
   'picaptain.pill.search': 'Semantic search',
+  'picaptain.featureAria': 'PiCaptain features',
+  'picaptain.feature.daily.title': 'Daily Collection',
+  'picaptain.feature.daily.desc':
+    'Drop inspiration, references, and project assets into a local library that grows with daily work.',
+  'picaptain.feature.colorTone.title': 'Color Tone Search',
+  'picaptain.feature.colorTone.desc':
+    'Search by dominant colors and palette direction to find assets with the same visual mood.',
+  'picaptain.feature.valueTone.title': 'Value Tone Search',
+  'picaptain.feature.valueTone.desc':
+    'Find images by light-dark structure and tonal relationships for composition, lighting, and rhythm checks.',
+  'picaptain.feature.imageSearch.title': 'Image-to-Image Search',
+  'picaptain.feature.imageSearch.desc':
+    'Start from a reference image and recall nearby assets through visual semantic similarity.',
   'picaptain.download': 'Download Windows',
   'picaptain.imageAlt': 'PiCaptain asset collection interface preview',
   'picaptain.previewTitle': 'Turn loose assets into a searchable inspiration library',
   'picaptain.previewDesc':
-    'Collect, tag, and recall assets locally, then grow a personal material archive over time.',
+    'Collect, index, and recall assets locally, then grow a personal material archive over time.',
 
   'commandMarket.badge': 'Command Market',
   'commandMarket.title': 'Expand Canvas Capabilities',
