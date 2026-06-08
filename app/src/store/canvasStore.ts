@@ -1019,6 +1019,14 @@ const cleanupCanvasGroups = (items: CanvasItem[]) => {
   }
 };
 
+const getGroupedCanvasItemIds = (groups: readonly CanvasGroup[]) => {
+  const itemIds = new Set<string>();
+  groups.forEach((group) => {
+    group.items.forEach((itemId) => itemIds.add(itemId));
+  });
+  return itemIds;
+};
+
 const persistCanvasScene = () => {
   void persistCanvasItems(canvasState.canvasItems);
   void persistCanvasGroupsForCurrentCanvas(canvasState.canvasGroups);
@@ -2194,10 +2202,14 @@ export const canvasActions = {
 
     const targetSet =
       targetIds && targetIds.length > 0 ? new Set(targetIds) : null;
+    const groupedItemIds = targetSet
+      ? new Set<string>()
+      : getGroupedCanvasItemIds(canvasState.canvasGroups);
 
-    const layoutItems = canvasState.canvasItems.filter(
-      (item) => !targetSet || targetSet.has(item.itemId),
-    );
+    const layoutItems = canvasState.canvasItems.filter((item) => {
+      if (targetSet) return targetSet.has(item.itemId);
+      return !groupedItemIds.has(item.itemId);
+    });
 
     const rects = layoutItems
       .map((item) => {
