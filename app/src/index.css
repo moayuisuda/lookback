@@ -26,7 +26,7 @@ input[type="color"]::-webkit-color-swatch {
 
 .draggable {
   -webkit-app-region: drag;
-  cursor: move;
+  /* cursor: move; */
 }
 
 .no-drag {
