@@ -17,6 +17,12 @@ import {
   createBrushPoint,
   getFilteredBrushPoint,
 } from "../utils/canvasBrush";
+import {
+  getImagePathDirname,
+  isAssetImagePath,
+  isRemoteImagePath,
+  resolveLocalImagePathFromStorage,
+} from "../../shared/canvasImagePath";
 
 // 绘制中的实时笔画数据，存于 plain JS 完全绕过 valtio，零 React re-render
 interface LiveStrokeData {
@@ -352,44 +358,14 @@ const containCanvasBounds = (bounds: {
   return true;
 };
 
-const normalizePath = (value: string) => value.replace(/\\/g, "/");
-
-const isRemoteImagePath = (value: string) => {
-  const normalized = value.trim().toLowerCase();
-  return normalized.startsWith("http://") || normalized.startsWith("https://");
-};
-
-const isAssetImagePath = (value: string) => {
-  const normalized = normalizePath(value).replace(/^\/+/, "");
-  return normalized.startsWith("assets/");
-};
-
-const sanitizeCanvasNameForPath = (value: string) => {
-  const safe = value.replace(/[/\\:*?"<>|]/g, "_").trim();
-  return safe || "Default";
-};
-
 const resolveLocalImagePath = async (
   rawPath: string,
   canvasName: string,
 ): Promise<string> => {
   if (!isAssetImagePath(rawPath)) return rawPath;
-  const normalized = normalizePath(rawPath).replace(/^\/+/, "");
-  const filename = normalized.split("/").pop() || "";
-  if (!filename) return "";
   const storageDir = await window.electron?.getStorageDir?.();
   if (!storageDir) return "";
-  const safeStorageDir = storageDir.replace(/[\\/]$/, "");
-  const safeCanvasName = sanitizeCanvasNameForPath(canvasName);
-  // assets/ 相对路径统一映射为当前画布 assets 目录下的绝对路径。
-  return `${safeStorageDir}/canvases/${safeCanvasName}/assets/${filename}`;
-};
-
-const getPathDirname = (value: string) => {
-  const normalized = normalizePath(value);
-  const index = normalized.lastIndexOf("/");
-  if (index <= 0) return normalized;
-  return normalized.slice(0, index);
+  return resolveLocalImagePathFromStorage(rawPath, canvasName, storageDir);
 };
 
 const normalizeGroupColor = (value: unknown) => {
@@ -2371,6 +2347,6 @@ export const canvasActions = {
     return resolveLocalImagePath(rawPath, targetCanvasName);
   },
   getPathDirname: (value: string) => {
-    return getPathDirname(value);
+    return getImagePathDirname(value);
   },
 };

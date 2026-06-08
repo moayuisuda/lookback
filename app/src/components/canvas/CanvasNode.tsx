@@ -11,6 +11,10 @@ interface CanvasNodeProps {
   onDragStart?: (pos: { clientX: number; clientY: number }) => void;
   onDragMove?: (delta: { dx: number; dy: number }) => void;
   onDragEnd?: (delta: { dx: number; dy: number }) => void;
+  onDragCancel?: () => void;
+  onDragOut?: (
+    pos: { clientX: number; clientY: number },
+  ) => (() => void) | null;
   onSelect?: (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
   ) => void;
@@ -37,6 +41,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onDragStart,
   onDragMove,
   onDragEnd,
+  onDragCancel,
+  onDragOut,
   onSelect,
   onMouseDown,
   onClick,
@@ -50,6 +56,15 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     lastClientX: number;
     lastClientY: number;
   } | null>(null);
+
+  const isOutsideWindow = (clientX: number, clientY: number) => {
+    return (
+      clientX < 0 ||
+      clientY < 0 ||
+      clientX > window.innerWidth ||
+      clientY > window.innerHeight
+    );
+  };
 
   const handlePointerDown = (e: React.PointerEvent<SVGGElement>) => {
     if (canvasState.isPenMode) return;
@@ -110,6 +125,18 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       }
     };
 
+    const cancelDrag = () => {
+      const state = dragStateRef.current;
+      if (!state) return;
+
+      onDragCancel?.();
+      dragStateRef.current = null;
+      cleanupDragListeners();
+      if (captureTarget.hasPointerCapture(state.pointerId)) {
+        captureTarget.releasePointerCapture(state.pointerId);
+      }
+    };
+
     const handleWindowPointerMove = (ev: PointerEvent) => {
       const state = dragStateRef.current;
       if (!state) return;
@@ -118,6 +145,18 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       ev.preventDefault();
       state.lastClientX = ev.clientX;
       state.lastClientY = ev.clientY;
+
+      if (onDragOut && isOutsideWindow(ev.clientX, ev.clientY)) {
+        const startDragOut = onDragOut({
+          clientX: ev.clientX,
+          clientY: ev.clientY,
+        });
+        if (startDragOut) {
+          cancelDrag();
+          startDragOut();
+          return;
+        }
+      }
 
       const dx = ev.clientX - state.originClientX;
       const dy = ev.clientY - state.originClientY;

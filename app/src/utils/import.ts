@@ -82,7 +82,7 @@ const mapWithConcurrency = async <T, R>(
   return results;
 };
 
-const getNativeFilePath = (file: File): string => {
+export const getNativeFilePath = (file: File): string => {
   const nativePath = (file as NativePathFile).path;
   return typeof nativePath === 'string' ? nativePath.trim() : '';
 };

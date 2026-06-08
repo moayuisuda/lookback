@@ -72,6 +72,10 @@ interface Window {
       dataUrl: string,
       defaultName?: string
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
+    startImageFileDrag: (payload: {
+      imagePaths: string[];
+      canvasName: string;
+    }) => Promise<{ success: boolean; error?: string }>;
     exportLogFile: () => Promise<{
       success: boolean;
       canceled?: boolean;

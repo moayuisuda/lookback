@@ -34,9 +34,11 @@ import { useT } from "../i18n/useT";
 import {
   createTempMetaFromImageUrl,
   createTempMetasFromFiles,
+  getNativeFilePath,
   logImageImport,
   resolveDroppedFiles,
 } from "../utils/import";
+import { normalizeImagePath } from "../../shared/canvasImagePath";
 import { extractDroppedImageUrl } from "../utils/droppedImageUrl";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { getCssFilters } from "../utils/imageFilters";
@@ -52,6 +54,19 @@ type PointerPointSource = {
   timeStamp?: number;
   pointerType?: string;
   nativeEvent?: PointerEvent;
+};
+
+const OUTGOING_IMAGE_DRAG_TTL_MS = 30000;
+
+type OutgoingImageFileDrag = {
+  normalizedFilePaths: Set<string>;
+  startedAt: number;
+};
+
+const normalizeLocalFilePathForCompare = (value: string) => {
+  const normalized = normalizeImagePath(value).replace(/\/+$/, "");
+  const platform = navigator.platform.toLowerCase();
+  return platform.includes("win") ? normalized.toLowerCase() : normalized;
 };
 
 const getImportUrlHost = (url: string) => {
@@ -70,6 +85,11 @@ type CanvasItemsLayerProps = {
   ) => void;
   onDragMove: (id: string, delta: { dx: number; dy: number }) => void;
   onDragEnd: (id: string, delta: { dx: number; dy: number }) => void;
+  onDragCancel: (id: string) => void;
+  onImageDragOut: (
+    id: string,
+    pos: { clientX: number; clientY: number },
+  ) => (() => void) | null;
   onItemSelect: (
     id: string,
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
@@ -85,6 +105,8 @@ const CanvasItemRenderer = React.memo(
     onDragStart,
     onDragMove,
     onDragEnd,
+    onDragCancel,
+    onImageDragOut,
     onSelect,
     onContainItem,
     onCommitItem,
@@ -97,6 +119,11 @@ const CanvasItemRenderer = React.memo(
     ) => void;
     onDragMove: (id: string, delta: { dx: number; dy: number }) => void;
     onDragEnd: (id: string, delta: { dx: number; dy: number }) => void;
+    onDragCancel: (id: string) => void;
+    onImageDragOut: (
+      id: string,
+      pos: { clientX: number; clientY: number },
+    ) => (() => void) | null;
     onSelect: (
       id: string,
       e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
@@ -149,6 +176,8 @@ const CanvasItemRenderer = React.memo(
         onDragStart={(pos) => onDragStart(itemId, pos)}
         onDragMove={(delta) => onDragMove(itemId, delta)}
         onDragEnd={(delta) => onDragEnd(itemId, delta)}
+        onDragCancel={() => onDragCancel(itemId)}
+        onDragOut={(pos) => onImageDragOut(itemId, pos)}
         onSelect={(e) => onSelect(itemId, e)}
         onContain={() => onContainItem(itemId)}
       />
@@ -162,6 +191,8 @@ const CanvasItemsLayer = React.memo(
     onDragStart,
     onDragMove,
     onDragEnd,
+    onDragCancel,
+    onImageDragOut,
     onItemSelect,
     onContainItem,
     onCommitItem,
@@ -178,6 +209,8 @@ const CanvasItemsLayer = React.memo(
             onDragStart={onDragStart}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}
+            onDragCancel={onDragCancel}
+            onImageDragOut={onImageDragOut}
             onSelect={onItemSelect}
             onContainItem={onContainItem}
             onCommitItem={onCommitItem}
@@ -278,6 +311,8 @@ export const Canvas: React.FC = () => {
     groupId: null,
     snapshots: new Map(),
   });
+  const outgoingImageFileDragRef = useRef<OutgoingImageFileDrag | null>(null);
+  const outgoingImageFileDragTimerRef = useRef<number | null>(null);
 
   const getCanvasIdleCursor = useMemoizedFn(() => {
     if (!canvasState.isPenMode) return "default";
@@ -328,6 +363,54 @@ export const Canvas: React.FC = () => {
     };
   });
 
+  const clearOutgoingImageFileDrag = useMemoizedFn(() => {
+    outgoingImageFileDragRef.current = null;
+    if (outgoingImageFileDragTimerRef.current !== null) {
+      window.clearTimeout(outgoingImageFileDragTimerRef.current);
+      outgoingImageFileDragTimerRef.current = null;
+    }
+  });
+
+  const markOutgoingImageFileDrag = useMemoizedFn(
+    ({ filePaths }: { filePaths: string[] }) => {
+      const normalizedFilePaths = new Set(
+        filePaths
+          .map((filePath) => normalizeLocalFilePathForCompare(filePath))
+          .filter(Boolean),
+      );
+      if (normalizedFilePaths.size === 0) return;
+
+      clearOutgoingImageFileDrag();
+      outgoingImageFileDragRef.current = {
+        normalizedFilePaths,
+        startedAt: Date.now(),
+      };
+      outgoingImageFileDragTimerRef.current = window.setTimeout(() => {
+        clearOutgoingImageFileDrag();
+      }, OUTGOING_IMAGE_DRAG_TTL_MS);
+    },
+  );
+
+  const isOutgoingImageFileDrop = useMemoizedFn((file: File) => {
+    const outgoing = outgoingImageFileDragRef.current;
+    if (!outgoing) return false;
+    if (Date.now() - outgoing.startedAt > OUTGOING_IMAGE_DRAG_TTL_MS) {
+      clearOutgoingImageFileDrag();
+      return false;
+    }
+
+    const nativePath = getNativeFilePath(file);
+    if (!nativePath) return false;
+
+    return outgoing.normalizedFilePaths.has(
+      normalizeLocalFilePathForCompare(nativePath),
+    );
+  });
+
+  useEffect(() => {
+    return () => clearOutgoingImageFileDrag();
+  }, [clearOutgoingImageFileDrag]);
+
   void commandSnap.externalCommands;
   const commands = getCommands();
   const visibleCommands = useMemo(() => {
@@ -360,6 +443,33 @@ export const Canvas: React.FC = () => {
   const getSelectedItems = useMemoizedFn(() =>
     canvasState.canvasItems.filter((item) => item.isSelected),
   );
+
+  const getLocalImageDragPaths = useMemoizedFn((id: string) => {
+    const target = canvasState.canvasItems.find((item) => item.itemId === id);
+    if (!target || target.type !== "image") return [];
+
+    const candidates: CanvasImageState[] = target.isSelected
+      ? canvasState.canvasItems.filter(
+          (item): item is CanvasImageState =>
+            item.type === "image" && item.isSelected === true,
+        )
+      : [target];
+    const imagePaths: string[] = [];
+    const seen = new Set<string>();
+
+    candidates.forEach((image) => {
+      const imagePath = image.imagePath.trim();
+      if (!imagePath || canvasActions.isRemoteImagePath(imagePath)) return;
+
+      const identity = normalizeImagePath(imagePath);
+      if (seen.has(identity)) return;
+
+      seen.add(identity);
+      imagePaths.push(imagePath);
+    });
+
+    return imagePaths;
+  });
 
   const getActiveCanvasGroupItems = useMemoizedFn(() => {
     const activeGroupId = canvasState.activeCanvasGroupId;
@@ -634,7 +744,15 @@ export const Canvas: React.FC = () => {
           console.error("Drop scan error", err);
         }
 
-        const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+        const droppedImageFiles = files.filter((file) =>
+          file.type.startsWith("image/"),
+        );
+        const imageFiles = droppedImageFiles.filter(
+          (file) => !isOutgoingImageFileDrop(file),
+        );
+        if (imageFiles.length !== droppedImageFiles.length) {
+          clearOutgoingImageFileDrag();
+        }
         if (!imageFiles.length) return;
 
         const metas = await createTempMetasFromFiles(
@@ -1949,6 +2067,61 @@ export const Canvas: React.FC = () => {
     },
   );
 
+  const handleDragCancel = useMemoizedFn((id: string) => {
+    const multi = multiDragRef.current;
+    if (!multi.active || multi.draggedId !== id) return;
+
+    multi.snapshots.forEach((start, selectedId) => {
+      canvasActions.updateCanvasImageTransient(selectedId, {
+        x: start.x,
+        y: start.y,
+      });
+    });
+    multiDragRef.current = {
+      active: false,
+      draggedId: null,
+      anchor: null,
+      snapshots: new Map(),
+    };
+    setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+  });
+
+  const handleImageDragOut = useMemoizedFn(
+    (id: string, pos: { clientX: number; clientY: number }) => {
+      void pos;
+      const imagePaths = getLocalImageDragPaths(id);
+      if (imagePaths.length === 0) return null;
+      const startImageFileDrag = window.electron?.startImageFileDrag;
+      if (!startImageFileDrag) return null;
+
+      const canvasName = canvasState.currentCanvasName;
+      return () => {
+        void (async () => {
+          try {
+            const filePaths = (
+              await Promise.all(
+                imagePaths.map((imagePath) =>
+                  canvasActions.resolveLocalImagePath(imagePath, canvasName),
+                ),
+              )
+            ).filter((filePath): filePath is string => Boolean(filePath));
+            if (filePaths.length === 0) return;
+
+            markOutgoingImageFileDrag({ filePaths });
+
+            const result = await startImageFileDrag({ imagePaths, canvasName });
+            if (result.success) return;
+            clearOutgoingImageFileDrag();
+            console.error("Failed to start image file drag", result.error);
+          } catch (error: unknown) {
+            clearOutgoingImageFileDrag();
+            console.error("Failed to start image file drag", error);
+          }
+        })();
+      };
+    },
+  );
+
   const handleGroupSelect = useMemoizedFn((groupId: string) => {
     // 点击编组空白区域时，切换到编组态并清空节点选中，避免 group / node 选中态并存。
     clearSelection();
@@ -2340,6 +2513,8 @@ export const Canvas: React.FC = () => {
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+            onImageDragOut={handleImageDragOut}
             onItemSelect={handleItemSelect}
             onContainItem={handleContainItem}
             onCommitItem={handleCommitItem}

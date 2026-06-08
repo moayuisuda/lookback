@@ -30,6 +30,10 @@ interface CanvasImageProps {
   onDragStart: (pos: { clientX: number; clientY: number }) => void;
   onDragMove: (delta: { dx: number; dy: number }) => void;
   onDragEnd: (delta: { dx: number; dy: number }) => void;
+  onDragCancel: () => void;
+  onDragOut: (
+    pos: { clientX: number; clientY: number },
+  ) => (() => void) | null;
   onSelect: (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
   ) => void;
@@ -43,6 +47,8 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   onDragStart,
   onDragMove,
   onDragEnd,
+  onDragCancel,
+  onDragOut,
   onSelect,
   onContain,
 }) => {
@@ -90,6 +96,8 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
       onDragStart={onDragStart}
       onDragMove={onDragMove}
       onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+      onDragOut={onDragOut}
       onSelect={handleSelect}
       onDoubleClick={handleDoubleClick}
     >

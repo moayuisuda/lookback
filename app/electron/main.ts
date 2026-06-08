@@ -6,10 +6,12 @@ import {
   dialog,
   shell,
   globalShortcut,
+  nativeImage,
 } from "electron";
 import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
+import sharp from "sharp";
 import {
   autoUpdater,
   type ProgressInfo,
@@ -82,6 +84,10 @@ import {
 } from "../backend/server";
 import { t as translate } from "../shared/i18n/t";
 import type { Locale } from "../shared/i18n/types";
+import {
+  isRemoteImagePath,
+  resolveLocalImagePathFromStorage,
+} from "../shared/canvasImagePath";
 import { debounce } from "radash";
 
 let mainWindow: BrowserWindow | null = null;
@@ -138,6 +144,19 @@ const UPDATE_FEED_URL =
 const DEV_APP_UPDATE_CONFIG_FILE = "dev-app-update.yml";
 const DEV_UPDATER_CACHE_DIR_NAME = "lookback-updater";
 const pendingDeepLinkUrls: string[] = [];
+const IMAGE_DRAG_ICON_SIZE = 96;
+const SUPPORTED_DRAG_IMAGE_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+  ".gif",
+  ".bmp",
+  ".svg",
+  ".avif",
+  ".tif",
+  ".tiff",
+]);
 
 type UpdaterStatus =
   | "idle"
@@ -157,6 +176,11 @@ type UpdaterState = {
   latestVersion: string;
   downloadProgress: number;
   errorMessage: string;
+};
+
+type ImageFileDragPayload = {
+  imagePaths?: string[];
+  canvasName?: string;
 };
 
 const updaterState: UpdaterState = {
@@ -482,6 +506,76 @@ function toCommandFileName(targetUrl: URL) {
     throw new Error("Unsupported command file extension");
   }
   return sanitized;
+}
+
+function getLocalFilePathIdentity(filePath: string) {
+  const normalized = path.resolve(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function resolveImageFileDragPaths(payload: ImageFileDragPayload) {
+  const rawImagePaths = Array.isArray(payload?.imagePaths)
+    ? payload.imagePaths
+        .map((imagePath) => (typeof imagePath === "string" ? imagePath.trim() : ""))
+        .filter((imagePath) => imagePath && !isRemoteImagePath(imagePath))
+    : [];
+  if (rawImagePaths.length === 0) return [];
+
+  const canvasName =
+    typeof payload?.canvasName === "string" && payload.canvasName.trim()
+      ? payload.canvasName.trim()
+      : "Default";
+  const storageDir = getStorageDir();
+  const filePaths: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawImagePath of rawImagePaths) {
+    const resolvedPath = resolveLocalImagePathFromStorage(
+      rawImagePath,
+      canvasName,
+      storageDir,
+    );
+    if (!resolvedPath || !path.isAbsolute(resolvedPath)) continue;
+    if (
+      !SUPPORTED_DRAG_IMAGE_EXTENSIONS.has(
+        path.extname(resolvedPath).toLowerCase(),
+      )
+    ) {
+      continue;
+    }
+
+    const filePath = path.resolve(resolvedPath);
+    const identity = getLocalFilePathIdentity(filePath);
+    if (seen.has(identity)) continue;
+
+    const stats = await lockedFs.stat(filePath).catch(() => null);
+    if (!stats?.isFile()) continue;
+
+    seen.add(identity);
+    filePaths.push(filePath);
+  }
+
+  return filePaths;
+}
+
+async function createImageDragIcon(filePath: string) {
+  const iconBuffer = await withFileLock(filePath, () =>
+    sharp(filePath)
+      .rotate()
+      .resize({
+        width: IMAGE_DRAG_ICON_SIZE,
+        height: IMAGE_DRAG_ICON_SIZE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .png()
+      .toBuffer(),
+  );
+  const icon = nativeImage.createFromBuffer(iconBuffer);
+  if (icon.isEmpty()) {
+    throw new Error("Failed to create image drag icon");
+  }
+  return icon;
 }
 
 async function importCommandFromRemoteUrl(remoteUrl: string) {
@@ -1960,6 +2054,30 @@ async function startServer() {
 ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
 });
+
+ipcMain.handle(
+  "start-image-file-drag",
+  async (event, payload: ImageFileDragPayload) => {
+    try {
+      const filePaths = await resolveImageFileDragPaths(payload);
+      if (filePaths.length === 0) {
+        return { success: false, error: "Invalid image file path" };
+      }
+
+      const icon = await createImageDragIcon(filePaths[0]);
+      event.sender.startDrag({
+        file: filePaths[0],
+        files: filePaths,
+        icon,
+      });
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Failed to start image file drag:", message);
+      return { success: false, error: message };
+    }
+  },
+);
 
 ipcMain.handle("get-server-port", async () => {
   if (localServerStartTask) {
