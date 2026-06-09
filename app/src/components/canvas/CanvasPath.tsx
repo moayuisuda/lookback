@@ -7,6 +7,10 @@ import {
 import { CanvasNode } from "./CanvasNode";
 import { useVisualRenderCheck } from "../../hooks/useVisualRenderCheck";
 
+type CanvasPathActivationEvent =
+  | React.MouseEvent<SVGGElement>
+  | React.PointerEvent<SVGGElement>;
+
 interface CanvasPathProps {
   item: CanvasPathState;
   onDragStart: (pos: { clientX: number; clientY: number }) => void;
@@ -53,7 +57,7 @@ export const CanvasPath: React.FC<CanvasPathProps> = ({
     canvasActions.bringToFront(itemSnap.itemId);
   };
 
-  const handleDoubleClick = (e: React.MouseEvent<SVGGElement>) => {
+  const handleDoubleClick = (e: CanvasPathActivationEvent) => {
     const target = e.target as Element | null;
     if (target && target.closest("[data-control]")) return;
     e.stopPropagation();

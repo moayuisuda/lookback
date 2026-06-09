@@ -60,6 +60,7 @@ const OUTGOING_IMAGE_DRAG_TTL_MS = 30000;
 
 type OutgoingImageFileDrag = {
   normalizedFilePaths: Set<string>;
+  fileIdentityKeys: Set<string>;
   startedAt: number;
 };
 
@@ -67,6 +68,36 @@ const normalizeLocalFilePathForCompare = (value: string) => {
   const normalized = normalizeImagePath(value).replace(/\/+$/, "");
   const platform = navigator.platform.toLowerCase();
   return platform.includes("win") ? normalized.toLowerCase() : normalized;
+};
+
+const normalizeFileNameForCompare = (value: string) => {
+  const normalized = value.trim();
+  const platform = navigator.platform.toLowerCase();
+  return platform.includes("win") ? normalized.toLowerCase() : normalized;
+};
+
+const getComparableFileTimes = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return [];
+  return Array.from(
+    new Set([Math.floor(value), Math.round(value), Math.ceil(value)]),
+  );
+};
+
+const getFileIdentityKeys = ({
+  name,
+  size,
+  lastModified,
+}: {
+  name: string;
+  size: number;
+  lastModified: number;
+}) => {
+  const normalizedName = normalizeFileNameForCompare(name);
+  if (!normalizedName || !Number.isFinite(size) || size <= 0) return [];
+
+  return getComparableFileTimes(lastModified).map(
+    (time) => `file:${normalizedName}:${size}:${time}`,
+  );
 };
 
 const getImportUrlHost = (url: string) => {
@@ -372,17 +403,23 @@ export const Canvas: React.FC = () => {
   });
 
   const markOutgoingImageFileDrag = useMemoizedFn(
-    ({ filePaths }: { filePaths: string[] }) => {
+    ({ sources }: { sources: ImageFileDragSource[] }) => {
       const normalizedFilePaths = new Set(
-        filePaths
-          .map((filePath) => normalizeLocalFilePathForCompare(filePath))
+        sources
+          .map((source) => normalizeLocalFilePathForCompare(source.filePath))
           .filter(Boolean),
       );
-      if (normalizedFilePaths.size === 0) return;
+      const fileIdentityKeys = new Set(
+        sources.flatMap((source) => getFileIdentityKeys(source)),
+      );
+      if (normalizedFilePaths.size === 0 && fileIdentityKeys.size === 0) {
+        return;
+      }
 
       clearOutgoingImageFileDrag();
       outgoingImageFileDragRef.current = {
         normalizedFilePaths,
+        fileIdentityKeys,
         startedAt: Date.now(),
       };
       outgoingImageFileDragTimerRef.current = window.setTimeout(() => {
@@ -400,11 +437,21 @@ export const Canvas: React.FC = () => {
     }
 
     const nativePath = getNativeFilePath(file);
-    if (!nativePath) return false;
+    if (
+      nativePath &&
+      outgoing.normalizedFilePaths.has(
+        normalizeLocalFilePathForCompare(nativePath),
+      )
+    ) {
+      return true;
+    }
 
-    return outgoing.normalizedFilePaths.has(
-      normalizeLocalFilePathForCompare(nativePath),
-    );
+    const fileIdentityKeys = getFileIdentityKeys({
+      name: file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+    });
+    return fileIdentityKeys.some((key) => outgoing.fileIdentityKeys.has(key));
   });
 
   useEffect(() => {
@@ -2092,24 +2139,28 @@ export const Canvas: React.FC = () => {
       const imagePaths = getLocalImageDragPaths(id);
       if (imagePaths.length === 0) return null;
       const startImageFileDrag = window.electron?.startImageFileDrag;
-      if (!startImageFileDrag) return null;
+      const prepareImageFileDrag = window.electron?.prepareImageFileDrag;
+      if (!startImageFileDrag || !prepareImageFileDrag) return null;
 
       const canvasName = canvasState.currentCanvasName;
       return () => {
         void (async () => {
           try {
-            const filePaths = (
-              await Promise.all(
-                imagePaths.map((imagePath) =>
-                  canvasActions.resolveLocalImagePath(imagePath, canvasName),
-                ),
-              )
-            ).filter((filePath): filePath is string => Boolean(filePath));
-            if (filePaths.length === 0) return;
+            const prepared = await prepareImageFileDrag({
+              imagePaths,
+              canvasName,
+            });
+            if (!prepared.success || !prepared.sources?.length) {
+              console.error("Failed to prepare image file drag", prepared.error);
+              return;
+            }
 
-            markOutgoingImageFileDrag({ filePaths });
+            markOutgoingImageFileDrag({ sources: prepared.sources });
 
-            const result = await startImageFileDrag({ imagePaths, canvasName });
+            const result = await startImageFileDrag({
+              filePaths: prepared.sources.map((source) => source.filePath),
+              canvasName,
+            });
             if (result.success) return;
             clearOutgoingImageFileDrag();
             console.error("Failed to start image file drag", result.error);

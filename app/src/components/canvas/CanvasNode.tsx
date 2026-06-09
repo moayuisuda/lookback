@@ -1,6 +1,13 @@
 import React, { useRef } from "react";
 import { canvasState } from "../../store/canvasStore";
 
+const POINTER_DOUBLE_CLICK_MAX_DELAY = 300;
+const POINTER_DOUBLE_CLICK_MAX_DISTANCE = 12;
+
+type CanvasNodeActivationEvent =
+  | React.MouseEvent<SVGGElement>
+  | React.PointerEvent<SVGGElement>;
+
 interface CanvasNodeProps {
   id: string;
   x: number;
@@ -15,17 +22,13 @@ interface CanvasNodeProps {
   onDragOut?: (
     pos: { clientX: number; clientY: number },
   ) => (() => void) | null;
-  onSelect?: (
-    e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
-  ) => void;
+  onSelect?: (e: CanvasNodeActivationEvent) => void;
   onTransform?: (matrix: DOMMatrix) => void;
   onTransformEnd?: (matrix: DOMMatrix) => void;
-  onMouseDown?: (
-    e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
-  ) => void;
+  onMouseDown?: (e: CanvasNodeActivationEvent) => void;
   onClick?: (e: React.MouseEvent<SVGGElement>) => void;
   onTap?: (e: React.MouseEvent<SVGGElement>) => void;
-  onDoubleClick?: (e: React.MouseEvent<SVGGElement>) => void;
+  onDoubleClick?: (e: CanvasNodeActivationEvent) => void;
   children: React.ReactNode;
 
   transformerProps?: Record<string, unknown>;
@@ -56,6 +59,12 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     lastClientX: number;
     lastClientY: number;
   } | null>(null);
+  const lastPointerTapRef = useRef<{
+    clientX: number;
+    clientY: number;
+    pointerType: string;
+    timeStamp: number;
+  } | null>(null);
 
   const isOutsideWindow = (clientX: number, clientY: number) => {
     return (
@@ -66,7 +75,51 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     );
   };
 
+  const isPointerDoubleClick = (e: React.PointerEvent<SVGGElement>) => {
+    if (canvasState.isPenMode || e.button !== 0 || !onDoubleClick) {
+      lastPointerTapRef.current = null;
+      return false;
+    }
+
+    const previousTap = lastPointerTapRef.current;
+    // 硬件数位板的笔输入不总是合成 dblclick，节点层统一用 pointer 识别双击。
+    lastPointerTapRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      pointerType: e.pointerType,
+      timeStamp: e.timeStamp,
+    };
+
+    if (!previousTap || previousTap.pointerType !== e.pointerType) {
+      return false;
+    }
+
+    const delay = e.timeStamp - previousTap.timeStamp;
+    const distance = Math.hypot(
+      e.clientX - previousTap.clientX,
+      e.clientY - previousTap.clientY,
+    );
+
+    const isDoubleClick =
+      delay > 0 &&
+      delay <= POINTER_DOUBLE_CLICK_MAX_DELAY &&
+      distance <= POINTER_DOUBLE_CLICK_MAX_DISTANCE;
+
+    if (isDoubleClick) {
+      lastPointerTapRef.current = null;
+    }
+
+    return isDoubleClick;
+  };
+
   const handlePointerDown = (e: React.PointerEvent<SVGGElement>) => {
+    if (isPointerDoubleClick(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onDoubleClick?.(e);
+      return;
+    }
+
     if (canvasState.isPenMode) return;
 
     if (e.button === 2) {
@@ -200,7 +253,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       onClick={onClick}
       className="select-none"
       style={{ touchAction: "none" }}
-      onDoubleClick={onDoubleClick}
     >
       {children}
     </g>

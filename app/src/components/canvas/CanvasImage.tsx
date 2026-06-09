@@ -42,6 +42,10 @@ interface CanvasImageProps {
 
 import { useVisualRenderCheck } from "../../hooks/useVisualRenderCheck";
 
+type CanvasImageActivationEvent =
+  | React.MouseEvent<SVGGElement>
+  | React.PointerEvent<SVGGElement>;
+
 export const CanvasImage: React.FC<CanvasImageProps> = ({
   image,
   onDragStart,
@@ -78,7 +82,7 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   const baseWidth = imageSnap.width!;
   const baseHeight = imageSnap.height!;
 
-  const handleDoubleClick = (e: React.MouseEvent<SVGGElement>) => {
+  const handleDoubleClick = (e: CanvasImageActivationEvent) => {
     const target = e.target as Element | null;
     if (target && target.closest("[data-control]")) return;
     e.stopPropagation();

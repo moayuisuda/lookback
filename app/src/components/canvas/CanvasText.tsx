@@ -25,6 +25,10 @@ interface CanvasTextProps {
 
 import { useVisualRenderCheck } from "../../hooks/useVisualRenderCheck";
 
+type CanvasTextActivationEvent =
+  | React.MouseEvent<SVGGElement>
+  | React.PointerEvent<SVGGElement>;
+
 const getTextUrl = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) {
@@ -259,7 +263,7 @@ export const CanvasText = ({
     canvasActions.bringToFront(itemSnap.itemId);
   };
 
-  const handleDoubleClick = (e: React.MouseEvent<SVGGElement>) => {
+  const handleDoubleClick = (e: CanvasTextActivationEvent) => {
     if (isEditing) return;
     const target = e.target as Element | null;
     if (target && target.closest("[data-control]")) return;

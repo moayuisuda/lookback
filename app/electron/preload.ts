@@ -42,7 +42,16 @@ import { ipcRenderer } from 'electron';
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>
     ipcRenderer.invoke('save-image-file', { dataUrl, defaultName }),
-  startImageFileDrag: (payload: { imagePaths: string[]; canvasName: string }) =>
+  prepareImageFileDrag: (payload: {
+    imagePaths: string[];
+    canvasName: string;
+  }) =>
+    ipcRenderer.invoke('prepare-image-file-drag', payload),
+  startImageFileDrag: (payload: {
+    imagePaths?: string[];
+    filePaths?: string[];
+    canvasName: string;
+  }) =>
     ipcRenderer.invoke('start-image-file-drag', payload),
   exportLogFile: () => ipcRenderer.invoke('export-log-file'),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),

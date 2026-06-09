@@ -180,7 +180,15 @@ type UpdaterState = {
 
 type ImageFileDragPayload = {
   imagePaths?: string[];
+  filePaths?: string[];
   canvasName?: string;
+};
+
+type ImageFileDragSource = {
+  filePath: string;
+  name: string;
+  size: number;
+  lastModified: number;
 };
 
 const updaterState: UpdaterState = {
@@ -513,28 +521,41 @@ function getLocalFilePathIdentity(filePath: string) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-async function resolveImageFileDragPaths(payload: ImageFileDragPayload) {
-  const rawImagePaths = Array.isArray(payload?.imagePaths)
-    ? payload.imagePaths
-        .map((imagePath) => (typeof imagePath === "string" ? imagePath.trim() : ""))
-        .filter((imagePath) => imagePath && !isRemoteImagePath(imagePath))
-    : [];
-  if (rawImagePaths.length === 0) return [];
-
+async function resolveImageFileDragSources(
+  payload: ImageFileDragPayload,
+): Promise<ImageFileDragSource[]> {
   const canvasName =
     typeof payload?.canvasName === "string" && payload.canvasName.trim()
       ? payload.canvasName.trim()
       : "Default";
   const storageDir = getStorageDir();
-  const filePaths: string[] = [];
+  const rawFilePaths = Array.isArray(payload?.filePaths)
+    ? payload.filePaths
+        .map((filePath) =>
+          typeof filePath === "string" ? filePath.trim() : "",
+        )
+        .filter(Boolean)
+    : [];
+  const rawImagePaths =
+    rawFilePaths.length > 0
+      ? rawFilePaths
+      : Array.isArray(payload?.imagePaths)
+        ? payload.imagePaths
+            .map((imagePath) =>
+              typeof imagePath === "string" ? imagePath.trim() : "",
+            )
+            .filter((imagePath) => imagePath && !isRemoteImagePath(imagePath))
+        : [];
+  if (rawImagePaths.length === 0) return [];
+
+  const sources: ImageFileDragSource[] = [];
   const seen = new Set<string>();
 
   for (const rawImagePath of rawImagePaths) {
-    const resolvedPath = resolveLocalImagePathFromStorage(
-      rawImagePath,
-      canvasName,
-      storageDir,
-    );
+    const resolvedPath =
+      rawFilePaths.length > 0
+        ? rawImagePath
+        : resolveLocalImagePathFromStorage(rawImagePath, canvasName, storageDir);
     if (!resolvedPath || !path.isAbsolute(resolvedPath)) continue;
     if (
       !SUPPORTED_DRAG_IMAGE_EXTENSIONS.has(
@@ -552,10 +573,15 @@ async function resolveImageFileDragPaths(payload: ImageFileDragPayload) {
     if (!stats?.isFile()) continue;
 
     seen.add(identity);
-    filePaths.push(filePath);
+    sources.push({
+      filePath,
+      name: path.basename(filePath),
+      size: stats.size,
+      lastModified: stats.mtimeMs,
+    });
   }
 
-  return filePaths;
+  return sources;
 }
 
 async function createImageDragIcon(filePath: string) {
@@ -2056,10 +2082,29 @@ ipcMain.handle("get-storage-dir", async () => {
 });
 
 ipcMain.handle(
+  "prepare-image-file-drag",
+  async (_event, payload: ImageFileDragPayload) => {
+    try {
+      const sources = await resolveImageFileDragSources(payload);
+      if (sources.length === 0) {
+        return { success: false, error: "Invalid image file path" };
+      }
+
+      return { success: true, sources };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Failed to prepare image file drag:", message);
+      return { success: false, error: message };
+    }
+  },
+);
+
+ipcMain.handle(
   "start-image-file-drag",
   async (event, payload: ImageFileDragPayload) => {
     try {
-      const filePaths = await resolveImageFileDragPaths(payload);
+      const sources = await resolveImageFileDragSources(payload);
+      const filePaths = sources.map((source) => source.filePath);
       if (filePaths.length === 0) {
         return { success: false, error: "Invalid image file path" };
       }

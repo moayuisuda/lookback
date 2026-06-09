@@ -20,6 +20,13 @@ type UpdaterState = {
   errorMessage: string;
 };
 
+type ImageFileDragSource = {
+  filePath: string;
+  name: string;
+  size: number;
+  lastModified: number;
+};
+
 interface Window {
   electron?: {
     min: () => void;
@@ -72,8 +79,17 @@ interface Window {
       dataUrl: string,
       defaultName?: string
     ) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
-    startImageFileDrag: (payload: {
+    prepareImageFileDrag: (payload: {
       imagePaths: string[];
+      canvasName: string;
+    }) => Promise<{
+      success: boolean;
+      sources?: ImageFileDragSource[];
+      error?: string;
+    }>;
+    startImageFileDrag: (payload: {
+      imagePaths?: string[];
+      filePaths?: string[];
       canvasName: string;
     }) => Promise<{ success: boolean; error?: string }>;
     exportLogFile: () => Promise<{
