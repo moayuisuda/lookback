@@ -5,6 +5,7 @@ import {
   Store,
   Trash2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import Input, { type InputRef } from "rc-input";
 import { useSnapshot } from "valtio";
@@ -22,7 +23,6 @@ import { getCommandContext, getCommands } from "../commands";
 import { getCommandDescription, getCommandTitle } from "../commands/display";
 import { importExternalCommand } from "../commands/importExternalCommand";
 import type { CommandContext, CommandDefinition } from "../commands/types";
-import { useClickOutside } from "../hooks/useClickOutside";
 import { ConfirmModal } from "./ConfirmModal";
 import { deleteExternalCommand } from "../service";
 import { clsx } from "clsx";
@@ -47,7 +47,6 @@ type ImageResult = {
 type SearchResult = CommandResult | TextResult | ImageResult;
 
 const COMMUNITY_COMMANDS_URL = "https://lookback.top/#/market";
-
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
 
 const isUiComponent = (
@@ -62,13 +61,8 @@ export const CommandPalette: React.FC = () => {
   const canvasSnap = useSnapshot(canvasState);
   const { t } = useT();
   const inputRef = useRef<InputRef | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
   void snap.externalCommands;
   const deleteTarget = snap.deleteTarget;
-
-  useClickOutside(panelRef, () => {
-    if (snap.isOpen) commandActions.close();
-  });
 
   const handleImportCommand = async () => {
     await importExternalCommand(t);
@@ -319,17 +313,19 @@ export const CommandPalette: React.FC = () => {
 
   return (
     <>
-      <div className="absolute inset-x-0 bottom-0 top-[32px] z-[9998] flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-sm no-drag">
-        <div
-          ref={panelRef}
-          className="relative mt-2 flex max-h-[calc(100vh-48px)] w-[min(640px,calc(100vw-16px))] flex-col rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-2xl"
-        >
-          {isTaskUi ? (
-            <>
-              <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between">
-                <span className="font-medium text-sm text-neutral-200">
-                  {activeCommand ? getCommandTitle(activeCommand, t) : ""}
-                </span>
+      <aside
+        className={clsx(
+          "command-palette-panel fixed right-4 top-8 z-[90] flex h-[calc(100vh-48px)] max-h-[calc(100vh-48px)] w-[min(560px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
+          snap.isClosing && "command-palette-panel--closing pointer-events-none",
+        )}
+      >
+        {isTaskUi ? (
+          <>
+            <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between gap-3">
+              <span className="font-medium text-sm text-neutral-200">
+                {activeCommand ? getCommandTitle(activeCommand, t) : ""}
+              </span>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -339,50 +335,69 @@ export const CommandPalette: React.FC = () => {
                 >
                   {t("commandPalette.back")}
                 </button>
-              </div>
-              {isUiComponent(activeUi) ? (
-                <div className="min-h-0 flex-1 overflow-y-auto dark-scrollbar">
-                  {React.createElement(activeUi, {
-                    context: commandContext,
-                  })}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-3">
-                <Input
-                  ref={inputRef}
-                  value={snap.query}
-                  onChange={(e) => commandActions.setQuery(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  onPressEnter={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                    if (e.nativeEvent.isComposing) return;
-                    void handleConfirmSelection();
-                  }}
-                  placeholder={t("commandPalette.placeholder")}
-                  className="flex-1 bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-500"
-                />
                 <button
                   type="button"
-                  onClick={() => void handleOpenCommunityCommands()}
-                  className="text-neutral-400 hover:text-neutral-200 p-1 rounded hover:bg-neutral-800 transition-colors"
-                  title={t("commandPalette.communityCommands")}
-                  aria-label={t("commandPalette.communityCommands")}
+                  onClick={commandActions.close}
+                  className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
+                  title={t("commandPalette.collapse")}
+                  aria-label={t("commandPalette.collapse")}
                 >
-                  <Store size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleImportCommand}
-                  className="text-neutral-400 hover:text-neutral-200 p-1 rounded hover:bg-neutral-800 transition-colors"
-                  title={t("commandPalette.import")}
-                >
-                  <FileUp size={16} />
+                  <X size={15} />
                 </button>
               </div>
+            </div>
+            {isUiComponent(activeUi) ? (
+              <div className="min-h-0 flex-1 overflow-y-auto dark-scrollbar">
+                {React.createElement(activeUi, {
+                  context: commandContext,
+                })}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-3">
+              <Input
+                ref={inputRef}
+                value={snap.query}
+                onChange={(e) => commandActions.setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPressEnter={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                  if (e.nativeEvent.isComposing) return;
+                  void handleConfirmSelection();
+                }}
+                placeholder={t("commandPalette.placeholder")}
+                className="flex-1 bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-500"
+              />
+              <button
+                type="button"
+                onClick={() => void handleOpenCommunityCommands()}
+                className="text-neutral-400 hover:text-neutral-200 p-1 rounded hover:bg-neutral-800 transition-colors"
+                title={t("commandPalette.communityCommands")}
+                aria-label={t("commandPalette.communityCommands")}
+              >
+                <Store size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={handleImportCommand}
+                className="text-neutral-400 hover:text-neutral-200 p-1 rounded hover:bg-neutral-800 transition-colors"
+                title={t("commandPalette.import")}
+              >
+                <FileUp size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={commandActions.close}
+                className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
+                title={t("commandPalette.collapse")}
+                aria-label={t("commandPalette.collapse")}
+              >
+                <X size={15} />
+              </button>
+            </div>
 
-              <div className="max-h-[360px] overflow-y-auto dark-scrollbar">
+            <div className="min-h-0 flex-1 overflow-y-auto dark-scrollbar">
                 {results.length === 0 && (
                   <div className="px-4 py-6 text-center text-xs text-neutral-500">
                     {t("commandPalette.empty")}
@@ -570,11 +585,10 @@ export const CommandPalette: React.FC = () => {
                   }
                   return null;
                 })}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+          </>
+        )}
+      </aside>
       <ConfirmModal
         isOpen={Boolean(deleteTarget)}
         title={t("commandPalette.deleteTitle")}

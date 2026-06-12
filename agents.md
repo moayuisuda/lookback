@@ -12,4 +12,5 @@
 12. When writing commands, you must first read the existing code in `app/src/commands/index.ts` and `app/src/commands-pending`. For commands-pending task, Do not couple or modify the main application code without explicit permission. Command's i18n should placed in <commandName>.jsx.
 
 Release:
-/Users/anhaohui/Documents/stocks/RroRef/scripts/release-tag.sh v0.1.17
+先 commit 所有内容
+执行 scripts/release-tag.sh v当前版本号末尾+1

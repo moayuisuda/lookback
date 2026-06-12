@@ -16,6 +16,15 @@ import {
 
 const EXTERNAL_COMMAND_SHORTCUTS_KEY = "externalCommandShortcuts";
 const EXTERNAL_COMMAND_CONTEXT_MENUS_KEY = "externalCommandContextMenus";
+const COMMAND_PANEL_ANIMATION_MS = 220;
+
+let closeTimer: ReturnType<typeof setTimeout> | null = null;
+
+const clearCloseTimer = () => {
+  if (!closeTimer) return;
+  clearTimeout(closeTimer);
+  closeTimer = null;
+};
 
 const normalizeShortcutMap = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object") return {};
@@ -43,6 +52,7 @@ const normalizeContextMenuMap = (value: unknown): Record<string, boolean> => {
 
 export const commandState = proxy<{
   isOpen: boolean;
+  isClosing: boolean;
   query: string;
   selectedIndex: number;
   activeCommandId: string | null;
@@ -57,6 +67,7 @@ export const commandState = proxy<{
   } | null;
 }>({
   isOpen: false,
+  isClosing: false,
   query: "",
   selectedIndex: 0,
   activeCommandId: null,
@@ -82,14 +93,37 @@ export const commandActions = {
       normalizeContextMenuMap(rawContextMenus);
   },
   open: () => {
+    clearCloseTimer();
     commandState.isOpen = true;
+    commandState.isClosing = false;
     commandState.query = "";
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;
     commandState.deleteTarget = null;
   },
   close: () => {
+    if (!commandState.isOpen) {
+      clearCloseTimer();
+      commandState.isClosing = false;
+      commandState.query = "";
+      commandState.selectedIndex = 0;
+      commandState.activeCommandId = null;
+      commandState.deleteTarget = null;
+      return;
+    }
+    if (commandState.isClosing) return;
+    commandState.isClosing = true;
+    commandState.deleteTarget = null;
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      commandActions.finishClose();
+    }, COMMAND_PANEL_ANIMATION_MS);
+  },
+  finishClose: () => {
+    clearCloseTimer();
+    if (commandState.isOpen && !commandState.isClosing) return;
     commandState.isOpen = false;
+    commandState.isClosing = false;
     commandState.query = "";
     commandState.selectedIndex = 0;
     commandState.activeCommandId = null;

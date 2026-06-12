@@ -34,6 +34,7 @@ export const zh = {
   "commandPalette.color": "颜色",
   "commandPalette.clearColor": "清除",
   "commandPalette.back": "返回",
+  "commandPalette.collapse": "收起",
   "commandPalette.communityCommands": "社区命令",
   "commandPalette.import": "导入命令",
   "commandPalette.importUnavailable": "导入不可用",

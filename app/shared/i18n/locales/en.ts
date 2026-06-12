@@ -34,6 +34,7 @@ export const en = {
   "commandPalette.color": "Color",
   "commandPalette.clearColor": "Clear",
   "commandPalette.back": "Back",
+  "commandPalette.collapse": "Collapse",
   "commandPalette.communityCommands": "Community Commands",
   "commandPalette.import": "Import Command",
   "commandPalette.importUnavailable": "Import is unavailable",
