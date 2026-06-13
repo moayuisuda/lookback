@@ -1,0 +1,13 @@
+{
+  "name": "follow-practice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.jsx",
+  "lookback": {
+    "id": "followPractice"
+  },
+  "dependencies": {
+    "playwright": "^1.56.0"
+  }
+}

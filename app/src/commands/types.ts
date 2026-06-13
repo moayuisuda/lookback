@@ -41,11 +41,13 @@ export type CommandDefinition = {
   descriptionKey?: I18nKey;
   description?: string;
   keywords?: string[];
+  loading?: boolean;
   loadError?: string;
   ui?: React.FC<{ context: CommandContext }>;
   run?: (context: CommandContext) => Promise<void> | void;
   external?: {
     folder: string;
     entry: string;
+    recordId?: string;
   };
 };

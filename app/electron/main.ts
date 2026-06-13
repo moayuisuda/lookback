@@ -12,6 +12,7 @@ import path from "path";
 import fs from "fs-extra";
 import log from "electron-log";
 import sharp from "sharp";
+import AdmZip from "adm-zip";
 import {
   autoUpdater,
   type ProgressInfo,
@@ -20,7 +21,7 @@ import {
 } from "electron-updater";
 import { execFile, spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
-import { lockedFs, withFileLock } from "../backend/fileLock";
+import { lockedFs, withFileLock, withFileLocks } from "../backend/fileLock";
 
 // Ensure app name is correct for log paths
 if (!app.isPackaged) {
@@ -137,7 +138,7 @@ const MIN_WINDOW_HEIGHT = 300;
 const LOOKBACK_PROTOCOL_SCHEME = "lookback";
 const LOOKBACK_IMPORT_HOST = "import-command";
 const LOOKBACK_IMPORT_QUERY_KEY = "url";
-const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
+const SUPPORTED_COMMAND_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx"]);
 const DEEP_LINK_DOWNLOAD_TIMEOUT_MS = 15000;
 const UPDATE_FEED_URL =
   "https://xget-5sd.pages.dev/gh/moayuisuda/lookback-release/releases/latest/download";
@@ -516,6 +517,239 @@ function toCommandFileName(targetUrl: URL) {
   return sanitized;
 }
 
+type CommandFolderFile = {
+  relativePath: string;
+  data: Buffer;
+};
+
+type GithubContentsItem = {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  url: string;
+  download_url?: string | null;
+};
+
+class CommandImportDuplicateError extends Error {
+  commandName: string;
+
+  constructor(commandName: string) {
+    super(`Command already exists: ${commandName}`);
+    this.name = "CommandImportDuplicateError";
+    this.commandName = commandName;
+  }
+}
+
+const isZipUrl = (targetUrl: URL) =>
+  path.extname(targetUrl.pathname || "").toLowerCase() === ".zip";
+
+const normalizeCommandRelativePath = (value: string) => {
+  const normalized = path.posix.normalize(value.replace(/\\/g, "/"));
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    path.isAbsolute(normalized)
+  ) {
+    throw new Error("Invalid command path");
+  }
+  return normalized;
+};
+
+const assertPathInside = (root: string, target: string) => {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+    return resolvedTarget;
+  }
+  throw new Error("Invalid command path");
+};
+
+const sanitizeCommandFolderName = (value: string) => {
+  const folderName = value
+    .trim()
+    .replace(/[<>:"/\\|?*\s]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!folderName || !isSafeCommandFolderName(folderName)) {
+    throw new Error("Invalid command folder name");
+  }
+  return folderName;
+};
+
+const isSafeCommandFolderName = (value: string) =>
+  value.length > 0 &&
+  value !== "." &&
+  value !== ".." &&
+  !value.includes("..") &&
+  !value.includes("/") &&
+  !value.includes("\\");
+
+const readCommandFolderNameFromManifest = (files: CommandFolderFile[]) => {
+  const packageFile = files.find(
+    (file) => normalizeCommandRelativePath(file.relativePath) === "package.json",
+  );
+  if (!packageFile) return "";
+  try {
+    const manifest = JSON.parse(packageFile.data.toString("utf-8")) as {
+      name?: string;
+      lookback?: { id?: string };
+    };
+    return manifest.name?.trim() || manifest.lookback?.id?.trim() || "";
+  } catch {
+    return "";
+  }
+};
+
+const resolveCommandFolderName = (
+  files: CommandFolderFile[],
+  fallbackName: string,
+) => sanitizeCommandFolderName(readCommandFolderNameFromManifest(files) || fallbackName);
+
+const getImportErrorMessage = (error: unknown, locale: Locale) => {
+  if (error instanceof CommandImportDuplicateError) {
+    return translate(locale, "error.commandImportDuplicate", {
+      name: error.commandName,
+    });
+  }
+  return error instanceof Error ? error.message : String(error);
+};
+
+const writeCommandFolderFiles = async (
+  folderName: string,
+  files: CommandFolderFile[],
+) => {
+  await ensureStorageInitialized();
+  const commandsDir = path.join(getStorageDir(), "commands");
+  const destDir = assertPathInside(commandsDir, path.join(commandsDir, folderName));
+  await withFileLocks([commandsDir, destDir], async () => {
+    await fs.ensureDir(commandsDir);
+    if (await fs.pathExists(destDir)) {
+      throw new CommandImportDuplicateError(folderName);
+    }
+    await fs.ensureDir(destDir);
+    for (const file of files) {
+      const relativePath = normalizeCommandRelativePath(file.relativePath);
+      const destPath = assertPathInside(destDir, path.join(destDir, ...relativePath.split("/")));
+      await fs.ensureDir(path.dirname(destPath));
+      await fs.writeFile(destPath, file.data);
+    }
+  });
+  return destDir;
+};
+
+const stripCommonArchiveRoot = (files: CommandFolderFile[]) => {
+  const firstSegments = files.map((file) => normalizeCommandRelativePath(file.relativePath).split("/")[0]);
+  const [firstSegment] = firstSegments;
+  if (!firstSegment || firstSegments.some((segment) => segment !== firstSegment)) {
+    return { rootName: "", files };
+  }
+
+  const stripped = files
+    .map((file) => ({
+      ...file,
+      relativePath: normalizeCommandRelativePath(file.relativePath).split("/").slice(1).join("/"),
+    }))
+    .filter((file) => file.relativePath);
+  return { rootName: firstSegment, files: stripped };
+};
+
+const readCommandArchive = (buffer: Buffer) => {
+  const zip = new AdmZip(buffer);
+  const files = zip
+    .getEntries()
+    .filter((entry) => !entry.isDirectory)
+    .map((entry) => ({
+      relativePath: normalizeCommandRelativePath(entry.entryName),
+      data: entry.getData(),
+    }));
+  if (files.length === 0) {
+    throw new Error("Command archive is empty");
+  }
+  return stripCommonArchiveRoot(files);
+};
+
+const importCommandArchiveBuffer = async (
+  buffer: Buffer,
+  fallbackName: string,
+) => {
+  const archive = readCommandArchive(buffer);
+  const folderName = resolveCommandFolderName(
+    archive.files,
+    archive.rootName || fallbackName,
+  );
+  return writeCommandFolderFiles(folderName, archive.files);
+};
+
+const importCommandArchiveFile = async (filePath: string) => {
+  const buffer = await lockedFs.readFile(filePath);
+  const fallbackName = path.basename(filePath, path.extname(filePath));
+  return importCommandArchiveBuffer(Buffer.from(buffer), fallbackName);
+};
+
+const isGithubContentsDirectoryUrl = (targetUrl: URL) =>
+  targetUrl.hostname === "api.github.com" &&
+  /\/repos\/[^/]+\/[^/]+\/contents\//.test(targetUrl.pathname);
+
+const fetchWithTimeout = async (url: string) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, DEEP_LINK_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const fetchGithubContentsFiles = async (
+  apiUrl: string,
+  rootPath = "",
+): Promise<CommandFolderFile[]> => {
+  const response = await fetchWithTimeout(apiUrl);
+  const payload = (await response.json()) as GithubContentsItem[] | GithubContentsItem;
+  const items = Array.isArray(payload) ? payload : [payload];
+  const [firstItem] = items;
+  const pluginRootPath = rootPath || (
+    firstItem?.path ? path.posix.dirname(firstItem.path) : ""
+  );
+  const files: CommandFolderFile[] = [];
+
+  for (const item of items) {
+    if (item.type === "dir") {
+      files.push(...await fetchGithubContentsFiles(item.url, pluginRootPath));
+      continue;
+    }
+    if (item.type !== "file" || !item.download_url) continue;
+    const fileResponse = await fetchWithTimeout(item.download_url);
+    const relativePath = pluginRootPath && item.path.startsWith(`${pluginRootPath}/`)
+      ? item.path.slice(pluginRootPath.length + 1)
+      : item.name;
+    files.push({
+      relativePath: normalizeCommandRelativePath(relativePath),
+      data: Buffer.from(await fileResponse.arrayBuffer()),
+    });
+  }
+
+  return files;
+};
+
+const importGithubCommandDirectory = async (targetUrl: URL) => {
+  const files = await fetchGithubContentsFiles(targetUrl.toString());
+  if (files.length === 0) {
+    throw new Error("Command directory is empty");
+  }
+  const fallbackName = decodeURIComponent(path.basename(targetUrl.pathname || "") || "command");
+  const folderName = resolveCommandFolderName(files, fallbackName);
+  return writeCommandFolderFiles(folderName, files);
+};
+
 function getLocalFilePathIdentity(filePath: string) {
   const normalized = path.resolve(filePath);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -610,33 +844,32 @@ async function importCommandFromRemoteUrl(remoteUrl: string) {
     throw new Error("Unsupported URL protocol");
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, DEEP_LINK_DOWNLOAD_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(parsed.toString(), {
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const content = await response.text();
-    if (!content.includes("export const config")) {
-      throw new Error("Invalid command script");
-    }
-
-    await ensureStorageInitialized();
-    const fileName = toCommandFileName(parsed);
-    const commandsDir = path.join(getStorageDir(), "commands");
-    await lockedFs.ensureDir(commandsDir);
-    const destPath = path.join(commandsDir, fileName);
-    await lockedFs.writeFile(destPath, content, "utf-8");
-    return destPath;
-  } finally {
-    clearTimeout(timeout);
+  if (isGithubContentsDirectoryUrl(parsed)) {
+    return importGithubCommandDirectory(parsed);
   }
+
+  const response = await fetchWithTimeout(parsed.toString());
+  if (isZipUrl(parsed)) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const fallbackName = path.basename(parsed.pathname, path.extname(parsed.pathname));
+    return importCommandArchiveBuffer(buffer, fallbackName);
+  }
+
+  const content = await response.text();
+  if (!content.includes("export const config")) {
+    throw new Error("Invalid command script");
+  }
+
+  await ensureStorageInitialized();
+  const fileName = toCommandFileName(parsed);
+  const commandsDir = path.join(getStorageDir(), "commands");
+  await lockedFs.ensureDir(commandsDir);
+  const destPath = path.join(commandsDir, fileName);
+  if (await lockedFs.pathExists(destPath)) {
+    throw new CommandImportDuplicateError(fileName);
+  }
+  await lockedFs.writeFile(destPath, content, "utf-8");
+  return destPath;
 }
 
 function emitImportToastSuccess() {
@@ -670,9 +903,9 @@ async function handleDeepLink(rawUrl: string) {
     emitImportToastSuccess();
     mainWindow?.webContents.send("renderer-event", "command-imported");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const locale = await getLocale();
     restoreMainWindowVisibility();
-    emitImportToastFailed(message);
+    emitImportToastFailed(getImportErrorMessage(error, locale));
   }
 }
 
@@ -2351,7 +2584,7 @@ ipcMain.handle("import-command", async () => {
     title: translate(locale, "dialog.importCommandTitle"),
     properties: ["openFile", "multiSelections"],
     filters: [
-      { name: "JavaScript/TypeScript", extensions: ["js", "jsx", "ts", "tsx"] },
+      { name: "Command", extensions: ["js", "jsx", "mjs", "ts", "tsx", "zip"] },
     ],
   });
 
@@ -2360,19 +2593,34 @@ ipcMain.handle("import-command", async () => {
   }
 
   const destDir = path.join(getStorageDir(), "commands");
-  await fs.ensureDir(destDir);
+  await lockedFs.ensureDir(destDir);
 
   const results = [];
   for (const srcPath of result.filePaths) {
     const fileName = path.basename(srcPath);
     const destPath = path.join(destDir, fileName);
     try {
-      await fs.copy(srcPath, destPath);
-      results.push({ success: true, path: destPath });
+      if (path.extname(srcPath).toLowerCase() === ".zip") {
+        const importedPath = await importCommandArchiveFile(srcPath);
+        results.push({ success: true, path: importedPath });
+      } else {
+        if (await lockedFs.pathExists(destPath)) {
+          throw new CommandImportDuplicateError(fileName);
+        }
+        await lockedFs.copy(srcPath, destPath);
+        results.push({ success: true, path: destPath });
+      }
     } catch (e) {
+      if (e instanceof CommandImportDuplicateError) {
+        return {
+          success: false,
+          error: getImportErrorMessage(e, locale),
+          partialSuccess: results.some((item) => item.success),
+        };
+      }
       results.push({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: getImportErrorMessage(e, locale),
         path: srcPath,
       });
     }

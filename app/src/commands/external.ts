@@ -1,5 +1,9 @@
 import type { CommandContext, CommandDefinition } from './types';
-import { loadCommandScript } from '../service';
+import {
+  ensureCommandDependencies,
+  loadCommandScript,
+  prepareCommandEsm,
+} from '../service';
 import { transform } from 'sucrase';
 import type { I18nDict, Locale } from '../../shared/i18n/types';
 import { registerI18n } from '../../shared/i18n/t';
@@ -9,6 +13,12 @@ export type ExternalCommandRecord = {
   folder: string;
   entry: string;
   id: string;
+  title?: string;
+  titleKey?: string;
+  description?: string;
+  descriptionKey?: string;
+  keywords?: string[];
+  i18n?: CommandI18n;
 };
 
 type CommandModule = {
@@ -35,6 +45,15 @@ type CommandHelpers = {
 type CommandI18n = Partial<Record<Locale, I18nDict>>;
 
 const INVALID_CONFIG_ERROR = 'Missing `export const config` or `config.id`.';
+const ROOT_FOLDER = '__root__';
+
+type RendererRequire = (id: string) => unknown;
+type NodeCreateRequire = (filename: string) => RendererRequire;
+type CommandRequireGlobal = typeof globalThis & {
+  require?: RendererRequire;
+  __lookbackCommandRequires?: Map<string, RendererRequire>;
+  __lookbackCommandRequire?: (folder: string, specifier: string) => unknown;
+};
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -69,9 +88,89 @@ const buildHelpers = (
   },
 });
 
+export const getExternalCommandRecordKey = (record: ExternalCommandRecord): string =>
+  `${record.folder}\u0000${record.entry}\u0000${record.id}`;
+
+export const getExternalCommandKey = (command: CommandDefinition): string =>
+  command.external
+    ? getExternalCommandRecordKey({
+        folder: command.external.folder,
+        entry: command.external.entry,
+        id: command.external.recordId ?? command.id,
+      })
+    : "";
+
+export const createExternalCommandPlaceholder = (
+  record: ExternalCommandRecord,
+): CommandDefinition => {
+  if (record.i18n) registerI18n(record.i18n);
+  return {
+    id: record.id,
+    title: record.title || record.id,
+    titleKey: record.titleKey,
+    description: record.description,
+    descriptionKey: record.descriptionKey,
+    keywords: record.keywords,
+    loading: true,
+    external: {
+      folder: record.folder,
+      entry: record.entry,
+      recordId: record.id,
+    },
+  };
+};
+
+const loadEsmUrlModule = async (entryUrl: string): Promise<CommandModule> => {
+  const separator = entryUrl.includes('?') ? '&' : '?';
+  const url = `${entryUrl}${separator}t=${Date.now()}`;
+  try {
+    return (await import(/* @vite-ignore */ url)) as CommandModule;
+  } catch (error) {
+    throw new Error(`Module import failed: ${getErrorMessage(error)}`);
+  }
+};
+
+const ensureCommandRequireBridge = (folder: string, requirePath: string) => {
+  const bridgeGlobal = globalThis as CommandRequireGlobal;
+  if (!bridgeGlobal.require) {
+    throw new Error('Node integration is unavailable.');
+  }
+  const { createRequire } = bridgeGlobal.require('node:module') as {
+    createRequire: NodeCreateRequire;
+  };
+  bridgeGlobal.__lookbackCommandRequires ??= new Map<string, RendererRequire>();
+  bridgeGlobal.__lookbackCommandRequires.set(folder, createRequire(requirePath));
+  bridgeGlobal.__lookbackCommandRequire ??= (targetFolder, specifier) => {
+    const commandRequire = bridgeGlobal.__lookbackCommandRequires?.get(targetFolder);
+    if (!commandRequire) {
+      throw new Error(`Command require bridge is unavailable: ${targetFolder}`);
+    }
+    return commandRequire(specifier);
+  };
+};
+
+const loadFolderModule = async (
+  record: ExternalCommandRecord,
+): Promise<CommandModule> => {
+  await ensureCommandDependencies(record.folder);
+  const result = await prepareCommandEsm(record.folder, record.entry);
+  if (!result.entryUrl) {
+    throw new Error('Prepared ESM entry is missing.');
+  }
+  if (!result.requirePath) {
+    throw new Error('Prepared require path is missing.');
+  }
+  ensureCommandRequireBridge(record.folder, result.requirePath);
+  return loadEsmUrlModule(result.entryUrl);
+};
+
 const loadModule = async (
   record: ExternalCommandRecord,
 ): Promise<CommandModule> => {
+  if (record.folder !== ROOT_FOLDER) {
+    return loadFolderModule(record);
+  }
+
   const script = await loadCommandScript(record.folder, record.entry);
 
   let compiled = '';
@@ -87,7 +186,7 @@ const loadModule = async (
   const blob = new Blob([compiled], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
   try {
-    return (await import(url)) as CommandModule;
+    return (await import(/* @vite-ignore */ url)) as CommandModule;
   } catch (error) {
     throw new Error(`Module import failed: ${getErrorMessage(error)}`);
   } finally {
@@ -103,11 +202,9 @@ const hasI18nKey = (i18n: CommandI18n | undefined, key?: string): boolean => {
   return Boolean(i18n?.en?.[key] || i18n?.zh?.[key]);
 };
 
-export const mapExternalCommands = (
-  payload: ExternalCommandRecord[],
-): Promise<CommandDefinition[]> => {
-  return Promise.all(
-    payload.map(async (item) => {
+export const mapExternalCommand = async (
+  item: ExternalCommandRecord,
+): Promise<CommandDefinition> => {
       let module: CommandModule | undefined;
       try {
         module = await loadModule(item);
@@ -118,6 +215,7 @@ export const mapExternalCommands = (
           external: {
             folder: item.folder,
             entry: item.entry,
+            recordId: item.id,
           },
         };
       }
@@ -129,6 +227,7 @@ export const mapExternalCommands = (
           external: {
             folder: item.folder,
             entry: item.entry,
+            recordId: item.id,
           },
         };
       }
@@ -151,6 +250,7 @@ export const mapExternalCommands = (
         external: {
           folder: item.folder,
           entry: item.entry,
+          recordId: item.id,
         },
         run: hasRun
           ? async (ctx: CommandContext) => {
@@ -171,6 +271,10 @@ export const mapExternalCommands = (
             }
           : undefined,
       };
-    })
-  );
+};
+
+export const mapExternalCommands = (
+  payload: ExternalCommandRecord[],
+): Promise<CommandDefinition[]> => {
+  return Promise.all(payload.map(mapExternalCommand));
 };

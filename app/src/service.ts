@@ -369,6 +369,12 @@ export type ExternalCommandRecord = {
   folder: string;
   entry: string;
   id: string;
+  title?: string;
+  titleKey?: string;
+  description?: string;
+  descriptionKey?: string;
+  keywords?: string[];
+  i18n?: Partial<Record<Locale, Record<string, string>>>;
 };
 
 export async function loadExternalCommands(): Promise<ExternalCommandRecord[]> {
@@ -396,6 +402,32 @@ export async function loadCommandScript(
     throw new Error(`Failed to load script: ${res.status}`);
   }
   return res.text();
+}
+
+export async function ensureCommandDependencies(
+  folder: string
+): Promise<{ success?: boolean; installed?: string[] }> {
+  return localApi<{ success?: boolean; installed?: string[] }>(
+    `/api/commands/${encodeURIComponent(folder)}/dependencies/ensure`,
+    {},
+  );
+}
+
+export async function prepareCommandEsm(
+  folder: string,
+  entry: string
+): Promise<{ success?: boolean; entryUrl: string; requirePath: string }> {
+  const result = await localApi<{ success?: boolean; entryUrl: string; requirePath: string }>(
+    `/api/commands/${encodeURIComponent(folder)}/esm/prepare`,
+    { entry },
+  );
+  if (result?.entryUrl?.startsWith("/")) {
+    return {
+      ...result,
+      entryUrl: `${await getRuntimeApiBaseUrl()}${result.entryUrl}`,
+    };
+  }
+  return result;
 }
 
 export async function deleteExternalCommand(

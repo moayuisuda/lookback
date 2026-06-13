@@ -45,6 +45,7 @@ export const en = {
   "commandPalette.deleteMessage": 'Delete "{{name}}"? This cannot be undone.',
   "commandPalette.toggleContextMenu": "Toggle in Context Menu",
   "commandPalette.externalFile": "File: {{name}}",
+  "commandPalette.externalLoading": "Loading",
   "commandPalette.externalBroken": "Broken",
   "commandPalette.externalBrokenHint": "Load failed: {{error}}",
   "commandPalette.toneAny": "Any",
@@ -163,6 +164,8 @@ export const en = {
   "toast.command.externalMessage": "{{message}}",
   "toast.importSuccess": "Command imported",
   "toast.importFailed": "Failed to import command: {{error}}",
+  "error.commandImportDuplicate":
+    'Command "{{name}}" already exists. Delete it first.',
   "toast.updateDownloaded":
     "Update downloaded. Restart to install v{{version}}",
   "toast.commandDeleted": "Command deleted",

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import {
   FileUp,
+  LoaderCircle,
   MousePointerClick,
   Store,
   Trash2,
@@ -315,7 +316,7 @@ export const CommandPalette: React.FC = () => {
     <>
       <aside
         className={clsx(
-          "command-palette-panel fixed right-4 top-8 z-[90] flex h-[calc(100vh-48px)] max-h-[calc(100vh-48px)] w-[min(560px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
+          "command-palette-panel fixed right-4 top-4 bottom-4 z-[90] flex w-[min(500px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
           snap.isClosing && "command-palette-panel--closing pointer-events-none",
         )}
       >
@@ -406,7 +407,9 @@ export const CommandPalette: React.FC = () => {
                 {results.map((result, index) => {
                   const isActive = index === snap.selectedIndex;
                   if (result.kind === "command") {
+                    const isLoadingCommand = Boolean(result.command.loading);
                     const isBrokenCommand = Boolean(result.command.loadError);
+                    const isDisabledCommand = isLoadingCommand || isBrokenCommand;
                     const externalEntry = result.command.external?.entry || "";
                     const description = getCommandDescription(
                       result.command,
@@ -415,13 +418,13 @@ export const CommandPalette: React.FC = () => {
                     return (
                       <div
                         key={result.command.id}
-                        role={isBrokenCommand ? undefined : "button"}
-                        tabIndex={isBrokenCommand ? -1 : 0}
+                        role={isDisabledCommand ? undefined : "button"}
+                        tabIndex={isDisabledCommand ? -1 : 0}
                         onMouseEnter={() =>
                           commandActions.setSelectedIndex(index)
                         }
                         onClick={() => {
-                          if (isBrokenCommand) return;
+                          if (isDisabledCommand) return;
                           void handleConfirmSelection(result);
                         }}
                         className={clsx(
@@ -470,6 +473,13 @@ export const CommandPalette: React.FC = () => {
                           <span className="text-[10px] uppercase text-neutral-500">
                             {t("commandPalette.commandLabel")}
                           </span>
+                          {isLoadingCommand && (
+                            <LoaderCircle
+                              size={14}
+                              className="animate-spin text-primary"
+                              aria-label={t("commandPalette.externalLoading")}
+                            />
+                          )}
                           {isBrokenCommand && (
                             <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-red-200">
                               {t("commandPalette.externalBroken")}
@@ -477,7 +487,7 @@ export const CommandPalette: React.FC = () => {
                           )}
                           {result.command.external && (
                             <>
-                              {!isBrokenCommand && (
+                              {!isDisabledCommand && (
                                 <>
                                   <div
                                     className="group relative flex items-center"

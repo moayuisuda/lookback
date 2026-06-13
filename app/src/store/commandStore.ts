@@ -4,7 +4,10 @@ import {
   settingStorage,
 } from "../service";
 import {
-  mapExternalCommands,
+  createExternalCommandPlaceholder,
+  getExternalCommandKey,
+  getExternalCommandRecordKey,
+  mapExternalCommand,
   type ExternalCommandRecord,
 } from "../commands/external";
 import type { CommandDefinition } from "../commands/types";
@@ -19,6 +22,7 @@ const EXTERNAL_COMMAND_CONTEXT_MENUS_KEY = "externalCommandContextMenus";
 const COMMAND_PANEL_ANIMATION_MS = 220;
 
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
+let externalCommandLoadVersion = 0;
 
 const clearCloseTimer = () => {
   if (!closeTimer) return;
@@ -48,6 +52,58 @@ const normalizeContextMenuMap = (value: unknown): Record<string, boolean> => {
     next[id] = raw;
   });
   return next;
+};
+
+const replaceExternalCommand = (
+  record: ExternalCommandRecord,
+  command: CommandDefinition,
+) => {
+  const recordKey = getExternalCommandRecordKey(record);
+  const index = commandState.externalCommands.findIndex(
+    (item) => getExternalCommandKey(item) === recordKey,
+  );
+  if (index < 0) return;
+  commandState.externalCommands.splice(index, 1, command);
+};
+
+const cleanupExternalCommandSettings = async (validIds: Set<string>) => {
+  const nextShortcuts: Record<string, string> = {};
+  const nextContextMenus: Record<string, boolean> = {};
+  let changedShortcuts = false;
+  let changedContextMenus = false;
+
+  Object.entries(commandState.externalCommandShortcuts).forEach(
+    ([id, accelerator]) => {
+      if (validIds.has(id)) {
+        nextShortcuts[id] = accelerator;
+        return;
+      }
+      changedShortcuts = true;
+    },
+  );
+
+  Object.entries(commandState.externalCommandContextMenus).forEach(
+    ([id, show]) => {
+      if (validIds.has(id)) {
+        nextContextMenus[id] = show;
+        return;
+      }
+      changedContextMenus = true;
+    },
+  );
+
+  if (changedShortcuts) {
+    commandState.externalCommandShortcuts = nextShortcuts;
+    await settingStorage.set(EXTERNAL_COMMAND_SHORTCUTS_KEY, nextShortcuts);
+  }
+
+  if (changedContextMenus) {
+    commandState.externalCommandContextMenus = nextContextMenus;
+    await settingStorage.set(
+      EXTERNAL_COMMAND_CONTEXT_MENUS_KEY,
+      nextContextMenus,
+    );
+  }
 };
 
 export const commandState = proxy<{
@@ -212,54 +268,50 @@ export const commandActions = {
     await settingStorage.set(EXTERNAL_COMMAND_CONTEXT_MENUS_KEY, next);
   },
   loadExternalCommands: async () => {
+    const loadVersion = externalCommandLoadVersion + 1;
+    externalCommandLoadVersion = loadVersion;
     try {
       const commands = await loadExternalCommands();
+      if (loadVersion !== externalCommandLoadVersion) return;
       const filtered = commands.filter((item): item is ExternalCommandRecord =>
         Boolean(
           item && typeof item === "object" && typeof item.id === "string",
         ),
       );
-      const mapped = await mapExternalCommands(filtered);
-      commandState.externalCommands = mapped;
+      const previousByKey = new Map(
+        commandState.externalCommands
+          .filter((command) => command.external && !command.loading)
+          .map((command) => [getExternalCommandKey(command), command]),
+      );
+      const recordsToLoad: ExternalCommandRecord[] = [];
 
-      const validIds = new Set(mapped.map((item) => item.id));
-      const nextShortcuts: Record<string, string> = {};
-      const nextContextMenus: Record<string, boolean> = {};
-      let changedShortcuts = false;
-      let changedContextMenus = false;
-
-      Object.entries(commandState.externalCommandShortcuts).forEach(
-        ([id, accelerator]) => {
-          if (validIds.has(id)) {
-            nextShortcuts[id] = accelerator;
-            return;
-          }
-          changedShortcuts = true;
-        },
+      commandState.externalCommands.splice(
+        0,
+        commandState.externalCommands.length,
+        ...filtered.map((record) => {
+          const existing = previousByKey.get(getExternalCommandRecordKey(record));
+          if (existing && !existing.loadError) return existing;
+          recordsToLoad.push(record);
+          return createExternalCommandPlaceholder(record);
+        }),
       );
 
-      Object.entries(commandState.externalCommandContextMenus).forEach(
-        ([id, show]) => {
-          if (validIds.has(id)) {
-            nextContextMenus[id] = show;
-            return;
-          }
-          changedContextMenus = true;
-        },
-      );
-
-      if (changedShortcuts) {
-        commandState.externalCommandShortcuts = nextShortcuts;
-        await settingStorage.set(EXTERNAL_COMMAND_SHORTCUTS_KEY, nextShortcuts);
-      }
-
-      if (changedContextMenus) {
-        commandState.externalCommandContextMenus = nextContextMenus;
-        await settingStorage.set(
-          EXTERNAL_COMMAND_CONTEXT_MENUS_KEY,
-          nextContextMenus,
+      void Promise.all(
+        recordsToLoad.map(async (record) => {
+          const mapped = await mapExternalCommand(record);
+          if (loadVersion !== externalCommandLoadVersion) return mapped;
+          replaceExternalCommand(record, mapped);
+          return mapped;
+        }),
+      ).then(async (mapped) => {
+        if (loadVersion !== externalCommandLoadVersion) return;
+        const validIds = new Set(
+          commandState.externalCommands
+            .map((item) => item.id)
+            .concat(mapped.map((item) => item.id)),
         );
-      }
+        await cleanupExternalCommandSettings(validIds);
+      });
     } catch (error) {
       void error;
     }

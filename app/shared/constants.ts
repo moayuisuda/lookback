@@ -5,7 +5,6 @@ export const DEFAULT_COMMAND_FILES = [
   "removeNodeFromCurrentGroup.jsx",
   "stitchExport.jsx",
   "clip.jsx",
-  // "follow-practice.jsx",
   // "poseSearch.jsx",
   // "imageGene.jsx",
   // "multiSearch.jsx",
