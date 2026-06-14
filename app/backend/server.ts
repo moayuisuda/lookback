@@ -102,6 +102,26 @@ const ensureStorageDirs = async (root: string) => {
 
 import { DEFAULT_COMMAND_FILES } from "../shared/constants";
 
+const DEFAULT_COMMAND_RUNTIME_DIRS = new Set(["node_modules"]);
+
+const syncDefaultCommandDirectory = async (srcPath: string, destPath: string) => {
+  await withFileLocks([srcPath, destPath], async () => {
+    await fs.ensureDir(destPath);
+    const entries = await fs.readdir(destPath).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((entry) => !DEFAULT_COMMAND_RUNTIME_DIRS.has(entry))
+        .map((entry) => fs.remove(path.join(destPath, entry))),
+    );
+    await fs.copy(srcPath, destPath, { overwrite: true });
+  });
+};
+
+const syncDefaultCommandFile = async (srcPath: string, destPath: string) => {
+  const content = await lockedFs.readFile(srcPath, "utf-8");
+  await lockedFs.writeFile(destPath, content);
+};
+
 const ensureDefaultCommands = async () => {
   const commandsDir = path.join(STORAGE_DIR, "commands");
   await lockedFs.ensureDir(commandsDir);
@@ -111,9 +131,13 @@ const ensureDefaultCommands = async () => {
       const destPath = path.join(commandsDir, fileName);
       const srcPath = path.join(sourceDir, fileName);
       try {
-        const content = await lockedFs.readFile(srcPath, "utf-8");
+        const stat = await lockedFs.stat(srcPath);
+        if (stat.isDirectory()) {
+          await syncDefaultCommandDirectory(srcPath, destPath);
+          return;
+        }
         // 内置命令始终以源码为准，每次启动都覆盖同步，避免旧版本残留。
-        await lockedFs.writeFile(destPath, content);
+        await syncDefaultCommandFile(srcPath, destPath);
       } catch (error) {
         console.error("Failed to sync default command", fileName, error);
       }

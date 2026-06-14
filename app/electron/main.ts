@@ -20,6 +20,7 @@ import {
   type UpdateInfo,
 } from "electron-updater";
 import { execFile, spawn, ChildProcess } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import * as readline from "node:readline";
 import { lockedFs, withFileLock, withFileLocks } from "../backend/fileLock";
 
@@ -590,22 +591,24 @@ const readCommandFolderNameFromManifest = (files: CommandFolderFile[]) => {
   const packageFile = files.find(
     (file) => normalizeCommandRelativePath(file.relativePath) === "package.json",
   );
-  if (!packageFile) return "";
+  if (!packageFile) {
+    throw new Error("Missing command package manifest");
+  }
+  let manifest: { lookback?: { id?: string } };
   try {
-    const manifest = JSON.parse(packageFile.data.toString("utf-8")) as {
-      name?: string;
+    manifest = JSON.parse(packageFile.data.toString("utf-8")) as {
       lookback?: { id?: string };
     };
-    return manifest.name?.trim() || manifest.lookback?.id?.trim() || "";
   } catch {
-    return "";
+    throw new Error("Invalid command package manifest");
   }
+  const id = manifest.lookback?.id?.trim() || "";
+  if (!id) throw new Error("Missing command plugin id");
+  return id;
 };
 
-const resolveCommandFolderName = (
-  files: CommandFolderFile[],
-  fallbackName: string,
-) => sanitizeCommandFolderName(readCommandFolderNameFromManifest(files) || fallbackName);
+const resolveCommandFolderName = (files: CommandFolderFile[]) =>
+  sanitizeCommandFolderName(readCommandFolderNameFromManifest(files));
 
 const getImportErrorMessage = (error: unknown, locale: Locale) => {
   if (error instanceof CommandImportDuplicateError) {
@@ -672,20 +675,15 @@ const readCommandArchive = (buffer: Buffer) => {
 
 const importCommandArchiveBuffer = async (
   buffer: Buffer,
-  fallbackName: string,
 ) => {
   const archive = readCommandArchive(buffer);
-  const folderName = resolveCommandFolderName(
-    archive.files,
-    archive.rootName || fallbackName,
-  );
+  const folderName = resolveCommandFolderName(archive.files);
   return writeCommandFolderFiles(folderName, archive.files);
 };
 
 const importCommandArchiveFile = async (filePath: string) => {
   const buffer = await lockedFs.readFile(filePath);
-  const fallbackName = path.basename(filePath, path.extname(filePath));
-  return importCommandArchiveBuffer(Buffer.from(buffer), fallbackName);
+  return importCommandArchiveBuffer(Buffer.from(buffer));
 };
 
 const isGithubContentsDirectoryUrl = (targetUrl: URL) =>
@@ -745,8 +743,7 @@ const importGithubCommandDirectory = async (targetUrl: URL) => {
   if (files.length === 0) {
     throw new Error("Command directory is empty");
   }
-  const fallbackName = decodeURIComponent(path.basename(targetUrl.pathname || "") || "command");
-  const folderName = resolveCommandFolderName(files, fallbackName);
+  const folderName = resolveCommandFolderName(files);
   return writeCommandFolderFiles(folderName, files);
 };
 
@@ -851,8 +848,7 @@ async function importCommandFromRemoteUrl(remoteUrl: string) {
   const response = await fetchWithTimeout(parsed.toString());
   if (isZipUrl(parsed)) {
     const buffer = Buffer.from(await response.arrayBuffer());
-    const fallbackName = path.basename(parsed.pathname, path.extname(parsed.pathname));
-    return importCommandArchiveBuffer(buffer, fallbackName);
+    return importCommandArchiveBuffer(buffer);
   }
 
   const content = await response.text();
@@ -2300,6 +2296,69 @@ function unregisterGlobalShortcuts() {
   globalShortcut.unregisterAll();
 }
 
+type PluginServerAction = (
+  payload: unknown,
+  context: {
+    pluginKey: string;
+    folder: string;
+    storageDir: string;
+    commandDir: string;
+    pluginDir: string;
+  },
+) => Promise<unknown> | unknown;
+
+type PluginServerRegistryEntry = {
+  folder: string;
+  entryPath: string;
+  actions: Map<string, PluginServerAction>;
+};
+
+const pluginServerRegistry = new Map<string, PluginServerRegistryEntry>();
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object";
+
+const isSafeStorageSegment = (value: string) =>
+  value.length > 0 &&
+  value !== "." &&
+  value !== ".." &&
+  !value.includes("..") &&
+  !value.includes("/") &&
+  !value.includes("\\");
+
+const assertInsidePath = (root: string, target: string) => {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+    return resolvedTarget;
+  }
+  throw new Error("Invalid plugin path");
+};
+
+const collectPluginServerActions = (serverModule: unknown) => {
+  const actions = new Map<string, PluginServerAction>();
+  const source = isRecord(serverModule) && isRecord(serverModule.default)
+    ? serverModule.default
+    : serverModule;
+  if (!isRecord(source)) return actions;
+
+  Object.entries(source).forEach(([name, value]) => {
+    if (name === "default") return;
+    if (typeof value !== "function") return;
+    actions.set(name, value as PluginServerAction);
+  });
+  return actions;
+};
+
+const resolvePluginServerPaths = (folder: string, entryPath: string) => {
+  if (!isSafeStorageSegment(folder)) throw new Error("Invalid plugin folder");
+  const commandDir = path.join(getStorageDir(), "commands");
+  const pluginDir = assertInsidePath(commandDir, path.join(commandDir, folder));
+  const resolvedEntryPath = assertInsidePath(pluginDir, entryPath);
+  return { commandDir, pluginDir, entryPath: resolvedEntryPath };
+};
+
 async function startServer() {
   if (!localServerStartTask) {
     localServerStartTask = startApiServer().then((port) => {
@@ -2313,6 +2372,84 @@ async function startServer() {
 ipcMain.handle("get-storage-dir", async () => {
   return getStorageDir();
 });
+
+ipcMain.handle(
+  "command-plugin:load-server",
+  async (
+    _event,
+    payload: {
+      pluginKey?: string;
+      folder?: string;
+      entryPath?: string;
+    },
+  ) => {
+    try {
+      const pluginKey = String(payload?.pluginKey || "").trim();
+      const folder = String(payload?.folder || "").trim();
+      const entryPath = String(payload?.entryPath || "").trim();
+      if (!pluginKey || !folder || !entryPath) {
+        return { success: false, error: "Invalid plugin server payload" };
+      }
+
+      const paths = resolvePluginServerPaths(folder, entryPath);
+      const importUrl = pathToFileURL(paths.entryPath).href;
+      const serverModule = await import(`${importUrl}?t=${Date.now()}`);
+      const actions = collectPluginServerActions(serverModule);
+      pluginServerRegistry.set(pluginKey, {
+        folder,
+        entryPath: paths.entryPath,
+        actions,
+      });
+
+      return { success: true, actions: Array.from(actions.keys()) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Failed to load command plugin server:", message);
+      return { success: false, error: message };
+    }
+  },
+);
+
+ipcMain.handle(
+  "command-plugin:invoke",
+  async (
+    _event,
+    payload: {
+      pluginKey?: string;
+      action?: string;
+      payload?: unknown;
+    },
+  ) => {
+    try {
+      const pluginKey = String(payload?.pluginKey || "").trim();
+      const actionName = String(payload?.action || "").trim();
+      if (!pluginKey || !actionName) {
+        return { success: false, error: "Invalid plugin action payload" };
+      }
+
+      const plugin = pluginServerRegistry.get(pluginKey);
+      const action = plugin?.actions.get(actionName);
+      if (!plugin || !action) {
+        return { success: false, error: `Plugin action not found: ${actionName}` };
+      }
+
+      const commandDir = path.join(getStorageDir(), "commands");
+      const pluginDir = assertInsidePath(commandDir, path.join(commandDir, plugin.folder));
+      const result = await action(payload?.payload, {
+        pluginKey,
+        folder: plugin.folder,
+        storageDir: getStorageDir(),
+        commandDir,
+        pluginDir,
+      });
+      return { success: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Failed to invoke command plugin action:", message);
+      return { success: false, error: message };
+    }
+  },
+);
 
 ipcMain.handle(
   "prepare-image-file-drag",

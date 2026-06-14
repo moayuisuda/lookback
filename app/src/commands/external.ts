@@ -12,6 +12,7 @@ import { writeTextToClipboard } from '../utils/clipboard';
 export type ExternalCommandRecord = {
   folder: string;
   entry: string;
+  serverEntry?: string;
   id: string;
   title?: string;
   titleKey?: string;
@@ -23,7 +24,7 @@ export type ExternalCommandRecord = {
 
 type CommandModule = {
   run?: (context: CommandContext, helpers: CommandHelpers) => Promise<void> | void;
-  ui?: React.FC<{ context: CommandContext }>;
+  ui?: React.FC<{ context: CommandContext; plugin?: CommandPluginClient }>;
   i18n?: CommandI18n;
   config?: {
     id: string;
@@ -44,16 +45,15 @@ type CommandHelpers = {
 
 type CommandI18n = Partial<Record<Locale, I18nDict>>;
 
+type CommandPluginClient = {
+  key: string;
+  folder: string;
+  actions: string[];
+  invoke: <T = unknown>(action: string, payload?: unknown) => Promise<T>;
+};
+
 const INVALID_CONFIG_ERROR = 'Missing `export const config` or `config.id`.';
 const ROOT_FOLDER = '__root__';
-
-type RendererRequire = (id: string) => unknown;
-type NodeCreateRequire = (filename: string) => RendererRequire;
-type CommandRequireGlobal = typeof globalThis & {
-  require?: RendererRequire;
-  __lookbackCommandRequires?: Map<string, RendererRequire>;
-  __lookbackCommandRequire?: (folder: string, specifier: string) => unknown;
-};
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -91,6 +91,9 @@ const buildHelpers = (
 export const getExternalCommandRecordKey = (record: ExternalCommandRecord): string =>
   `${record.folder}\u0000${record.entry}\u0000${record.id}`;
 
+const getExternalCommandPluginKey = (record: ExternalCommandRecord): string =>
+  `${record.folder}:${record.id}`;
+
 export const getExternalCommandKey = (command: CommandDefinition): string =>
   command.external
     ? getExternalCommandRecordKey({
@@ -120,53 +123,58 @@ export const createExternalCommandPlaceholder = (
   };
 };
 
-const loadEsmUrlModule = async (entryUrl: string): Promise<CommandModule> => {
-  const separator = entryUrl.includes('?') ? '&' : '?';
-  const url = `${entryUrl}${separator}t=${Date.now()}`;
-  try {
-    return (await import(/* @vite-ignore */ url)) as CommandModule;
-  } catch (error) {
-    throw new Error(`Module import failed: ${getErrorMessage(error)}`);
+const loadCommandPluginServer = async (
+  record: ExternalCommandRecord,
+  prepared: Awaited<ReturnType<typeof prepareCommandEsm>>,
+): Promise<CommandPluginClient | undefined> => {
+  if (!record.serverEntry || !prepared.serverEntryPath) return undefined;
+  const pluginKey = getExternalCommandPluginKey(record);
+  const loadResult = await window.electron?.loadCommandPluginServer({
+    pluginKey,
+    folder: record.folder,
+    entryPath: prepared.serverEntryPath,
+  });
+  if (!loadResult?.success) {
+    throw new Error(loadResult?.error || "Failed to load plugin server.");
   }
-};
-
-const ensureCommandRequireBridge = (folder: string, requirePath: string) => {
-  const bridgeGlobal = globalThis as CommandRequireGlobal;
-  if (!bridgeGlobal.require) {
-    throw new Error('Node integration is unavailable.');
-  }
-  const { createRequire } = bridgeGlobal.require('node:module') as {
-    createRequire: NodeCreateRequire;
-  };
-  bridgeGlobal.__lookbackCommandRequires ??= new Map<string, RendererRequire>();
-  bridgeGlobal.__lookbackCommandRequires.set(folder, createRequire(requirePath));
-  bridgeGlobal.__lookbackCommandRequire ??= (targetFolder, specifier) => {
-    const commandRequire = bridgeGlobal.__lookbackCommandRequires?.get(targetFolder);
-    if (!commandRequire) {
-      throw new Error(`Command require bridge is unavailable: ${targetFolder}`);
-    }
-    return commandRequire(specifier);
+  const actions = loadResult.actions ?? [];
+  return {
+    key: pluginKey,
+    folder: record.folder,
+    actions,
+    invoke: async <T = unknown>(action: string, payload?: unknown) => {
+      const result = await window.electron?.invokeCommandPlugin({
+        pluginKey,
+        action,
+        payload,
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || `Plugin action failed: ${action}`);
+      }
+      return result.result as T;
+    },
   };
 };
 
 const loadFolderModule = async (
   record: ExternalCommandRecord,
-): Promise<CommandModule> => {
+): Promise<{ module: CommandModule; plugin?: CommandPluginClient }> => {
   await ensureCommandDependencies(record.folder);
   const result = await prepareCommandEsm(record.folder, record.entry);
   if (!result.entryUrl) {
     throw new Error('Prepared ESM entry is missing.');
   }
-  if (!result.requirePath) {
-    throw new Error('Prepared require path is missing.');
-  }
-  ensureCommandRequireBridge(record.folder, result.requirePath);
-  return loadEsmUrlModule(result.entryUrl);
+  const separator = result.entryUrl.includes('?') ? '&' : '?';
+  const module = (await import(
+    /* @vite-ignore */ `${result.entryUrl}${separator}t=${Date.now()}`
+  )) as CommandModule;
+  const plugin = await loadCommandPluginServer(record, result);
+  return { module, plugin };
 };
 
 const loadModule = async (
   record: ExternalCommandRecord,
-): Promise<CommandModule> => {
+): Promise<{ module: CommandModule; plugin?: CommandPluginClient }> => {
   if (record.folder !== ROOT_FOLDER) {
     return loadFolderModule(record);
   }
@@ -186,7 +194,7 @@ const loadModule = async (
   const blob = new Blob([compiled], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
   try {
-    return (await import(/* @vite-ignore */ url)) as CommandModule;
+    return { module: (await import(/* @vite-ignore */ url)) as CommandModule };
   } catch (error) {
     throw new Error(`Module import failed: ${getErrorMessage(error)}`);
   } finally {
@@ -206,8 +214,11 @@ export const mapExternalCommand = async (
   item: ExternalCommandRecord,
 ): Promise<CommandDefinition> => {
       let module: CommandModule | undefined;
+      let plugin: CommandPluginClient | undefined;
       try {
-        module = await loadModule(item);
+        const loaded = await loadModule(item);
+        module = loaded.module;
+        plugin = loaded.plugin;
       } catch (error) {
         return {
           id: item.id,
@@ -233,11 +244,17 @@ export const mapExternalCommand = async (
       }
 
       const config = module.config;
-      const hasRun = typeof module?.run === 'function';
+      const hasRun = typeof module?.run === 'function' || plugin?.actions.includes('run') === true;
       const i18n = resolveModuleI18n(module);
       if (i18n) registerI18n(i18n);
       const titleKey = config.titleKey ?? (hasI18nKey(i18n, config.title) ? config.title : undefined);
       const descriptionKey = config.descriptionKey ?? (hasI18nKey(i18n, config.description) ? config.description : undefined);
+      const ui = module.ui
+        ? ((props: { context: CommandContext }) =>
+            module?.ui
+              ? props.context.React.createElement(module.ui, { ...props, plugin })
+              : null)
+        : undefined;
 
       return {
         id: config.id,
@@ -246,7 +263,7 @@ export const mapExternalCommand = async (
         descriptionKey,
         description: config.description,
         keywords: config.keywords,
-        ui: module?.ui,
+        ui,
         external: {
           folder: item.folder,
           entry: item.entry,
@@ -255,9 +272,14 @@ export const mapExternalCommand = async (
         run: hasRun
           ? async (ctx: CommandContext) => {
               try {
-                const mod = await loadModule(item);
+                const loaded = await loadModule(item);
+                const mod = loaded.module;
                 if (typeof mod.run === 'function') {
                   await mod.run(ctx, buildHelpers(ctx));
+                  return;
+                }
+                if (loaded.plugin?.actions.includes('run')) {
+                  await loaded.plugin.invoke('run', undefined);
                 }
               } catch (error) {
                 ctx.actions.globalActions.pushToast(

@@ -278,19 +278,12 @@ export const commandActions = {
           item && typeof item === "object" && typeof item.id === "string",
         ),
       );
-      const previousByKey = new Map(
-        commandState.externalCommands
-          .filter((command) => command.external && !command.loading)
-          .map((command) => [getExternalCommandKey(command), command]),
-      );
       const recordsToLoad: ExternalCommandRecord[] = [];
 
       commandState.externalCommands.splice(
         0,
         commandState.externalCommands.length,
         ...filtered.map((record) => {
-          const existing = previousByKey.get(getExternalCommandRecordKey(record));
-          if (existing && !existing.loadError) return existing;
           recordsToLoad.push(record);
           return createExternalCommandPlaceholder(record);
         }),

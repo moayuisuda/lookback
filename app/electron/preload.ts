@@ -39,6 +39,16 @@ import { ipcRenderer } from 'electron';
   downloadAppUpdate: () => ipcRenderer.invoke('download-app-update'),
   quitAndInstallAppUpdate: () => ipcRenderer.invoke('quit-and-install-app-update'),
   getStorageDir: () => ipcRenderer.invoke('get-storage-dir'),
+  loadCommandPluginServer: (payload: {
+    pluginKey: string;
+    folder: string;
+    entryPath: string;
+  }) => ipcRenderer.invoke('command-plugin:load-server', payload),
+  invokeCommandPlugin: (payload: {
+    pluginKey: string;
+    action: string;
+    payload?: unknown;
+  }) => ipcRenderer.invoke('command-plugin:invoke', payload),
   chooseStorageDir: () => ipcRenderer.invoke('choose-storage-dir'),
   saveImageFile: (dataUrl: string, defaultName?: string) =>
     ipcRenderer.invoke('save-image-file', { dataUrl, defaultName }),

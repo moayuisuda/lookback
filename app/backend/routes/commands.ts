@@ -11,13 +11,11 @@ type CommandsRouteDeps = {
 };
 
 type PackageManifest = {
-  name?: string;
-  main?: string;
-  module?: string;
   dependencies?: Record<string, string>;
   lookback?: {
     id?: string;
-    entry?: string;
+    ui?: string;
+    server?: string;
   };
 };
 
@@ -30,6 +28,7 @@ type ExternalCommandManifest = {
   i18n?: Partial<Record<"zh" | "en", Record<string, string>>>;
   keywords?: string[];
   entry?: string;
+  serverEntry?: string;
   mode?: string;
   ui?: {
     fields?: unknown;
@@ -41,20 +40,13 @@ const COMPILED_PLUGIN_DIR = ".lookback-esm";
 const NPM_REGISTRY = "https://registry.npmmirror.com";
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCRIPT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx"]);
-const COMPILE_EXTENSIONS = new Set([".jsx", ".ts", ".tsx"]);
+const COMPILE_EXTENSIONS = new Set([".jsx", ".mjs", ".ts", ".tsx"]);
 const SKIPPED_PLUGIN_DIRS = new Set([
   "node_modules",
   COMPILED_PLUGIN_DIR,
   ".lookback-cjs",
   ".git",
 ]);
-const DEFAULT_ENTRY_FILES = [
-  "index.jsx",
-  "index.js",
-  "index.mjs",
-  "index.tsx",
-  "index.ts",
-];
 
 const COMMAND_ID_PATTERN =
   /export\s+const\s+config\s*=\s*{[\s\S]*?\bid\s*:\s*['"`]([^'"`]+)['"`]/;
@@ -107,6 +99,9 @@ const toOutputRelativePath = (relativePath: string) => {
   const parsed = path.posix.parse(normalized);
   return path.posix.join(parsed.dir, `${parsed.name}.js`);
 };
+
+const createCompiledBuildId = () =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const toEsmFileUrl = (folder: string, relativePath: string) =>
   `/api/commands/${encodeURIComponent(folder)}/esm-file/${normalizeRelativePath(relativePath)
@@ -275,26 +270,29 @@ const resolveDirectoryEntry = async (
   pluginDir: string,
   manifest: PackageManifest | null,
 ) => {
-  const candidates = [
-    manifest?.lookback?.entry,
-    manifest?.module,
-    manifest?.main,
-    ...DEFAULT_ENTRY_FILES,
-  ].filter((item): item is string => Boolean(item?.trim()));
-
-  for (const candidate of candidates) {
-    const entry = normalizeRelativePath(candidate);
-    if (!isScriptFile(entry)) continue;
-    const filePath = toFilePath(pluginDir, entry);
-    const stat = await lockedFs.stat(filePath).catch(() => null);
-    if (stat?.isFile()) return entry;
-  }
-
-  throw new Error("Missing plugin entry");
+  const rawEntry = manifest?.lookback?.ui?.trim();
+  if (!rawEntry) throw new Error("Missing plugin ui entry");
+  const entry = normalizeRelativePath(rawEntry);
+  if (!isScriptFile(entry)) throw new Error("Invalid plugin ui entry");
+  const filePath = toFilePath(pluginDir, entry);
+  const stat = await lockedFs.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) throw new Error("Missing plugin ui entry");
+  return entry;
 };
 
-const getPluginId = (folder: string, manifest: PackageManifest | null) =>
-  manifest?.lookback?.id?.trim() || manifest?.name?.trim() || folder;
+const resolveDirectoryServerEntry = async (
+  pluginDir: string,
+  manifest: PackageManifest | null,
+) => {
+  const rawEntry = manifest?.lookback?.server?.trim();
+  if (!rawEntry) return "";
+  const entry = normalizeRelativePath(rawEntry);
+  if (!isScriptFile(entry)) throw new Error("Invalid plugin server entry");
+  const filePath = toFilePath(pluginDir, entry);
+  const stat = await lockedFs.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) throw new Error("Missing plugin server entry");
+  return entry;
+};
 
 const getDependencyPackagePath = (pluginDir: string, packageName: string) => {
   const chunks = packageName.split("/");
@@ -363,109 +361,29 @@ const runNpmInstall = async (pluginDir: string) => {
 
 const rewriteCompiledImportExtensions = (code: string) =>
   code.replace(
-    /((?:from\s*|import\s*(?:\(\s*)?)["'])(\.{1,2}\/[^"'()]+?)\.(jsx|tsx|ts)(["'])/g,
+    /((?:from\s*|import\s*(?:\(\s*)?)["'])(\.{1,2}\/[^"'()]+?)\.(jsx|mjs|tsx|ts)(["'])/g,
     "$1$2.js$4",
   );
 
-const isBareModuleSpecifier = (value: string) =>
-  Boolean(value) &&
-  !value.startsWith(".") &&
-  !value.startsWith("/") &&
-  !/^[a-z][a-z0-9+.-]*:\/\//i.test(value);
-
-const normalizeNamedImportBindings = (value: string) =>
-  value
-    .replace(/^\{|\}$/g, "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => item.replace(/\s+as\s+/g, ": "))
-    .join(", ");
-
-const toBareImportReplacement = (
-  folder: string,
-  clause: string,
-  specifier: string,
-  index: number,
-) => {
-  const requireCall = `globalThis.__lookbackCommandRequire(${JSON.stringify(folder)}, ${JSON.stringify(specifier)})`;
-  const normalized = clause.trim();
-  const moduleVar = `__lookbackCommandModule${index}`;
-  if (!normalized) return `${requireCall};`;
-  if (normalized.startsWith("{")) {
-    const bindings = normalizeNamedImportBindings(normalized);
-    return bindings ? `const { ${bindings} } = ${requireCall};` : `${requireCall};`;
-  }
-  const namespaceMatch = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(normalized);
-  if (namespaceMatch) {
-    return `const ${namespaceMatch[1]} = ${requireCall};`;
-  }
-
-  const commaIndex = normalized.indexOf(",");
-  if (commaIndex < 0) {
-    return [
-      `const ${moduleVar} = ${requireCall};`,
-      `const ${normalized} = ${moduleVar}?.default ?? ${moduleVar};`,
-    ].join("\n");
-  }
-
-  const defaultName = normalized.slice(0, commaIndex).trim();
-  const rest = normalized.slice(commaIndex + 1).trim();
-  const lines = [
-    `const ${moduleVar} = ${requireCall};`,
-    `const ${defaultName} = ${moduleVar}?.default ?? ${moduleVar};`,
-  ];
-  const restNamespaceMatch = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(rest);
-  if (restNamespaceMatch) {
-    lines.push(`const ${restNamespaceMatch[1]} = ${moduleVar};`);
-    return lines.join("\n");
-  }
-  if (rest.startsWith("{")) {
-    const bindings = normalizeNamedImportBindings(rest);
-    if (bindings) lines.push(`const { ${bindings} } = ${moduleVar};`);
-  }
-  return lines.join("\n");
-};
-
-const rewriteBareModuleImports = (code: string, folder: string) => {
-  let importIndex = 0;
-  const withBindings = code.replace(
-    /^\s*import\s+([^'";\n][\s\S]*?)\s+from\s+(["'])([^"']+)\2\s*;?/gm,
-    (statement, clause: string, _quote: string, specifier: string) => {
-      if (!isBareModuleSpecifier(specifier)) return statement;
-      importIndex += 1;
-      return toBareImportReplacement(folder, clause, specifier, importIndex);
-    },
-  );
-  return withBindings.replace(
-    /^\s*import\s+(["'])([^"']+)\1\s*;?/gm,
-    (statement, _quote: string, specifier: string) => {
-      if (!isBareModuleSpecifier(specifier)) return statement;
-      return `globalThis.__lookbackCommandRequire(${JSON.stringify(folder)}, ${JSON.stringify(specifier)});`;
-    },
-  );
-};
-
-const compilePluginSource = (source: string, filePath: string, folder: string) => {
+const compilePluginSource = (source: string, filePath: string) => {
   const ext = path.extname(filePath).toLowerCase();
   if (!SCRIPT_EXTENSIONS.has(ext)) return source;
   const transforms: Array<"jsx" | "typescript"> = [];
   if (ext === ".jsx" || ext === ".tsx") transforms.push("jsx");
   if (ext === ".ts" || ext === ".tsx") transforms.push("typescript");
-  const compiled = COMPILE_EXTENSIONS.has(ext)
-    ? transform(source, {
-      transforms,
-      production: true,
-    }).code
-    : source;
-  return rewriteBareModuleImports(
-    rewriteCompiledImportExtensions(compiled),
-    folder,
-  );
+  if (transforms.length === 0) return rewriteCompiledImportExtensions(source);
+  const compiled = transform(source, {
+    transforms,
+    production: true,
+  }).code;
+  return rewriteCompiledImportExtensions(compiled);
+};
+
+const writeCompiledPackageManifest = async (outputDir: string) => {
+  await fs.writeJson(path.join(outputDir, "package.json"), { type: "module" }, { spaces: 2 });
 };
 
 const copyPluginAsEsm = async (
-  folder: string,
   pluginDir: string,
   sourceDir: string,
   outputDir: string,
@@ -476,7 +394,7 @@ const copyPluginAsEsm = async (
     const relativePath = path.relative(pluginDir, sourcePath).replace(/\\/g, "/");
     if (entry.isDirectory()) {
       if (SKIPPED_PLUGIN_DIRS.has(entry.name)) continue;
-      await copyPluginAsEsm(folder, pluginDir, sourcePath, outputDir);
+      await copyPluginAsEsm(pluginDir, sourcePath, outputDir);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -488,7 +406,7 @@ const copyPluginAsEsm = async (
     const ext = path.extname(sourcePath).toLowerCase();
     if (SCRIPT_EXTENSIONS.has(ext)) {
       const source = await fs.readFile(sourcePath, "utf-8");
-      await fs.writeFile(outputPath, compilePluginSource(source, sourcePath, folder), "utf-8");
+      await fs.writeFile(outputPath, compilePluginSource(source, sourcePath), "utf-8");
       continue;
     }
 
@@ -543,10 +461,13 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
 
         if (!stat.isDirectory()) continue;
         const manifest = await readPackageManifest(entryPath);
+        const pluginId = manifest?.lookback?.id?.trim();
+        if (!pluginId) continue;
         const commandEntry = await resolveDirectoryEntry(entryPath, manifest).catch(() => "");
         if (!commandEntry) continue;
+        const serverEntry = await resolveDirectoryServerEntry(entryPath, manifest).catch(() => "");
         const metadata = await readCommandMetadata(toFilePath(entryPath, commandEntry));
-        const id = metadata.id || getPluginId(entry, manifest);
+        const id = metadata.id || pluginId;
         result.push({
           id,
           title: metadata.title || id,
@@ -556,6 +477,7 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
           keywords: metadata.keywords,
           i18n: metadata.i18n,
           entry: commandEntry,
+          serverEntry: serverEntry || undefined,
           folder: entry,
         });
       }
@@ -578,9 +500,11 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
 
       const commandsDir = getCommandsDir();
       const dirPath = folder === ROOT_FOLDER ? commandsDir : getPluginDir(folder);
-      const entryName = folder === ROOT_FOLDER
-        ? normalizeRelativePath(entry || "script.js")
-        : normalizeRelativePath(entry || "index.js");
+      if (!entry) {
+        res.status(400).send("Missing script entry");
+        return;
+      }
+      const entryName = normalizeRelativePath(entry);
       const scriptPath = toFilePath(dirPath, entryName);
       if (!isScriptFile(scriptPath)) {
         res.status(400).send("Invalid script");
@@ -659,9 +583,7 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
       const pluginDir = getPluginDir(folder);
       await withFileLock(pluginDir, async () => {
         const manifest = await readPackageManifest(pluginDir);
-        const rawEntry = typeof req.body?.entry === "string"
-          ? req.body.entry
-          : await resolveDirectoryEntry(pluginDir, manifest);
+        const rawEntry = await resolveDirectoryEntry(pluginDir, manifest);
         const entry = normalizeRelativePath(rawEntry);
         const entryPath = toFilePath(pluginDir, entry);
         if (!isScriptFile(entryPath) || !(await lockedFs.pathExists(entryPath))) {
@@ -669,15 +591,29 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
           return;
         }
 
-        const outputDir = path.join(pluginDir, COMPILED_PLUGIN_DIR);
-        await lockedFs.remove(outputDir);
+        const outputRoot = path.join(pluginDir, COMPILED_PLUGIN_DIR);
+        const buildId = createCompiledBuildId();
+        const outputDir = path.join(outputRoot, buildId);
+        await lockedFs.remove(outputRoot);
         await lockedFs.ensureDir(outputDir);
-        await copyPluginAsEsm(folder, pluginDir, pluginDir, outputDir);
+        await copyPluginAsEsm(pluginDir, pluginDir, outputDir);
+        await writeCompiledPackageManifest(outputDir);
+        const compiledEntry = path.posix.join(buildId, toOutputRelativePath(entry));
+        const compiledEntryPath = toFilePath(outputRoot, compiledEntry);
+        const serverEntry = await resolveDirectoryServerEntry(pluginDir, manifest).catch(() => "");
+        const compiledServerEntry = serverEntry
+          ? path.posix.join(buildId, toOutputRelativePath(serverEntry))
+          : "";
+        const compiledServerEntryPath = compiledServerEntry
+          ? toFilePath(outputRoot, compiledServerEntry)
+          : "";
 
         res.json({
           success: true,
-          entryUrl: toEsmFileUrl(folder, toOutputRelativePath(entry)),
-          requirePath: path.join(pluginDir, "package.json"),
+          entryUrl: toEsmFileUrl(folder, compiledEntry),
+          entryPath: compiledEntryPath,
+          serverEntry,
+          serverEntryPath: compiledServerEntryPath || undefined,
         });
       });
     } catch (error) {

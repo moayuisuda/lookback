@@ -368,6 +368,7 @@ export async function deleteTempFile(
 export type ExternalCommandRecord = {
   folder: string;
   entry: string;
+  serverEntry?: string;
   id: string;
   title?: string;
   titleKey?: string;
@@ -416,8 +417,20 @@ export async function ensureCommandDependencies(
 export async function prepareCommandEsm(
   folder: string,
   entry: string
-): Promise<{ success?: boolean; entryUrl: string; requirePath: string }> {
-  const result = await localApi<{ success?: boolean; entryUrl: string; requirePath: string }>(
+): Promise<{
+  success?: boolean;
+  entryUrl: string;
+  entryPath?: string;
+  serverEntry?: string;
+  serverEntryPath?: string;
+}> {
+  const result = await localApi<{
+    success?: boolean;
+    entryUrl: string;
+    entryPath?: string;
+    serverEntry?: string;
+    serverEntryPath?: string;
+  }>(
     `/api/commands/${encodeURIComponent(folder)}/esm/prepare`,
     { entry },
   );

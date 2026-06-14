@@ -1,11 +1,8 @@
-import { runFollowPracticeScraper } from "./scraper.js";
-
 const COMMAND_ID = "followPractice";
 const STORAGE_KEY = "lookback.command.followPractice.v1";
 const DEFAULT_USER_ID = "65fa3bb2000000000b00f730";
 const DEFAULT_KEYWORDS = "day";
 const REFRESH_EXPIRE_MS = 12 * 60 * 60 * 1000;
-const SHELL_TIMEOUT_MS = 120000;
 const PROFILE_SCROLL_MAX_CARDS = 100;
 const SYSTEM_BROWSER_NOT_FOUND = "SYSTEM_BROWSER_NOT_FOUND";
 
@@ -100,14 +97,6 @@ export const config = {
   keywords: ["follow", "practice", "todo", "checkin", "小红书", "打卡", "跟练"],
 };
 
-const isWin = () => String(navigator.platform || "").toLowerCase().includes("win");
-
-const pathJoin = (base, ...parts) => {
-  const separator = isWin() ? "\\" : "/";
-  const normalizedBase = String(base || "").replace(/[\\/]+$/, "");
-  return [normalizedBase, ...parts.filter(Boolean)].join(separator);
-};
-
 const safeJsonParse = (value, fallback) => {
   try {
     return JSON.parse(value);
@@ -149,151 +138,9 @@ const saveState = (nextState) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
 };
 
-const splitKeywords = (value) =>
-  String(value || "")
-    .split(/[\s,，、]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-const buildProfileUrl = (userId) =>
-  `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(userId.trim())}`;
-
-const runShell = async (shell, payload) =>
-  shell({
-    timeoutMs: SHELL_TIMEOUT_MS,
-    ...payload,
-  });
-
-const psEscape = (value) => String(value).replace(/'/g, "''");
-
-const ensureDir = async (shell, dirPath) => {
-  if (isWin()) {
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      `$dir='${psEscape(dirPath)}'`,
-      "if (!(Test-Path -LiteralPath $dir -PathType Container)) {",
-      "  New-Item -ItemType Directory -Path $dir -Force | Out-Null",
-      "}",
-    ].join("; ");
-    return runShell(shell, {
-      command: "powershell.exe",
-      args: ["-NoProfile", "-Command", script],
-    });
-  }
-  return runShell(shell, {
-    command: "mkdir",
-    args: ["-p", dirPath],
-  });
-};
-
-const removeDir = async (shell, dirPath) => {
-  if (isWin()) {
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      `$dir='${psEscape(dirPath)}'`,
-      "if (Test-Path -LiteralPath $dir -PathType Container) {",
-      "  Remove-Item -LiteralPath $dir -Recurse -Force",
-      "}",
-    ].join("; ");
-    return runShell(shell, {
-      command: "powershell.exe",
-      args: ["-NoProfile", "-Command", script],
-    });
-  }
-
-  return runShell(shell, {
-    command: "rm",
-    args: ["-rf", dirPath],
-  });
-};
-
-const getRuntimeDir = async () => {
-  const storageDir = await window.electron?.getStorageDir?.();
-  if (!storageDir) throw new Error("Storage directory unavailable");
-  return pathJoin(storageDir, "command-runtimes", "follow-practice");
-};
-
-
-const prepareRuntime = async (shell, state, setStatePatch) => {
-  const runtimeDir = await getRuntimeDir();
-  const dirResult = await ensureDir(shell, runtimeDir);
-  if (!dirResult.success) {
-    throw new Error(dirResult.error || dirResult.stderr || "Failed to prepare directory");
-  }
-
-  if (!state.browserReady) {
-    setStatePatch({ browserReady: true });
-  }
-
-  return {
-    runtimeDir,
-    profileDir: pathJoin(runtimeDir, "xhs-profile"),
-  };
-};
-
-const assertScraperSuccess = (payload, fallbackMessage) => {
-  if (payload?.success === true) {
-    return {
-      todos: Array.isArray(payload.todos) ? payload.todos : [],
-      debugTrace: payload.debug ? String(payload.debug) : "",
-    };
-  }
-  const message = payload?.error ? String(payload.error) : fallbackMessage;
-  const debugTrace = payload?.debug ? String(payload.debug) : "";
-  throw new Error(debugTrace ? `${message} | debug=${debugTrace}` : message);
-};
-
-const scrapeTodos = async (runtime, userId, keywords, headless, maxCards) => {
-  const payload = {
-    mode: "scrape",
-    profileUrl: buildProfileUrl(userId),
-    userDataDir: runtime.profileDir,
-    keywords: splitKeywords(keywords),
-    headless: headless !== false,
-    maxCards: Number(maxCards) || PROFILE_SCROLL_MAX_CARDS,
-  };
-  return assertScraperSuccess(await runFollowPracticeScraper(payload), "Scrape failed");
-};
-
-const scrapeTodoDetail = async (runtime, userId, todo, headless) => {
-  const payload = {
-    mode: "detail",
-    profileUrl: buildProfileUrl(userId),
-    userDataDir: runtime.profileDir,
-    headless: headless !== false,
-    card: {
-      noteId: todo.noteId,
-      url: todo.url,
-      title: todo.title || todo.noteId,
-      desc: todo.desc,
-      coverUrl: todo.coverUrl,
-    },
-  };
-  const { todos, debugTrace } = assertScraperSuccess(
-    await runFollowPracticeScraper(payload),
-    "Scrape failed",
-  );
-  const [detail] = todos;
-  if (!detail) throw new Error("No note detail");
-  return { ...detail, __debugTrace: debugTrace };
-};
-
-const openLoginWindow = async (runtime, userId) => {
-  const payload = {
-    mode: "login",
-    profileUrl: buildProfileUrl(userId),
-    userDataDir: runtime.profileDir,
-  };
-  assertScraperSuccess(await runFollowPracticeScraper(payload), "Login failed");
-};
-
-const clearLoginState = async (shell) => {
-  const runtimeDir = await getRuntimeDir();
-  const profileDir = pathJoin(runtimeDir, "xhs-profile");
-  const result = await removeDir(shell, profileDir);
-  if (!result.success) {
-    throw new Error(result.error || result.stderr || "Failed to clear login state");
-  }
+const invokeFollowPractice = async (plugin, action, payload) => {
+  if (!plugin?.invoke) throw new Error("Follow practice server is unavailable");
+  return plugin.invoke(action, payload);
 };
 
 const getTodoTextKey = (value) =>
@@ -441,8 +288,8 @@ const isRefreshExpired = (timestamp) => {
   return value > 0 && Date.now() - value >= REFRESH_EXPIRE_MS;
 };
 
-export const ui = ({ context }) => {
-  const { React, hooks, actions, shell } = context;
+export const ui = ({ context, plugin }) => {
+  const { React, hooks, actions } = context;
   const { useEffect, useMemo, useRef, useState } = React;
   const { useEnvState, useT } = hooks;
   const { t } = useT();
@@ -519,9 +366,14 @@ export const ui = ({ context }) => {
         const activeKeywords = keywordsRef.current;
         const activeHeadless = headlessRef.current;
         const activeMaxCards = maxCardsRef.current;
-        const runtime = await prepareRuntime(shell, storedStateRef.current, setStatePatch);
+        if (!storedStateRef.current.browserReady) setStatePatch({ browserReady: true });
         setStatus({ key: "command.followPractice.status.refreshing" });
-        const { todos: scraped, debugTrace } = await scrapeTodos(runtime, activeUserId, activeKeywords, activeHeadless, activeMaxCards);
+        const { todos: scraped, debugTrace } = await invokeFollowPractice(plugin, "scrapeTodos", {
+          userId: activeUserId,
+          keywords: activeKeywords,
+          headless: activeHeadless,
+          maxCards: activeMaxCards,
+        });
         const nextTodos = mergeTodos(storedStateRef.current.todos, scraped);
         patchState({
           todos: nextTodos,
@@ -582,7 +434,7 @@ export const ui = ({ context }) => {
 
     try {
       setIsRefreshing(true);
-      await clearLoginState(shell);
+      await invokeFollowPractice(plugin, "clearLoginState");
       patchState({
         todos: [],
         lastRefreshAt: 0,
@@ -611,9 +463,9 @@ export const ui = ({ context }) => {
     try {
       setIsLoginOpening(true);
       setStatus({ key: "command.followPractice.status.preparing" });
-      const runtime = await prepareRuntime(shell, storedStateRef.current, setStatePatch);
+      if (!storedStateRef.current.browserReady) setStatePatch({ browserReady: true });
       setStatus({ key: "command.followPractice.status.login" });
-      await openLoginWindow(runtime, userIdRef.current);
+      await invokeFollowPractice(plugin, "openLoginWindow", { userId: userIdRef.current });
       setStatus({ key: "command.followPractice.status.loginReady" });
       patchState({ browserReady: true });
     } catch (error) {
@@ -648,13 +500,12 @@ export const ui = ({ context }) => {
       let detailDebugTrace = "";
       if (!activeTodo.imageUrls.length) {
         setStatus({ key: "command.followPractice.status.fetchingImages" });
-        const runtime = await prepareRuntime(shell, storedStateRef.current, setStatePatch);
-        const detail = await scrapeTodoDetail(
-          runtime,
-          userIdRef.current,
-          activeTodo,
-          headlessRef.current,
-        );
+        if (!storedStateRef.current.browserReady) setStatePatch({ browserReady: true });
+        const detail = await invokeFollowPractice(plugin, "scrapeTodoDetail", {
+          userId: userIdRef.current,
+          todo: activeTodo,
+          headless: headlessRef.current,
+        });
         detailDebugTrace = String(detail.__debugTrace || "");
         activeTodo = normalizeTodo({
           ...activeTodo,
@@ -760,88 +611,94 @@ export const ui = ({ context }) => {
     : "";
 
   return (
-    <div className="flex h-130 flex-col bg-neutral-950 text-neutral-100">
-      <div className="flex shrink-0 items-start gap-3 border-b border-neutral-800 px-4 py-3">
-        <label className="flex w-54 shrink-0 flex-col gap-1">
-          <span className="text-xs text-neutral-400">
-            {t("command.followPractice.userId")}
-          </span>
-          <input
-            value={userId}
-            onChange={(event) => handleUserIdChange(event.target.value)}
-            className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
-          />
-        </label>
-        <label className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-xs text-neutral-400">
-            {t("command.followPractice.keywords")}
-          </span>
-          <input
-            value={keywords}
-            onChange={(event) => handleKeywordsChange(event.target.value)}
-            className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
-          />
-        </label>
-        <label className="flex w-16 shrink-0 flex-col gap-1">
-          <span className="text-xs text-neutral-400">
-            {t("command.followPractice.maxCards")}
-          </span>
-          <input
-            type="number"
-            value={maxCards}
-            onChange={(event) => setMaxCards(Number(event.target.value) || PROFILE_SCROLL_MAX_CARDS)}
-            onBlur={(event) => handleMaxCardsChange(event.target.value)}
-            min="1"
-            max="500"
-            className="h-8 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => void refreshTodos("manual")}
-          disabled={isScraperRunning}
-          className="mt-5 h-8 rounded border border-neutral-700 px-3 text-sm text-neutral-100 hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {t("command.followPractice.refresh")}
-        </button>
-        <button
-          type="button"
-          onClick={handleClear}
-          className="mt-5 h-8 rounded bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-500"
-        >
-          {t("command.followPractice.clear")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleLogin()}
-          disabled={isScraperRunning}
-          className="mt-5 h-8 rounded bg-primary px-3 text-sm font-medium text-neutral-950 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {t("command.followPractice.login")}
-        </button>
-      </div>
-
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-900 px-4 py-2 text-xs">
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-neutral-300">
-            <input
-              type="checkbox"
-              checked={headless}
-              onChange={(event) => handleHeadlessChange(event.target.checked)}
-              className="h-3.5 w-3.5 rounded border border-neutral-600 bg-neutral-900 accent-primary"
-            />
-            <span>{t("command.followPractice.headless")}</span>
-          </label>
-          <span className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-neutral-600 text-[10px] font-semibold text-neutral-400">
-            ?
-            <span className="pointer-events-none absolute left-1/2 top-5 z-10 w-24 -translate-x-1/2 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-left text-xs font-normal leading-relaxed text-neutral-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-              {t("command.followPractice.headless.hint")}
+    <div className="flex h-full min-h-0 flex-col bg-neutral-950 text-neutral-100">
+      <div className="shrink-0 border-b border-neutral-800 px-4 py-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_88px_auto] items-end gap-3">
+          <label className="flex min-w-0 flex-col gap-1">
+            <span className="whitespace-nowrap text-xs text-neutral-400">
+              {t("command.followPractice.userId")}
             </span>
-          </span>
+            <input
+              value={userId}
+              onChange={(event) => handleUserIdChange(event.target.value)}
+              className="h-8 min-w-0 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
+            />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1">
+            <span className="whitespace-nowrap text-xs text-neutral-400">
+              {t("command.followPractice.maxCards")}
+            </span>
+            <input
+              type="number"
+              value={maxCards}
+              onChange={(event) => setMaxCards(Number(event.target.value) || PROFILE_SCROLL_MAX_CARDS)}
+              onBlur={(event) => handleMaxCardsChange(event.target.value)}
+              min="1"
+              max="500"
+              className="h-8 min-w-0 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
+            />
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void refreshTodos("manual")}
+              disabled={isScraperRunning}
+              className="h-8 min-w-12 rounded border border-neutral-700 px-3 text-sm text-neutral-100 hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("command.followPractice.refresh")}
+            </button>
+            <button
+              type="button"
+              onClick={handleClear}
+              className="h-8 min-w-12 rounded bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-500"
+            >
+              {t("command.followPractice.clear")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleLogin()}
+              disabled={isScraperRunning}
+              className="h-8 min-w-12 rounded bg-primary px-3 text-sm font-medium text-neutral-950 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("command.followPractice.login")}
+            </button>
+          </div>
         </div>
-        <div className="flex min-w-0 items-center justify-end gap-3 text-neutral-400">
-          <span className="truncate">{statusText}</span>
-          {lastRefreshText ? <span className="shrink-0">{lastRefreshText}</span> : null}
+
+        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
+          <label className="flex min-w-0 flex-col gap-1">
+            <span className="whitespace-nowrap text-xs text-neutral-400">
+              {t("command.followPractice.keywords")}
+            </span>
+            <input
+              value={keywords}
+              onChange={(event) => handleKeywordsChange(event.target.value)}
+              className="h-8 min-w-0 rounded border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 outline-none focus:border-primary"
+            />
+          </label>
+          <div className="flex h-8 min-w-0 items-center justify-end gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 whitespace-nowrap text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={headless}
+                  onChange={(event) => handleHeadlessChange(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border border-neutral-600 bg-neutral-900 accent-primary"
+                />
+                <span>{t("command.followPractice.headless")}</span>
+              </label>
+              <span className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-neutral-600 text-[10px] font-semibold text-neutral-400">
+                ?
+                <span className="pointer-events-none absolute right-0 top-5 z-10 w-44 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-left text-xs font-normal leading-relaxed text-neutral-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                  {t("command.followPractice.headless.hint")}
+                </span>
+              </span>
+            </div>
+            <div className="flex min-w-0 max-w-64 items-center justify-end gap-3 text-neutral-400">
+              <span className="truncate">{statusText}</span>
+              {lastRefreshText ? <span className="shrink-0">{lastRefreshText}</span> : null}
+            </div>
+          </div>
         </div>
       </div>
 

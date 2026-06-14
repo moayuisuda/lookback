@@ -11,6 +11,8 @@ const COMMAND_MARKET_TREE_API =
   "https://api.github.com/repos/moayuisuda/lookback/git/trees/main?recursive=1";
 const COMMAND_MARKET_RAW_PREFIX =
   "https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/";
+const COMMAND_MARKET_CONTENTS_PREFIX =
+  "https://api.github.com/repos/moayuisuda/lookback/contents/";
 const LLM_TEXT_URL =
   "https://xget-5sd.pages.dev/gh/moayuisuda/lookback/raw/refs/heads/main/llm.txt";
 
@@ -51,6 +53,19 @@ type LocalizedCommandText = {
   description?: string;
 };
 
+type CommandMarketFile = {
+  path: string;
+  relativePath: string;
+};
+
+type CommandPluginManifest = {
+  lookback?: {
+    id?: string;
+    ui?: string;
+    server?: string;
+  };
+};
+
 export type CommandMarketItem = {
   id: string;
   fileName: string;
@@ -58,6 +73,8 @@ export type CommandMarketItem = {
   description: string;
   localized: Partial<Record<Locale, LocalizedCommandText>>;
   downloadUrl: string;
+  kind: "script" | "plugin";
+  files?: readonly CommandMarketFile[];
 };
 
 type SiteState = {
@@ -116,10 +133,26 @@ function resolveMirrorDownloadUrl(downloadUrl: string) {
 
 import { DEFAULT_COMMAND_FILES } from "../../../app/shared/constants";
 
-function isCommandScript(path: string) {
-  return (
-    path.startsWith("app/src/commands-pending/") && /\.(jsx?|tsx?)$/i.test(path)
-  );
+const COMMAND_PENDING_PREFIX = "app/src/commands-pending/";
+
+function getPendingCommandPath(path: string) {
+  if (!path.startsWith(COMMAND_PENDING_PREFIX)) return "";
+  return path.slice(COMMAND_PENDING_PREFIX.length);
+}
+
+function isScriptExtension(path: string) {
+  return /\.(mjs|jsx?|tsx?)$/i.test(path);
+}
+
+function isRootCommandScript(path: string) {
+  const relativePath = getPendingCommandPath(path);
+  return Boolean(relativePath && !relativePath.includes("/") && isScriptExtension(relativePath));
+}
+
+function isCommandPluginFile(path: string) {
+  const relativePath = getPendingCommandPath(path);
+  if (!relativePath.includes("/")) return false;
+  return !/(^|\/)(node_modules|\.lookback-esm)(\/|$)/.test(relativePath);
 }
 
 function getFileName(path: string) {
@@ -131,6 +164,11 @@ function toBaseName(fileName: string) {
   return fileName.replace(/\.[^/.]+$/, "");
 }
 
+function getPluginDir(path: string) {
+  const relativePath = getPendingCommandPath(path);
+  return relativePath.split("/")[0] || "";
+}
+
 function toLocalRoute(hash: string): SiteRoute {
   const normalized = hash.replace(/^#/, "").replace(/\/+$/, "");
   if (normalized === "/market") return "/market";
@@ -140,6 +178,21 @@ function toLocalRoute(hash: string): SiteRoute {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function safeJsonParse(value: string, fallback: unknown) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePluginRelativePath(value: string) {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "");
 }
 
 function buildLookBackImportDeepLink(commandUrl: string) {
@@ -361,6 +414,46 @@ async function parseCommandScript(
     description,
     localized,
     downloadUrl: `${COMMAND_MARKET_RAW_PREFIX}${path}`,
+    kind: "script",
+  };
+}
+
+function parsePluginManifest(packageJson: string) {
+  const manifest = safeJsonParse(packageJson, {}) as CommandPluginManifest;
+  const pluginId = manifest.lookback?.id?.trim() || "";
+  const uiEntry = manifest.lookback?.ui?.trim() || "";
+  return { pluginId, uiEntry };
+}
+
+function pickPluginEntry(files: CommandMarketFile[], uiEntry: string) {
+  if (!uiEntry) return "";
+  const entry = normalizePluginRelativePath(uiEntry);
+  if (!isScriptExtension(entry)) return "";
+  const available = new Set(files.map((file) => file.relativePath));
+  return available.has(entry) ? entry : "";
+}
+
+async function parseCommandPlugin(
+  pluginDir: string,
+  files: CommandMarketFile[],
+): Promise<CommandMarketItem | null> {
+  const packagePath = `${COMMAND_PENDING_PREFIX}${pluginDir}/package.json`;
+  const packageJson = await loadCommandScript(packagePath);
+  const { pluginId, uiEntry } = parsePluginManifest(packageJson);
+  if (!pluginId) return null;
+  const entry = pickPluginEntry(files, uiEntry);
+  if (!entry) return null;
+
+  const entryPath = `${COMMAND_PENDING_PREFIX}${pluginDir}/${entry}`;
+  const item = await parseCommandScript(entryPath);
+  if (!item) return null;
+
+  return {
+    ...item,
+    fileName: `${pluginDir}.zip`,
+    downloadUrl: `${COMMAND_MARKET_CONTENTS_PREFIX}${COMMAND_PENDING_PREFIX}${pluginDir}?ref=main`,
+    kind: "plugin",
+    files,
   };
 }
 
@@ -384,6 +477,150 @@ function isCommandMarketItem(
   item: CommandMarketItem | null,
 ): item is CommandMarketItem {
   return item !== null;
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function crc32(bytes: Uint8Array) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pushUint16(target: number[], value: number) {
+  target.push(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function pushUint32(target: number[], value: number) {
+  target.push(
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  );
+}
+
+function concatUint8Arrays(parts: Uint8Array[]) {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function toArrayBuffer(bytes: Uint8Array) {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function buildZip(files: Array<{ name: string; data: Uint8Array }>) {
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const crc = crc32(file.data);
+    const localHeader: number[] = [];
+    pushUint32(localHeader, 0x04034b50);
+    pushUint16(localHeader, 20);
+    pushUint16(localHeader, 0);
+    pushUint16(localHeader, 0);
+    pushUint16(localHeader, 0);
+    pushUint16(localHeader, 0);
+    pushUint32(localHeader, crc);
+    pushUint32(localHeader, file.data.length);
+    pushUint32(localHeader, file.data.length);
+    pushUint16(localHeader, name.length);
+    pushUint16(localHeader, 0);
+    parts.push(new Uint8Array(localHeader), name, file.data);
+
+    const centralHeader: number[] = [];
+    pushUint32(centralHeader, 0x02014b50);
+    pushUint16(centralHeader, 20);
+    pushUint16(centralHeader, 20);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint32(centralHeader, crc);
+    pushUint32(centralHeader, file.data.length);
+    pushUint32(centralHeader, file.data.length);
+    pushUint16(centralHeader, name.length);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint16(centralHeader, 0);
+    pushUint32(centralHeader, 0);
+    pushUint32(centralHeader, offset);
+    centralParts.push(new Uint8Array(centralHeader), name);
+
+    offset += localHeader.length + name.length + file.data.length;
+  }
+
+  const centralDirectory = concatUint8Arrays(centralParts);
+  const endRecord: number[] = [];
+  pushUint32(endRecord, 0x06054b50);
+  pushUint16(endRecord, 0);
+  pushUint16(endRecord, 0);
+  pushUint16(endRecord, files.length);
+  pushUint16(endRecord, files.length);
+  pushUint32(endRecord, centralDirectory.length);
+  pushUint32(endRecord, offset);
+  pushUint16(endRecord, 0);
+
+  const zipBytes = concatUint8Arrays([
+    ...parts,
+    centralDirectory,
+    new Uint8Array(endRecord),
+  ]);
+  return new Blob([toArrayBuffer(zipBytes)], {
+    type: "application/zip",
+  });
+}
+
+async function downloadPluginZip(item: CommandMarketItem) {
+  if (!item.files?.length) {
+    throw new Error("Plugin files are empty");
+  }
+  const pluginRoot = toBaseName(item.fileName);
+  const files = await Promise.all(
+    item.files.map(async (file) => {
+      const resp = await fetch(`${COMMAND_MARKET_RAW_PREFIX}${file.path}`);
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return {
+        name: `${pluginRoot}/${file.relativePath}`,
+        data: new Uint8Array(await resp.arrayBuffer()),
+      };
+    }),
+  );
+  return buildZip(files);
+}
+
+function triggerBlobDownload(blob: Blob, fileName: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
 }
 
 export const siteActions = {
@@ -517,18 +754,41 @@ export const siteActions = {
       }
       const raw = (await resp.json()) as GitTreeApi;
       const scriptPaths = raw.tree
-        .filter((item) => item.type === "blob" && isCommandScript(item.path))
+        .filter((item) => item.type === "blob" && isRootCommandScript(item.path))
         .map((item) => item.path)
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const pluginFilesByDir = new Map<string, CommandMarketFile[]>();
+      raw.tree
+        .filter((item) => item.type === "blob" && isCommandPluginFile(item.path))
+        .forEach((item) => {
+          const pluginDir = getPluginDir(item.path);
+          if (!pluginDir) return;
+          const files = pluginFilesByDir.get(pluginDir) ?? [];
+          files.push({
+            path: item.path,
+            relativePath: getPendingCommandPath(item.path).slice(pluginDir.length + 1),
+          });
+          pluginFilesByDir.set(pluginDir, files);
+        });
 
       const items: Array<CommandMarketItem | null> = await Promise.all(
-        scriptPaths.map(async (scriptPath) => {
-          try {
-            return await parseCommandScript(scriptPath);
-          } catch {
-            return null;
-          }
-        }),
+        [
+          ...scriptPaths.map(async (scriptPath) => {
+            try {
+              return await parseCommandScript(scriptPath);
+            } catch {
+              return null;
+            }
+          }),
+          ...Array.from(pluginFilesByDir.entries()).map(async ([pluginDir, files]) => {
+            try {
+              files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, undefined, { numeric: true }));
+              return await parseCommandPlugin(pluginDir, files);
+            } catch {
+              return null;
+            }
+          }),
+        ],
       );
       siteState.commandMarketItems = items.filter(isCommandMarketItem);
     } catch (error) {
@@ -545,20 +805,15 @@ export const siteActions = {
     siteState.commandMarketError = "";
     try {
       const downloadFile = async () => {
-        // 深链不可用时回退为普通下载。
+        if (item.kind === "plugin") {
+          triggerBlobDownload(await downloadPluginZip(item), item.fileName);
+          return;
+        }
         const resp = await fetch(item.downloadUrl);
         if (!resp.ok) {
           throw new Error(`HTTP ${resp.status}`);
         }
-        const fileBlob = await resp.blob();
-        const objectUrl = URL.createObjectURL(fileBlob);
-        const link = document.createElement("a");
-        link.href = objectUrl;
-        link.download = item.fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(objectUrl);
+        triggerBlobDownload(await resp.blob(), item.fileName);
       };
       const deepLink = buildLookBackImportDeepLink(item.downloadUrl);
       await openLookBackImportWithFallback(deepLink, downloadFile);

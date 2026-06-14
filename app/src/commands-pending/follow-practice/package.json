@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "index.jsx",
   "lookback": {
-    "id": "followPractice"
+    "id": "followPractice",
+    "ui": "index.jsx",
+    "server": "server.js"
   },
   "dependencies": {
     "playwright": "^1.56.0"

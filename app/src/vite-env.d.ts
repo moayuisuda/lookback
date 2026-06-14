@@ -74,6 +74,16 @@ interface Window {
     downloadAppUpdate: () => Promise<{ success: boolean; error?: string }>;
     quitAndInstallAppUpdate: () => Promise<{ success: boolean; error?: string }>;
     getStorageDir: () => Promise<string>;
+    loadCommandPluginServer: (payload: {
+      pluginKey: string;
+      folder: string;
+      entryPath: string;
+    }) => Promise<{ success: boolean; actions?: string[]; error?: string }>;
+    invokeCommandPlugin: (payload: {
+      pluginKey: string;
+      action: string;
+      payload?: unknown;
+    }) => Promise<{ success: boolean; result?: unknown; error?: string }>;
     chooseStorageDir: () => Promise<string | null>;
     saveImageFile: (
       dataUrl: string,
