@@ -10,6 +10,7 @@ const TASK_TTL_MS = 30 * 60 * 1000;
 const MAX_TOTAL_TOOL_CALLS = 20;
 const TOOL_CALL_LIMITS = {
   deepwiki_search: 3,
+  import_plugin: 2,
 };
 const tasks = new Map();
 
@@ -24,6 +25,7 @@ const BASE_SYSTEM_PROMPT = `
 - 工具失败时，根据错误修复并重试，不做无意义兜底。
 - 面向用户的回答使用 Markdown。图片必须使用标准 Markdown 图片语法：感叹号、方括号图片说明、圆括号 https 图片地址；不要只写图片名或 alt 文本。
 - 语气自然、短促、有人味；说明关键判断，不堆长篇。
+- 每轮都必须有回复说明情况，不能一连串工具调完了，没有任何回复。可以多轮 tool 后统一回复，但不能啥都不回复。
 
 概念：
 插件、命令、拓展功能等，都是指的 LookBack 外部命令
@@ -33,7 +35,8 @@ const BASE_SYSTEM_PROMPT = `
 - 单文件命令优先参考 llm.txt：https://github.com/moayuisuda/lookback/blob/main/llm.txt
 - 复杂 folder command 优先参考 follow-practice：https://github.com/moayuisuda/lookback/tree/main/app/src/commands-pending/follow-practice
 - 优先用 shell 查看上面提到的远程仓库文件；只有本地信息不足时，才用 deepwiki_search，需要的内容最好一次 ask 完。
-- 一旦 deepwiki_search 或 shell 已经拿到足够信息，必须继续写完整代码并调用 import_plugin。
+- 一旦 deepwiki_search 或 shell 已经拿到足够信息，必须继续写完整代码；需要生成 LookBack 外部命令时，再调用 import_plugin 导入。
+- import_plugin 失败后必须先根据错误原因修复代码，最多重试一次；不要连续导入同一套未修复方案。
 `.trim();
 
 const buildSystemPrompt = (systemInfo) =>
@@ -107,6 +110,43 @@ const serializeMessage = (message) => ({
   raw: message,
 });
 
+const getErrorMessage = (error) => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error?.message) return String(error.message);
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+const serializeToolError = (error) => ({
+  name: error instanceof Error ? error.name : String(error?.name || "Error"),
+  message: getErrorMessage(error),
+});
+
+const toToolFailureResult = (toolName, error) => {
+  const toolError = serializeToolError(error);
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${toolName} 执行失败：${toolError.message}`,
+      },
+    ],
+    details: {
+      toolError,
+    },
+  };
+};
+
+const normalizeToolResult = (result, isError) => {
+  if (!isError) return result;
+  if (result?.details?.toolError) return result;
+  return toToolFailureResult("tool", result);
+};
+
 const normalizeEvent = (event) => {
   if (event.type === "message_start" || event.type === "message_end") {
     return {
@@ -144,7 +184,7 @@ const normalizeEvent = (event) => {
       type: event.type,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
-      result: event.result,
+      result: normalizeToolResult(event.result, event.isError === true),
       isError: event.isError === true,
     };
   }
@@ -173,7 +213,10 @@ const stableStringify = (value) => {
 
 const getToolLimitMessage = (toolName) => {
   if (toolName === "deepwiki_search") {
-    return "deepwiki_search 本轮调用次数已达上限，不要继续检索。请基于已有信息继续完成当前任务；如果是在生成 LookBack 外部命令，代码完整后再调用 import_plugin。";
+    return "deepwiki_search 本轮调用次数已达上限，不要继续检索。请基于已有信息继续完成当前任务。";
+  }
+  if (toolName === "import_plugin") {
+    return "import_plugin 本轮调用次数已达上限。请不要继续导入；直接向用户说明最后一次失败原因和需要修复的位置。";
   }
   return `${toolName} 本轮调用次数已达上限。请停止重复调用该工具，基于已有结果继续当前任务，或换用更合适的工具。`;
 };
@@ -208,11 +251,15 @@ const createGuardedTool = (tool, runtime) => ({
 
     const signature = `${toolName}:${stableStringify(params || {})}`;
     if (runtime.toolCallSignatures.has(signature)) {
-      throw new Error(`${toolName} 不允许同一轮重复调用相同参数`);
+      return toToolFailureResult(toolName, new Error(`${toolName} 不允许同一轮重复调用相同参数`));
     }
     runtime.toolCallSignatures.add(signature);
 
-    return tool.execute(toolCallId, params);
+    try {
+      return await tool.execute(toolCallId, params);
+    } catch (error) {
+      return toToolFailureResult(toolName, error);
+    }
   },
 });
 

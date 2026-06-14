@@ -165,10 +165,14 @@ const getLastAssistantError = (messages) => {
 const isImportedPluginEvent = (event) =>
   event?.type === "tool_execution_end" && Boolean(event?.result?.details?.importedPlugin);
 
+const isToolEventError = (event) =>
+  event?.isError === true || Boolean(event?.result?.details?.toolError);
+
 const getToolEventText = (event, t) => {
   if (event.type === "tool_execution_start") return t("command.piAgentAssistant.status.running");
-  if (!event.isError) return t("command.piAgentAssistant.status.completed");
-  return t("command.piAgentAssistant.status.failed", { error: "" });
+  if (!isToolEventError(event)) return t("command.piAgentAssistant.status.completed");
+  const message = event.result?.details?.toolError?.message || "";
+  return t("command.piAgentAssistant.status.failed", { error: message });
 };
 
 const getToolEventDebugText = (event) => {
