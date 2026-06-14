@@ -1,0 +1,17 @@
+{
+  "name": "pi-agent-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "lookback": {
+    "id": "piAgentAssistant",
+    "ui": "index.jsx",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.3",
+    "@earendil-works/pi-agent-core": "^0.79.3",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "sucrase": "^3.35.1"
+  }
+}

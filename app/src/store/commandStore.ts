@@ -66,6 +66,46 @@ const replaceExternalCommand = (
   commandState.externalCommands.splice(index, 1, command);
 };
 
+const uniqueExternalCommandRecords = (
+  records: ExternalCommandRecord[],
+): ExternalCommandRecord[] => {
+  const seenRecordKeys = new Set<string>();
+  const seenIds = new Set<string>();
+  const result: ExternalCommandRecord[] = [];
+
+  records.forEach((record) => {
+    const recordKey = getExternalCommandRecordKey(record);
+    const id = record.id.trim();
+    if (!recordKey || !id) return;
+    if (seenRecordKeys.has(recordKey) || seenIds.has(id)) return;
+    seenRecordKeys.add(recordKey);
+    seenIds.add(id);
+    result.push(record);
+  });
+
+  return result;
+};
+
+const uniqueExternalCommands = (
+  commands: CommandDefinition[],
+): CommandDefinition[] => {
+  const seenKeys = new Set<string>();
+  const seenIds = new Set<string>();
+  const result: CommandDefinition[] = [];
+
+  commands.forEach((command) => {
+    const key = getExternalCommandKey(command);
+    const id = command.id.trim();
+    if (!id) return;
+    if ((key && seenKeys.has(key)) || seenIds.has(id)) return;
+    if (key) seenKeys.add(key);
+    seenIds.add(id);
+    result.push(command);
+  });
+
+  return result;
+};
+
 const cleanupExternalCommandSettings = async (validIds: Set<string>) => {
   const nextShortcuts: Record<string, string> = {};
   const nextContextMenus: Record<string, boolean> = {};
@@ -273,9 +313,11 @@ export const commandActions = {
     try {
       const commands = await loadExternalCommands();
       if (loadVersion !== externalCommandLoadVersion) return;
-      const filtered = commands.filter((item): item is ExternalCommandRecord =>
-        Boolean(
-          item && typeof item === "object" && typeof item.id === "string",
+      const filtered = uniqueExternalCommandRecords(
+        commands.filter((item): item is ExternalCommandRecord =>
+          Boolean(
+            item && typeof item === "object" && typeof item.id === "string",
+          ),
         ),
       );
       const recordsToLoad: ExternalCommandRecord[] = [];
@@ -294,10 +336,20 @@ export const commandActions = {
           const mapped = await mapExternalCommand(record);
           if (loadVersion !== externalCommandLoadVersion) return mapped;
           replaceExternalCommand(record, mapped);
+          commandState.externalCommands.splice(
+            0,
+            commandState.externalCommands.length,
+            ...uniqueExternalCommands(commandState.externalCommands),
+          );
           return mapped;
         }),
       ).then(async (mapped) => {
         if (loadVersion !== externalCommandLoadVersion) return;
+        commandState.externalCommands.splice(
+          0,
+          commandState.externalCommands.length,
+          ...uniqueExternalCommands(commandState.externalCommands),
+        );
         const validIds = new Set(
           commandState.externalCommands
             .map((item) => item.id)

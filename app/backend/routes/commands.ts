@@ -365,18 +365,28 @@ const rewriteCompiledImportExtensions = (code: string) =>
     "$1$2.js$4",
   );
 
+const hasReactBinding = (code: string) =>
+  /\bimport\s+React\b/.test(code) ||
+  /\bimport\s+\*\s+as\s+React\b/.test(code) ||
+  /\b(?:const|let|var|function|class)\s+React\b/.test(code);
+
+const injectReactGlobalPrelude = (code: string) =>
+  hasReactBinding(code) ? code : `const React = globalThis.React;\n${code}`;
+
 const compilePluginSource = (source: string, filePath: string) => {
   const ext = path.extname(filePath).toLowerCase();
   if (!SCRIPT_EXTENSIONS.has(ext)) return source;
   const transforms: Array<"jsx" | "typescript"> = [];
   if (ext === ".jsx" || ext === ".tsx") transforms.push("jsx");
   if (ext === ".ts" || ext === ".tsx") transforms.push("typescript");
-  if (transforms.length === 0) return rewriteCompiledImportExtensions(source);
+  if (transforms.length === 0) {
+    return injectReactGlobalPrelude(rewriteCompiledImportExtensions(source));
+  }
   const compiled = transform(source, {
     transforms,
     production: true,
   }).code;
-  return rewriteCompiledImportExtensions(compiled);
+  return injectReactGlobalPrelude(rewriteCompiledImportExtensions(compiled));
 };
 
 const writeCompiledPackageManifest = async (outputDir: string) => {

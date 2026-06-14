@@ -47,7 +47,6 @@
 
 ```js
 context = {
-  React,
   // store 是原始状态代理 (Valtio proxy)，在 run 函数中读取数据必须使用 store
   store: {
     canvas,
@@ -85,10 +84,11 @@ helpers = {
 三、React / hooks 契约
 ====================
 
-不能 `import React`，必须这样取：
+不能 `import React`。React 已由 LookBack 外部命令运行时注入为全局变量，可直接使用 `React`。
+如果需要 hooks，必须这样取：
 
 ```js
-const { useState, useEffect, useRef, useMemo, useLayoutEffect } = context.React;
+const { useState, useEffect, useRef, useMemo, useLayoutEffect } = React;
 ```
 
 i18n：
@@ -888,7 +888,7 @@ const CURSORS = {
   sw: "nesw-resize", w: "ew-resize", move: "move",
 };
 
-const makeCropBox = ({ React }) => {
+const makeCropBox = () => {
   const { useRef, useState, useLayoutEffect, useEffect } = React;
 
   return ({ imageW, imageH, crop, onChange, containerRef }) => {
@@ -1058,7 +1058,7 @@ const makeCropBox = ({ React }) => {
 // ui 主组件
 // ──────────────────────────────────────────────
 export const ui = ({ context }) => {
-  const { React, hooks, actions, config: appConfig } = context;
+  const { hooks, actions, config: appConfig } = context;
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
   const { useEnvState, useT } = hooks;
   const { t } = useT();
@@ -1088,7 +1088,7 @@ export const ui = ({ context }) => {
   const [crop, setCrop] = useState(null);
 
   const containerRef = useRef(null);
-  const CropBox = useMemo(() => makeCropBox({ React }), []);
+  const CropBox = useMemo(() => makeCropBox(), []);
 
   // 加载目标图片
   useEffect(() => {
@@ -1995,7 +1995,7 @@ export const config = {
 };
 
 export const ui = ({ context }) => {
-  const { React, hooks, config } = context;
+  const { hooks, config } = context;
   const { useState, useEffect, useMemo, useRef } = React;
   const { useEnvState, useT } = hooks;
   const { canvas: canvasSnap } = useEnvState();

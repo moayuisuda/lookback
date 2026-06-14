@@ -289,7 +289,7 @@ const isRefreshExpired = (timestamp) => {
 };
 
 export const ui = ({ context, plugin }) => {
-  const { React, hooks, actions } = context;
+  const { hooks, actions } = context;
   const { useEffect, useMemo, useRef, useState } = React;
   const { useEnvState, useT } = hooks;
   const { t } = useT();

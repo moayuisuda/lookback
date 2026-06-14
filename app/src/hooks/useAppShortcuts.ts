@@ -294,7 +294,6 @@ export const useAppShortcuts = () => {
   }, [commandPaletteShortcut]);
 
   useEffect(() => {
-    if (isCommandPaletteOpen) return;
     const shortcutEntries: Array<{
       command: (typeof externalCommands)[number];
       accelerator: string;
@@ -324,6 +323,18 @@ export const useAppShortcuts = () => {
         }
       }
 
+      if (commandState.isOpen) {
+        if (
+          matched.command.ui &&
+          commandState.activeCommandId === matched.command.id
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          commandActions.close();
+        }
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -341,5 +352,5 @@ export const useAppShortcuts = () => {
     return () => {
       window.removeEventListener("keydown", handler, true);
     };
-  }, [isCommandPaletteOpen, externalCommands, externalCommandShortcuts]);
+  }, [externalCommands, externalCommandShortcuts]);
 };

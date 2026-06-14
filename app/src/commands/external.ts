@@ -4,6 +4,7 @@ import {
   loadCommandScript,
   prepareCommandEsm,
 } from '../service';
+import * as React from 'react';
 import { transform } from 'sucrase';
 import type { I18nDict, Locale } from '../../shared/i18n/types';
 import { registerI18n } from '../../shared/i18n/t';
@@ -54,6 +55,18 @@ type CommandPluginClient = {
 
 const INVALID_CONFIG_ERROR = 'Missing `export const config` or `config.id`.';
 const ROOT_FOLDER = '__root__';
+
+const installExternalCommandGlobals = () => {
+  Object.assign(globalThis, { React });
+};
+
+const hasReactBinding = (code: string) =>
+  /\bimport\s+React\b/.test(code) ||
+  /\bimport\s+\*\s+as\s+React\b/.test(code) ||
+  /\b(?:const|let|var|function|class)\s+React\b/.test(code);
+
+const injectReactGlobalPrelude = (code: string) =>
+  hasReactBinding(code) ? code : `const React = globalThis.React;\n${code}`;
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -159,6 +172,7 @@ const loadCommandPluginServer = async (
 const loadFolderModule = async (
   record: ExternalCommandRecord,
 ): Promise<{ module: CommandModule; plugin?: CommandPluginClient }> => {
+  installExternalCommandGlobals();
   await ensureCommandDependencies(record.folder);
   const result = await prepareCommandEsm(record.folder, record.entry);
   if (!result.entryUrl) {
@@ -175,6 +189,7 @@ const loadFolderModule = async (
 const loadModule = async (
   record: ExternalCommandRecord,
 ): Promise<{ module: CommandModule; plugin?: CommandPluginClient }> => {
+  installExternalCommandGlobals();
   if (record.folder !== ROOT_FOLDER) {
     return loadFolderModule(record);
   }
@@ -191,7 +206,7 @@ const loadModule = async (
     throw new Error(`Compile failed: ${getErrorMessage(error)}`);
   }
 
-  const blob = new Blob([compiled], { type: 'text/javascript' });
+  const blob = new Blob([injectReactGlobalPrelude(compiled)], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
   try {
     return { module: (await import(/* @vite-ignore */ url)) as CommandModule };
