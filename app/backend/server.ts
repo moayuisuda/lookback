@@ -125,7 +125,15 @@ const syncDefaultCommandFile = async (srcPath: string, destPath: string) => {
 const ensureDefaultCommands = async () => {
   const commandsDir = path.join(STORAGE_DIR, "commands");
   await lockedFs.ensureDir(commandsDir);
-  const sourceDir = path.join(app.getAppPath(), "src", "commands-pending");
+  const appPath = app.getAppPath();
+  const unpackedSourceDir =
+    path.basename(appPath) === "app.asar"
+      ? path.join(path.dirname(appPath), "app.asar.unpacked", "src", "commands-pending")
+      : "";
+  const sourceDir =
+    unpackedSourceDir && (await fs.pathExists(unpackedSourceDir))
+      ? unpackedSourceDir
+      : path.join(appPath, "src", "commands-pending");
   await Promise.all(
     DEFAULT_COMMAND_FILES.map(async (fileName) => {
       const destPath = path.join(commandsDir, fileName);

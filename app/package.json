@@ -17,6 +17,9 @@
     "productName": "LookBack",
     "compression": "maximum",
     "icon": "resources/icon.png",
+    "asarUnpack": [
+      "src/commands-pending/**"
+    ],
     "mac": {
       "icon": "resources/icon.icns",
       "category": "public.app-category.developer-tools",
