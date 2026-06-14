@@ -9,7 +9,7 @@ import { createSystemInfo, formatSystemInfoForPrompt } from "./systemInfo.js";
 const TASK_TTL_MS = 30 * 60 * 1000;
 const MAX_TOTAL_TOOL_CALLS = 20;
 const TOOL_CALL_LIMITS = {
-  image_search: 2,
+  deepwiki_search: 3,
 };
 const tasks = new Map();
 
@@ -25,12 +25,15 @@ const BASE_SYSTEM_PROMPT = `
 - 面向用户的回答使用 Markdown。图片必须使用标准 Markdown 图片语法：感叹号、方括号图片说明、圆括号 https 图片地址；不要只写图片名或 alt 文本。
 - 语气自然、短促、有人味；说明关键判断，不堆长篇。
 
+概念：
+插件、命令、拓展功能等，都是指的 LookBack 外部命令
+
 生成 LookBack 外部命令时：
 - 先确认需求边界和现有项目约定，再生成代码。
 - 单文件命令优先参考 llm.txt：https://github.com/moayuisuda/lookback/blob/main/llm.txt
 - 复杂 folder command 优先参考 follow-practice：https://github.com/moayuisuda/lookback/tree/main/app/src/commands-pending/follow-practice
-- 对不确定的 LookBack API、命令结构或运行时约定，先用 deepwiki_search 或 shell 查清楚。
-- 只有在代码完整、入口和配置明确时，才调用 import_plugin 导入。
+- 优先用 shell 查看上面提到的远程仓库文件；只有本地信息不足时，才用 deepwiki_search，需要的内容最好一次 ask 完。
+- 一旦 deepwiki_search 或 shell 已经拿到足够信息，必须继续写完整代码并调用 import_plugin。
 `.trim();
 
 const buildSystemPrompt = (systemInfo) =>
@@ -168,6 +171,13 @@ const stableStringify = (value) => {
   return JSON.stringify(value);
 };
 
+const getToolLimitMessage = (toolName) => {
+  if (toolName === "deepwiki_search") {
+    return "deepwiki_search 本轮调用次数已达上限，不要继续检索。请基于已有信息继续完成当前任务；如果是在生成 LookBack 外部命令，代码完整后再调用 import_plugin。";
+  }
+  return `${toolName} 本轮调用次数已达上限。请停止重复调用该工具，基于已有结果继续当前任务，或换用更合适的工具。`;
+};
+
 const createGuardedTool = (tool, runtime) => ({
   ...tool,
   execute: async (toolCallId, params) => {
@@ -181,7 +191,19 @@ const createGuardedTool = (tool, runtime) => ({
     runtime.toolCallCounts.set(toolName, nextCount);
     const limit = TOOL_CALL_LIMITS[toolName];
     if (limit && nextCount > limit) {
-      throw new Error(`${toolName} 调用次数超过上限：${limit}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: getToolLimitMessage(toolName),
+          },
+        ],
+        details: {
+          limited: true,
+          toolName,
+          limit,
+        },
+      };
     }
 
     const signature = `${toolName}:${stableStringify(params || {})}`;
