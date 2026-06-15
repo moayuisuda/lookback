@@ -10,7 +10,7 @@ const TASK_TTL_MS = 30 * 60 * 1000;
 const MAX_TOTAL_TOOL_CALLS = 20;
 const TOOL_CALL_LIMITS = {
   deepwiki_search: 3,
-  import_plugin: 2,
+  import_plugin: 5,
 };
 const tasks = new Map();
 
@@ -200,17 +200,6 @@ const normalizeEvent = (event) => {
   return { type: event.type };
 };
 
-const stableStringify = (value) => {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-};
-
 const getToolLimitMessage = (toolName) => {
   if (toolName === "deepwiki_search") {
     return "deepwiki_search 本轮调用次数已达上限，不要继续检索。请基于已有信息继续完成当前任务。";
@@ -248,12 +237,6 @@ const createGuardedTool = (tool, runtime) => ({
         },
       };
     }
-
-    const signature = `${toolName}:${stableStringify(params || {})}`;
-    if (runtime.toolCallSignatures.has(signature)) {
-      return toToolFailureResult(toolName, new Error(`${toolName} 不允许同一轮重复调用相同参数`));
-    }
-    runtime.toolCallSignatures.add(signature);
 
     try {
       return await tool.execute(toolCallId, params);
@@ -322,7 +305,6 @@ export const startTurn = async (payload, context) => {
     pluginDir: context.pluginDir,
     totalToolCalls: 0,
     toolCallCounts: new Map(),
-    toolCallSignatures: new Set(),
   };
   runtime.systemInfo = createSystemInfo(runtime);
 

@@ -56,10 +56,13 @@ const validateSingleFileSource = ({ source, filePath }) => {
   return configId;
 };
 
-const validateSingleFileCommand = async ({ commandDir, target, pluginId }) => {
-  const filePath = toCommandPath(commandDir, target);
-  const source = await fileLock.readText(filePath);
-  const configId = validateSingleFileSource({ source, filePath });
+const validateSingleFileCommand = ({ target, pluginId, files }) => {
+  if (files.length !== 1) throw new Error("单文件命令只能写入一个文件");
+  const [file] = files;
+  const configId = validateSingleFileSource({
+    source: file.content,
+    filePath: file.relativePath,
+  });
   if (configId !== pluginId) {
     throw new Error(`config.id 与命令 ID 不一致：${configId} !== ${pluginId}`);
   }
@@ -71,34 +74,52 @@ const validateSingleFileCommand = async ({ commandDir, target, pluginId }) => {
   };
 };
 
-const readFolderManifest = async (folderPath) => {
-  const packagePath = toCommandPath(folderPath, "package.json");
-  if (!(await fileLock.pathExists(packagePath))) throw new Error("缺少 package.json");
-  const manifest = await fileLock.readJson(packagePath);
+const createFileMap = (files) => {
+  const fileMap = new Map();
+  for (const file of files) {
+    assertNoDangerousPath(file.relativePath);
+    if (fileMap.has(file.relativePath)) throw new Error(`文件重复：${file.relativePath}`);
+    fileMap.set(file.relativePath, file);
+  }
+  return fileMap;
+};
+
+const readFolderManifest = (fileMap) => {
+  const packageFile = fileMap.get("package.json");
+  if (!packageFile) throw new Error("缺少 package.json");
+  let manifest;
+  try {
+    manifest = JSON.parse(packageFile.content);
+  } catch (error) {
+    throw new Error(`package.json 解析失败：${getErrorMessage(error)}`);
+  }
   if (!manifest?.lookback?.id) throw new Error("package.json 缺少 lookback.id");
   if (!manifest?.lookback?.ui) throw new Error("package.json 缺少 lookback.ui");
   return manifest;
 };
 
-const validateFolderEntry = async ({ folderPath, entry, requireConfig }) => {
+const validateFolderEntry = ({ fileMap, entry, requireConfig }) => {
   const relativePath = normalizeRelativePath(entry);
-  const filePath = toCommandPath(folderPath, relativePath);
-  if (!(await fileLock.pathExists(filePath))) throw new Error(`入口文件不存在：${relativePath}`);
-  const source = await fileLock.readText(filePath);
-  const configId = validateFolderScriptSource({ source, filePath, requireConfig });
+  const file = fileMap.get(relativePath);
+  if (!file) throw new Error(`入口文件不存在：${relativePath}`);
+  const configId = validateFolderScriptSource({
+    source: file.content,
+    filePath: relativePath,
+    requireConfig,
+  });
   return { relativePath, configId };
 };
 
-const validateFolderCommand = async ({ commandDir, target, pluginId }) => {
-  const folderPath = assertInside(commandDir, path.join(commandDir, target));
-  const manifest = await readFolderManifest(folderPath);
+const validateFolderCommand = ({ target, pluginId, files }) => {
+  const fileMap = createFileMap(files);
+  const manifest = readFolderManifest(fileMap);
   const manifestId = String(manifest.lookback.id).trim();
   if (manifestId !== pluginId) {
     throw new Error(`lookback.id 与命令 ID 不一致：${manifestId} !== ${pluginId}`);
   }
 
-  const ui = await validateFolderEntry({
-    folderPath,
+  const ui = validateFolderEntry({
+    fileMap,
     entry: manifest.lookback.ui,
     requireConfig: true,
   });
@@ -108,7 +129,7 @@ const validateFolderCommand = async ({ commandDir, target, pluginId }) => {
 
   const serverEntry = String(manifest.lookback.server || "").trim();
   const server = serverEntry
-    ? await validateFolderEntry({ folderPath, entry: serverEntry, requireConfig: false })
+    ? validateFolderEntry({ fileMap, entry: serverEntry, requireConfig: false })
     : null;
 
   return {
@@ -120,11 +141,11 @@ const validateFolderCommand = async ({ commandDir, target, pluginId }) => {
   };
 };
 
-const validateGeneratedCommand = async ({ commandDir, target, mode, pluginId }) => {
+const validateGeneratedCommand = ({ target, mode, pluginId, files }) => {
   try {
     return mode === "folder"
-      ? await validateFolderCommand({ commandDir, target, pluginId })
-      : await validateSingleFileCommand({ commandDir, target, pluginId });
+      ? validateFolderCommand({ target, pluginId, files })
+      : validateSingleFileCommand({ target, pluginId, files });
   } catch (error) {
     throw new Error(`插件验证失败：${getErrorMessage(error)}`);
   }
@@ -224,7 +245,18 @@ export const createImportPluginTool = (runtime) => ({
   execute: async (_toolCallId, params) => {
     const pluginId = sanitizeCommandName(params.pluginId);
     const mode = params.mode === "folder" ? "folder" : "single-file";
-    const files = params.files.map(normalizeFile);
+    const rawFiles = params.files.map(normalizeFile);
+    const files = mode === "folder" ? ensureFolderManifest(pluginId, rawFiles) : rawFiles;
+    const target =
+      mode === "folder"
+        ? sanitizeCommandName(pluginId)
+        : `${sanitizeCommandName(pluginId)}${path.extname(files[0]?.relativePath || "") || ".jsx"}`;
+    const validation = validateGeneratedCommand({
+      target,
+      mode,
+      pluginId,
+      files,
+    });
     const imported =
       mode === "folder"
         ? await writeFolderCommand({
@@ -239,13 +271,6 @@ export const createImportPluginTool = (runtime) => ({
             files,
             overwrite: params.overwrite === true,
           });
-
-    const validation = await validateGeneratedCommand({
-      commandDir: runtime.commandDir,
-      target: imported.target,
-      mode,
-      pluginId,
-    });
 
     return {
       content: [
