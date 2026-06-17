@@ -26,6 +26,11 @@ import { CanvasToolbar } from "./canvas/CanvasToolbar";
 import { CanvasGroupsLayer } from "./canvas/CanvasGroupsLayer";
 import { SelectOverlay } from "./canvas/SelectOverlay";
 import {
+  createPointerDoubleClickTap,
+  isPointerDoubleClickTap,
+  type PointerDoubleClickTap,
+} from "./canvas/pointerDoubleClick";
+import {
   SelectionRect,
   type SelectionBoxState,
   MIN_ZOOM_AREA,
@@ -64,6 +69,20 @@ type OutgoingImageFileDrag = {
   startedAt: number;
 };
 
+type CanvasViewportSnapshot = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+};
+
+type ViewportRestoreSession = {
+  before: CanvasViewportSnapshot;
+  after: CanvasViewportSnapshot;
+};
+
+const VIEWPORT_RESTORE_EPSILON = 0.001;
 const normalizeLocalFilePathForCompare = (value: string) => {
   const normalized = normalizeImagePath(value).replace(/\/+$/, "");
   const platform = navigator.platform.toLowerCase();
@@ -107,6 +126,24 @@ const getImportUrlHost = (url: string) => {
     return "";
   }
 };
+
+const cloneCanvasViewport = (
+  viewport: CanvasViewportSnapshot,
+): CanvasViewportSnapshot => ({
+  x: viewport.x,
+  y: viewport.y,
+  width: viewport.width,
+  height: viewport.height,
+  scale: viewport.scale,
+});
+
+const areCanvasViewportsEqual = (
+  left: CanvasViewportSnapshot,
+  right: CanvasViewportSnapshot,
+) =>
+  Math.abs(left.x - right.x) <= VIEWPORT_RESTORE_EPSILON &&
+  Math.abs(left.y - right.y) <= VIEWPORT_RESTORE_EPSILON &&
+  Math.abs(left.scale - right.scale) <= VIEWPORT_RESTORE_EPSILON;
 
 type CanvasItemsLayerProps = {
   items: readonly Snapshot<CanvasItem>[];
@@ -344,6 +381,8 @@ export const Canvas: React.FC = () => {
   });
   const outgoingImageFileDragRef = useRef<OutgoingImageFileDrag | null>(null);
   const outgoingImageFileDragTimerRef = useRef<number | null>(null);
+  const viewportRestoreSessionRef = useRef<ViewportRestoreSession | null>(null);
+  const lastCanvasPointerTapRef = useRef<PointerDoubleClickTap | null>(null);
 
   const getCanvasIdleCursor = useMemoizedFn(() => {
     if (!canvasState.isPenMode) return "default";
@@ -698,10 +737,6 @@ export const Canvas: React.FC = () => {
     };
   }, [appSnap.pinMode]);
 
-  const handleContainItem = useMemoizedFn((id: string) => {
-    canvasActions.containCanvasItem(id);
-  });
-
   const clearSelection = useMemoizedFn(() => {
     canvasActions.clearSelectionState();
   });
@@ -888,32 +923,58 @@ export const Canvas: React.FC = () => {
     return cleanup;
   }, []);
 
-  const zoomToBounds = useMemoizedFn(
+  const getViewportForBounds = useMemoizedFn(
     (
       bounds: { x: number; y: number; width: number; height: number },
       padding = 50,
     ) => {
       const { width, height, x: minX, y: minY } = bounds;
 
-      if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+      if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
 
       const containerWidth = canvasState.dimensions.width;
       const containerHeight = canvasState.dimensions.height;
+      if (containerWidth <= 0 || containerHeight <= 0) return null;
+      if (width <= 0 || height <= 0) return null;
 
       const scaleByWidth = (containerWidth - padding * 2) / width;
       const scaleByHeight = (containerHeight - padding * 2) / height;
       const scale = Math.min(scaleByWidth, scaleByHeight);
+      if (!Number.isFinite(scale) || scale <= 0) return null;
 
       const x = (containerWidth - width * scale) / 2 - minX * scale;
       const y = (containerHeight - height * scale) / 2 - minY * scale;
 
-      canvasActions.setCanvasViewport({
+      return {
         x,
         y,
         width: containerWidth,
         height: containerHeight,
         scale,
-      });
+      };
+    },
+  );
+
+  const zoomToBounds = useMemoizedFn(
+    (
+      bounds: { x: number; y: number; width: number; height: number },
+      padding = 50,
+      options?: { trackRestore?: boolean },
+    ) => {
+      const currentViewport = cloneCanvasViewport(canvasState.canvasViewport);
+      const viewport = getViewportForBounds(bounds, padding);
+      if (!viewport) return false;
+      canvasActions.setCanvasViewport(viewport);
+      if (
+        options?.trackRestore &&
+        !areCanvasViewportsEqual(currentViewport, viewport)
+      ) {
+        viewportRestoreSessionRef.current = {
+          before: currentViewport,
+          after: cloneCanvasViewport(viewport),
+        };
+      }
+      return true;
     },
   );
 
@@ -956,33 +1017,6 @@ export const Canvas: React.FC = () => {
     );
   });
 
-  const containCanvasItems = useMemoizedFn(
-    (
-      targetItems: readonly Snapshot<CanvasItem>[],
-      fallbackItemId?: string | null,
-    ) => {
-      if (targetItems.length > 1) {
-        const bbox = getItemsBoundingBox(targetItems);
-        if (bbox) {
-          zoomToBounds(bbox, 0);
-          return true;
-        }
-      }
-
-      if (targetItems.length === 1) {
-        handleContainItem(targetItems[0].itemId);
-        return true;
-      }
-
-      if (fallbackItemId) {
-        handleContainItem(fallbackItemId);
-        return true;
-      }
-
-      return false;
-    },
-  );
-
   const getItemsBoundingBox = useMemoizedFn((items: typeof canvasItems) => {
     if (!items || items.length === 0) return null;
 
@@ -1019,6 +1053,81 @@ export const Canvas: React.FC = () => {
       height: maxY - minY,
     };
   });
+
+  const restoreViewportIfUnchanged = useMemoizedFn(() => {
+    const restoreSession = viewportRestoreSessionRef.current;
+    if (!restoreSession) return false;
+
+    const currentViewport = cloneCanvasViewport(canvasState.canvasViewport);
+    if (!areCanvasViewportsEqual(currentViewport, restoreSession.after)) {
+      viewportRestoreSessionRef.current = null;
+      return false;
+    }
+
+    canvasActions.setCanvasViewport(restoreSession.before);
+    viewportRestoreSessionRef.current = null;
+    return true;
+  });
+
+  const toggleContainCanvasItems = useMemoizedFn(
+    (
+      targetItems: readonly Snapshot<CanvasItem>[],
+      fallbackItemId?: string | null,
+    ) => {
+      if (restoreViewportIfUnchanged()) return true;
+
+      const currentViewport = cloneCanvasViewport(canvasState.canvasViewport);
+      const restoreSession = viewportRestoreSessionRef.current;
+      if (restoreSession) {
+        viewportRestoreSessionRef.current = null;
+      }
+
+      const itemIds = targetItems.map((item) => item.itemId);
+      if (itemIds.length === 0 && fallbackItemId) {
+        itemIds.push(fallbackItemId);
+      }
+      if (itemIds.length === 0) return false;
+
+      if (itemIds.length === 1) {
+        canvasActions.expandCanvasGroupsForItems(itemIds);
+      }
+
+      const idSet = new Set(itemIds);
+      const resolvedItems = canvasState.canvasItems.filter((item) =>
+        idSet.has(item.itemId),
+      );
+      const bbox = getItemsBoundingBox(resolvedItems);
+      if (!bbox) return false;
+
+      const nextViewport = getViewportForBounds(bbox, 0);
+      if (!nextViewport) return false;
+
+      canvasActions.setCanvasViewport(nextViewport);
+      viewportRestoreSessionRef.current = {
+        before: currentViewport,
+        after: cloneCanvasViewport(nextViewport),
+      };
+
+      if (resolvedItems.length === 1) {
+        canvasState.primaryId = null;
+        canvasState.multiSelectUnion = null;
+        resolvedItems[0].isSelected = false;
+      }
+
+      return true;
+    },
+  );
+
+  const handleContainItem = useMemoizedFn((id: string) => {
+    toggleContainCanvasItems([], id);
+  });
+
+  const containCanvasItems = useMemoizedFn(
+    (
+      targetItems: readonly Snapshot<CanvasItem>[],
+      fallbackItemId?: string | null,
+    ) => toggleContainCanvasItems(targetItems, fallbackItemId),
+  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1459,7 +1568,9 @@ export const Canvas: React.FC = () => {
           if (shouldZoom) {
             // 右键框选缩放完成时再清理选中项，避免按下阶段打断已有节点状态。
             clearSelection();
-            zoomToBounds({ x: x1, y: y1, width, height }, 0);
+            zoomToBounds({ x: x1, y: y1, width, height }, 0, {
+              trackRestore: true,
+            });
           } else if (client && !shouldEnableMouseThrough) {
             const local = getLocalPointFromClient(
               client.clientX,
@@ -1509,6 +1620,40 @@ export const Canvas: React.FC = () => {
     },
   );
 
+  const isCanvasBackgroundPointerEvent = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      const target = e.target;
+      return (
+        target instanceof Element &&
+        (target === e.currentTarget || target.id === "canvas-content-layer")
+      );
+    },
+  );
+
+  const isCanvasBackgroundPointerDoubleClick = useMemoizedFn(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (canvasState.isPenMode || e.button !== 0) {
+        lastCanvasPointerTapRef.current = null;
+        return false;
+      }
+      if (!isCanvasBackgroundPointerEvent(e)) {
+        lastCanvasPointerTapRef.current = null;
+        return false;
+      }
+
+      const previousTap = lastCanvasPointerTapRef.current;
+      const currentTap = createPointerDoubleClickTap(e.nativeEvent);
+      lastCanvasPointerTapRef.current = currentTap;
+
+      const isDoubleClick = isPointerDoubleClickTap(currentTap, previousTap);
+      if (isDoubleClick) {
+        lastCanvasPointerTapRef.current = null;
+      }
+
+      return isDoubleClick;
+    },
+  );
+
   const handlePointerDown = useMemoizedFn(
     (e: React.PointerEvent<SVGSVGElement>) => {
       closeContextMenu();
@@ -1518,6 +1663,15 @@ export const Canvas: React.FC = () => {
         (e.button === 0 || e.button === 1 || e.button === 2)
       ) {
         isSpaceContainBlockedRef.current = true;
+      }
+
+      if (
+        !isSpaceDownNow &&
+        isCanvasBackgroundPointerDoubleClick(e) &&
+        restoreViewportIfUnchanged()
+      ) {
+        e.preventDefault();
+        return;
       }
 
       const isSpacePan = isSpaceDownNow && e.button === 0;
@@ -1578,11 +1732,8 @@ export const Canvas: React.FC = () => {
       }
 
       const isLeftButton = e.button === 0;
-      const target = e.target as Element;
-      const isBackground =
-        target === e.currentTarget || target.id === "canvas-content-layer";
 
-      if (isLeftButton && isBackground) {
+      if (isLeftButton && isCanvasBackgroundPointerEvent(e)) {
         e.preventDefault();
         captureCanvasInteractionPointer(e);
         canvasActions.setActiveCanvasGroup(null);
@@ -2032,7 +2183,6 @@ export const Canvas: React.FC = () => {
         if (ev.shiftKey) {
           rotation = Math.round(rotation / 45) * 45;
         }
-
         canvasActions.updateCanvasImageSilent(id, { rotation });
       };
 

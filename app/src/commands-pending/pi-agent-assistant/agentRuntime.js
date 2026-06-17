@@ -3,16 +3,19 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import { createOpenAiCompatibleModel } from "./model.js";
 import { createDeepWikiTool } from "./tools/deepwiki.js";
 import { createImportPluginTool } from "./tools/importPlugin.js";
+import { createSelectedImagePathsTool } from "./tools/selectedImagePaths.js";
 import { createShellTool } from "./tools/shell.js";
 import { createSystemInfo, formatSystemInfoForPrompt } from "./systemInfo.js";
 
 const TASK_TTL_MS = 30 * 60 * 1000;
-const MAX_TOTAL_TOOL_CALLS = 20;
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+const MAX_TOTAL_TOOL_CALLS = 50;
 const TOOL_CALL_LIMITS = {
   deepwiki_search: 3,
   import_plugin: 5,
 };
 const tasks = new Map();
+const sessions = new Map();
 
 const BASE_SYSTEM_PROMPT = `
 你是 Ira，LookBack 的常驻助手。你温和、敏锐、可靠，有一点自己的判断力；你不是复读用户需求的工具，而是会主动把模糊想法整理成清晰工作流、创作方案或可运行产物的协作者。始终使用中文工作，除非用户明确要求其他语言。
@@ -26,17 +29,16 @@ const BASE_SYSTEM_PROMPT = `
 - 面向用户的回答使用 Markdown。图片必须使用标准 Markdown 图片语法：感叹号、方括号图片说明、圆括号 https 图片地址；不要只写图片名或 alt 文本。
 - 语气自然、短促、有人味；说明关键判断，不堆长篇。
 - 每轮都必须有回复说明情况，不能一连串工具调完了，没有任何回复。可以多轮 tool 后统一回复，但不能啥都不回复。
+- 用最高效的方式解决用户问题，不要为了复杂而复杂。
 
 概念：
 插件、命令、拓展功能等，都是指的 LookBack 外部命令
 
 生成 LookBack 外部命令时：
-- 先确认需求边界和现有项目约定，再生成代码。
-- 单文件命令优先参考 llm.txt：https://github.com/moayuisuda/lookback/blob/main/llm.txt
-- 复杂 folder command 优先参考 follow-practice：https://github.com/moayuisuda/lookback/tree/main/app/src/commands-pending/follow-practice
-- 优先用 shell 查看上面提到的远程仓库文件；只有本地信息不足时，才用 deepwiki_search，需要的内容最好一次 ask 完。
-- 一旦 deepwiki_search 或 shell 已经拿到足够信息，必须继续写完整代码；需要生成 LookBack 外部命令时，再调用 import_plugin 导入。
-- import_plugin 失败后必须先根据错误原因修复代码，最多重试一次；不要连续导入同一套未修复方案。
+- 用 shell 查看 https://github.com/moayuisuda/lookback/blob/main/llm.txt 了解如何写插件
+- shell 工具的 command 参数就是完整 shell 命令字符串；需要写长文件时，直接用 shell 把完整文件或文件夹写到临时路径。
+- import_plugin 只接收 sourcePath 文件/文件夹绝对路径，导入成功后会自动清理该临时源路径。
+- import_plugin 失败后必须先根据错误原因修复代码，不要连续导入同一套未修复方案。
 `.trim();
 
 const buildSystemPrompt = (systemInfo) =>
@@ -249,9 +251,108 @@ const createGuardedTool = (tool, runtime) => ({
 const createRuntimeTools = (runtime) =>
   [
     createImportPluginTool(runtime),
+    createSelectedImagePathsTool(runtime),
     createShellTool(runtime),
     createDeepWikiTool(),
   ].map((tool) => createGuardedTool(tool, runtime));
+
+const normalizeSelectedImagePaths = (paths) => {
+  if (!Array.isArray(paths)) return [];
+  return Array.from(
+    new Set(
+      paths
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  );
+};
+
+const setRuntimeTurnContext = (runtime, payload) => {
+  runtime.selectedImagePaths = normalizeSelectedImagePaths(payload?.selectedImagePaths);
+};
+
+const createRuntime = (context, payload) => {
+  const runtime = {
+    storageDir: context.storageDir,
+    commandDir: context.commandDir,
+    pluginDir: context.pluginDir,
+    selectedImagePaths: [],
+    totalToolCalls: 0,
+    toolCallCounts: new Map(),
+  };
+  setRuntimeTurnContext(runtime, payload);
+  runtime.systemInfo = createSystemInfo(runtime);
+  return runtime;
+};
+
+const resetRuntimeTurnLimits = (runtime) => {
+  runtime.totalToolCalls = 0;
+  runtime.toolCallCounts = new Map();
+};
+
+const getSettingsSignature = (settings) =>
+  JSON.stringify({
+    baseUrl: String(settings?.baseUrl || ""),
+    model: String(settings?.model || ""),
+  });
+
+const createAgentSession = ({ conversationId, payload, context }) => {
+  const settings = payload?.settings || {};
+  const runtime = createRuntime(context, payload);
+  const session = {
+    id: conversationId,
+    signature: getSettingsSignature(settings),
+    runtime,
+    apiKey: String(settings.apiKey || "").trim(),
+    agent: null,
+    currentTask: null,
+    updatedAt: Date.now(),
+  };
+
+  const model = createOpenAiCompatibleModel(settings);
+  const agent = new Agent({
+    initialState: {
+      systemPrompt: buildSystemPrompt(runtime.systemInfo),
+      model,
+      messages: parseStoredMessagesForAgent(payload?.messages),
+      tools: createRuntimeTools(runtime),
+      thinkingLevel: "off",
+    },
+    streamFn: streamSimple,
+    getApiKey: () => session.apiKey,
+    toolExecution: "sequential",
+    convertToLlm: (messages) =>
+      normalizeMessagesForLlm(messages),
+  });
+
+  session.agent = agent;
+  agent.subscribe((event) => {
+    const task = session.currentTask;
+    if (!task) return;
+    pushTaskEvent(task, normalizeEvent(event));
+  });
+  sessions.set(conversationId, session);
+  return session;
+};
+
+const getAgentSession = ({ payload, context }) => {
+  const conversationId = String(payload?.conversationId || "").trim();
+  if (!conversationId) throw new Error("缺少 conversationId");
+
+  const settings = payload?.settings || {};
+  const signature = getSettingsSignature(settings);
+  const existing = sessions.get(conversationId);
+  if (existing?.signature === signature) {
+    existing.apiKey = String(settings.apiKey || "").trim();
+    existing.updatedAt = Date.now();
+    setRuntimeTurnContext(existing.runtime, payload);
+    resetRuntimeTurnLimits(existing.runtime);
+    return existing;
+  }
+
+  sessions.delete(conversationId);
+  return createAgentSession({ conversationId, payload, context });
+};
 
 const createTask = () => {
   const task = {
@@ -287,6 +388,10 @@ const cleanupTasks = () => {
     if (task.status === "running") continue;
     if (now - task.updatedAt > TASK_TTL_MS) tasks.delete(taskId);
   }
+  for (const [sessionId, session] of sessions.entries()) {
+    if (session.currentTask?.status === "running") continue;
+    if (now - session.updatedAt > SESSION_TTL_MS) sessions.delete(sessionId);
+  }
 };
 
 export const startTurn = async (payload, context) => {
@@ -297,50 +402,33 @@ export const startTurn = async (payload, context) => {
   if (!apiKey) throw new Error("请先配置 API Key");
   if (!prompt) throw new Error("请输入消息");
 
+  const session = getAgentSession({ payload, context });
+  if (session.currentTask?.status === "running") {
+    throw new Error("当前会话已有任务正在运行");
+  }
+
   const task = createTask();
-  const model = createOpenAiCompatibleModel(settings);
-  const runtime = {
-    storageDir: context.storageDir,
-    commandDir: context.commandDir,
-    pluginDir: context.pluginDir,
-    totalToolCalls: 0,
-    toolCallCounts: new Map(),
-  };
-  runtime.systemInfo = createSystemInfo(runtime);
+  task.agent = session.agent;
+  session.currentTask = task;
+  session.updatedAt = Date.now();
 
-  const agent = new Agent({
-    initialState: {
-      systemPrompt: buildSystemPrompt(runtime.systemInfo),
-      model,
-      messages: parseStoredMessagesForAgent(payload?.messages),
-      tools: createRuntimeTools(runtime),
-      thinkingLevel: "off",
-    },
-    streamFn: streamSimple,
-    getApiKey: () => apiKey,
-    toolExecution: "sequential",
-    convertToLlm: (messages) =>
-      normalizeMessagesForLlm(messages),
-  });
-
-  task.agent = agent;
-  agent.subscribe((event) => {
-    pushTaskEvent(task, normalizeEvent(event));
-  });
-
-  void agent
+  void session.agent
     .prompt(prompt)
     .then(() => {
       task.status = "completed";
       task.result = {
-        messages: toStoredMessages(agent.state.messages),
+        messages: toStoredMessages(session.agent.state.messages),
       };
       task.updatedAt = Date.now();
+      session.updatedAt = Date.now();
+      session.currentTask = null;
     })
     .catch((error) => {
       task.status = "failed";
       task.error = error instanceof Error ? error.message : String(error);
       task.updatedAt = Date.now();
+      session.updatedAt = Date.now();
+      session.currentTask = null;
       pushTaskEvent(task, { type: "error", error: task.error });
     });
 
@@ -370,6 +458,12 @@ export const cancelTurn = async (payload) => {
   task.agent?.abort?.();
   task.status = "cancelled";
   task.updatedAt = Date.now();
+  for (const session of sessions.values()) {
+    if (session.currentTask?.id === taskId) {
+      session.currentTask = null;
+      session.updatedAt = Date.now();
+    }
+  }
   pushTaskEvent(task, { type: "cancelled" });
   return { success: true };
 };

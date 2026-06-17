@@ -9,6 +9,11 @@ import {
 } from "../../store/canvasStore";
 import { CanvasControlButton } from "./CanvasButton";
 import { hexToRgba, THEME } from "../../theme";
+import {
+  createPointerDoubleClickTap,
+  isPointerDoubleClickTap,
+  type PointerDoubleClickTap,
+} from "./pointerDoubleClick";
 
 const TOOLBAR_OFFSET_Y = 16;
 const TOOLBAR_GAP_PX = 22;
@@ -212,6 +217,7 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
     lastX: number;
     lastY: number;
   } | null>(null);
+  const groupPointerTapRef = useRef(new Map<string, PointerDoubleClickTap>());
 
   const layouts = useMemo(() => {
     return groups
@@ -230,6 +236,16 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+
+      const previousTap = groupPointerTapRef.current.get(groupId) ?? null;
+      const currentTap = createPointerDoubleClickTap(e.nativeEvent);
+      groupPointerTapRef.current.set(groupId, currentTap);
+      if (isPointerDoubleClickTap(currentTap, previousTap)) {
+        groupPointerTapRef.current.delete(groupId);
+        onGroupContain(groupId);
+        return;
+      }
+
       const captureTarget = e.currentTarget;
       captureTarget.setPointerCapture(e.pointerId);
       onGroupSelect(groupId);
@@ -393,10 +409,6 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                 vectorEffect="non-scaling-stroke"
                 onPointerDown={bindGroupPointerDown(group.groupId)}
                 style={{ touchAction: "none" }}
-                onDoubleClick={(e) => {
-                  e.stopPropagation();
-                  onGroupContain(group.groupId);
-                }}
               />
             ) : null}
 
@@ -415,10 +427,6 @@ export const CanvasGroupsLayer: React.FC<CanvasGroupsLayerProps> = ({
                   vectorEffect="non-scaling-stroke"
                   onPointerDown={bindGroupPointerDown(group.groupId)}
                   style={{ touchAction: "none" }}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    onGroupContain(group.groupId);
-                  }}
                 />
               </>
             ) : null}

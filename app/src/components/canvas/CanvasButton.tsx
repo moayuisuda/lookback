@@ -1,4 +1,9 @@
-import React from "react";
+import React, { useRef } from "react";
+import {
+  createPointerDoubleClickTap,
+  isPointerDoubleClickTap,
+  type PointerDoubleClickTap,
+} from "./pointerDoubleClick";
 
 interface CanvasControlButtonProps {
   x: number;
@@ -23,7 +28,7 @@ interface CanvasControlButtonProps {
   ) => void;
   onMouseDown?: (e: React.MouseEvent<SVGGElement>) => void;
   onPointerDown?: (e: React.PointerEvent<SVGGElement>) => void;
-  onDoubleClick?: (e: React.MouseEvent<SVGGElement>) => void;
+  onDoubleClick?: (e: React.PointerEvent<SVGGElement>) => void;
   className?: string;
 }
 
@@ -52,6 +57,26 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
   className,
   ...others
 }) => {
+  const lastPointerTapRef = useRef<PointerDoubleClickTap | null>(null);
+
+  const consumePointerDoubleClick = (e: React.PointerEvent<SVGGElement>) => {
+    if (e.button !== 0 || !onDoubleClick) {
+      lastPointerTapRef.current = null;
+      return false;
+    }
+
+    const previousTap = lastPointerTapRef.current;
+    const currentTap = createPointerDoubleClickTap(e.nativeEvent);
+    lastPointerTapRef.current = currentTap;
+
+    const isDoubleClick = isPointerDoubleClickTap(currentTap, previousTap);
+    if (isDoubleClick) {
+      lastPointerTapRef.current = null;
+    }
+
+    return isDoubleClick;
+  };
+
   return (
     <g
       className={className}
@@ -62,16 +87,17 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
         e.stopPropagation();
         onClick?.(e);
       }}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onDoubleClick?.(e);
-      }}
       onMouseDown={(e) => {
         e.stopPropagation();
         onMouseDown?.(e);
       }}
       onPointerDown={(e) => {
         e.stopPropagation();
+        if (consumePointerDoubleClick(e)) {
+          e.preventDefault();
+          onDoubleClick?.(e);
+          return;
+        }
         onPointerDown?.(e);
       }}
     >

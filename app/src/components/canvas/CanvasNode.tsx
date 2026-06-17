@@ -1,8 +1,10 @@
 import React, { useRef } from "react";
 import { canvasState } from "../../store/canvasStore";
-
-const POINTER_DOUBLE_CLICK_MAX_DELAY = 300;
-const POINTER_DOUBLE_CLICK_MAX_DISTANCE = 12;
+import {
+  createPointerDoubleClickTap,
+  isPointerDoubleClickTap,
+  type PointerDoubleClickTap,
+} from "./pointerDoubleClick";
 
 type CanvasNodeActivationEvent =
   | React.MouseEvent<SVGGElement>
@@ -59,12 +61,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     lastClientX: number;
     lastClientY: number;
   } | null>(null);
-  const lastPointerTapRef = useRef<{
-    clientX: number;
-    clientY: number;
-    pointerType: string;
-    timeStamp: number;
-  } | null>(null);
+  const lastPointerTapRef = useRef<PointerDoubleClickTap | null>(null);
 
   const isOutsideWindow = (clientX: number, clientY: number) => {
     return (
@@ -82,29 +79,10 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     }
 
     const previousTap = lastPointerTapRef.current;
-    // 硬件数位板的笔输入不总是合成 dblclick，节点层统一用 pointer 识别双击。
-    lastPointerTapRef.current = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      pointerType: e.pointerType,
-      timeStamp: e.timeStamp,
-    };
+    const currentTap = createPointerDoubleClickTap(e.nativeEvent);
+    lastPointerTapRef.current = currentTap;
 
-    if (!previousTap || previousTap.pointerType !== e.pointerType) {
-      return false;
-    }
-
-    const delay = e.timeStamp - previousTap.timeStamp;
-    const distance = Math.hypot(
-      e.clientX - previousTap.clientX,
-      e.clientY - previousTap.clientY,
-    );
-
-    const isDoubleClick =
-      delay > 0 &&
-      delay <= POINTER_DOUBLE_CLICK_MAX_DELAY &&
-      distance <= POINTER_DOUBLE_CLICK_MAX_DISTANCE;
-
+    const isDoubleClick = isPointerDoubleClickTap(currentTap, previousTap);
     if (isDoubleClick) {
       lastPointerTapRef.current = null;
     }
@@ -139,14 +117,12 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       onSelect(e);
     }
 
-    // Custom onMouseDown handler if provided
     if (onMouseDown) {
       onMouseDown(e);
     }
 
     if (!draggable || !onDragStart || !onDragMove || !onDragEnd) return;
 
-    // Windows 数位笔可能在移动阈值后触发原生拖拽；捕获 pointer 流避免节点拖拽中断。
     e.preventDefault();
     const captureTarget = e.currentTarget;
     captureTarget.setPointerCapture(e.pointerId);

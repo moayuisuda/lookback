@@ -98,6 +98,10 @@ export const fileLock = {
     await this.writeText(filePath, `${JSON.stringify(data, null, 2)}\n`);
   },
 
+  async remove(targetPath) {
+    return this.with(targetPath, () => fs.rm(targetPath, { recursive: true, force: true }));
+  },
+
   async readdir(dirPath) {
     return this.with(dirPath, () => fs.readdir(dirPath, { withFileTypes: true }));
   },

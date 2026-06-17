@@ -4,6 +4,7 @@ const CONVERSATION_KEY = "lookback.command.piAgentAssistant.conversation.v1";
 const DEFAULT_BASE_URL = "https://zenmux.ai/api/v1";
 const DEFAULT_MODEL = "moonshotai/kimi-k2.7-code-free";
 const POLL_INTERVAL_MS = 500;
+const MAX_STORED_TOOL_EVENTS = 120;
 
 export const config = {
   id: COMMAND_ID,
@@ -40,10 +41,10 @@ export const config = {
       "command.piAgentAssistant.assistant": "Assistant",
       "command.piAgentAssistant.tool": "Tool",
       "command.piAgentAssistant.thinking": "Ira is working",
-      "command.piAgentAssistant.imported": "Plugin imported. Reopen the command to refresh the list.",
+      "command.piAgentAssistant.imported": "Plugin imported.",
       "command.piAgentAssistant.error.agentFailed": "Agent failed",
       "toast.command.piAgentAssistant.failed": "Ira failed: {{error}}",
-      "toast.command.piAgentAssistant.imported": "Plugin imported. Reopen the command to refresh the list.",
+      "toast.command.piAgentAssistant.imported": "Plugin imported.",
       "toast.command.piAgentAssistant.cleared": "Conversation cleared",
     },
     zh: {
@@ -73,10 +74,10 @@ export const config = {
       "command.piAgentAssistant.assistant": "助手",
       "command.piAgentAssistant.tool": "工具",
       "command.piAgentAssistant.thinking": "Ira 正在处理",
-      "command.piAgentAssistant.imported": "插件已导入，重新打开命令后刷新列表。",
+      "command.piAgentAssistant.imported": "插件已导入",
       "command.piAgentAssistant.error.agentFailed": "Agent 执行失败",
       "toast.command.piAgentAssistant.failed": "Ira 失败：{{error}}",
-      "toast.command.piAgentAssistant.imported": "插件已导入，重新打开命令后刷新列表",
+      "toast.command.piAgentAssistant.imported": "插件已导入",
       "toast.command.piAgentAssistant.cleared": "对话已清空",
     },
   },
@@ -99,16 +100,27 @@ const saveSettings = (settings) => {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 };
 
-const loadConversation = () => ({
-  messages: parseJson(localStorage.getItem(CONVERSATION_KEY), { messages: [] }).messages || [],
-});
+const createLocalId = (prefix) =>
+  `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
+
+const loadConversation = () => {
+  const stored = parseJson(localStorage.getItem(CONVERSATION_KEY), {
+    sessionId: "",
+    messages: [],
+    toolEvents: [],
+  });
+  return {
+    sessionId: stored.sessionId || createLocalId("conversation"),
+    messages: stored.messages || [],
+    toolEvents: stored.toolEvents || [],
+  };
+};
 
 const saveConversation = (conversation) => {
   localStorage.setItem(CONVERSATION_KEY, JSON.stringify(conversation));
 };
 
-const createTurnId = () =>
-  `turn_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
+const createTurnId = () => createLocalId("turn");
 
 const attachTurnIdToLatestUserMessage = (messages, turnId) => {
   if (!turnId || !Array.isArray(messages)) return messages || [];
@@ -168,11 +180,86 @@ const isImportedPluginEvent = (event) =>
 const isToolEventError = (event) =>
   event?.isError === true || Boolean(event?.result?.details?.toolError);
 
+const isToolExecutionEvent = (event) =>
+  event?.type === "tool_execution_start" || event?.type === "tool_execution_end";
+
+const getToolResultContentText = (result) => {
+  const content = result?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block?.type === "text")
+    .map((block) => String(block.text || "").trim())
+    .filter(Boolean)
+    .join("\n");
+};
+
+const toBriefToolText = (value, maxLength = 420) => {
+  const text = String(value || "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+};
+
+const getShellResultText = (details, t) => {
+  if (!details || typeof details !== "object" || !("success" in details)) return "";
+  if (details.success === true) return t("command.piAgentAssistant.status.completed");
+
+  const codeText = details.timedOut
+    ? "timeout"
+    : [details.code, details.signal].filter((value) => value !== null && value !== undefined).join(" ");
+  const output = [details.stderr, details.stdout]
+    .map((value) => toBriefToolText(value))
+    .filter(Boolean)
+    .join("\n");
+  return t("command.piAgentAssistant.status.failed", {
+    error: output || codeText || "shell failed",
+  });
+};
+
+const getToolEventRows = (events) => {
+  const rows = [];
+  const indexByToolCallId = new Map();
+
+  events.forEach((event, index) => {
+    if (isToolExecutionEvent(event) && event.toolCallId) {
+      const existingIndex = indexByToolCallId.get(event.toolCallId);
+      if (existingIndex === undefined) {
+        indexByToolCallId.set(event.toolCallId, rows.length);
+        rows.push({ ...event, rowKey: event.toolCallId });
+        return;
+      }
+
+      const previous = rows[existingIndex];
+      rows[existingIndex] = {
+        ...previous,
+        ...event,
+        toolName: event.toolName || previous.toolName,
+        rowKey: previous.rowKey,
+      };
+      return;
+    }
+
+    rows.push({
+      ...event,
+      rowKey: `${event.type}-${event.toolCallId || index}`,
+    });
+  });
+
+  return rows;
+};
+
 const getToolEventText = (event, t) => {
   if (event.type === "tool_execution_start") return t("command.piAgentAssistant.status.running");
-  if (!isToolEventError(event)) return t("command.piAgentAssistant.status.completed");
-  const message = event.result?.details?.toolError?.message || "";
-  return t("command.piAgentAssistant.status.failed", { error: message });
+  const contentText = getToolResultContentText(event.result);
+  if (isToolEventError(event)) {
+    const message = event.result?.details?.toolError?.message || contentText;
+    return t("command.piAgentAssistant.status.failed", { error: message });
+  }
+  if (event.toolName === "shell") {
+    const shellText = getShellResultText(event.result?.details, t);
+    if (shellText) return shellText;
+  }
+  if (event.result?.details?.limited) return toBriefToolText(contentText);
+  return t("command.piAgentAssistant.status.completed");
 };
 
 const getToolEventDebugText = (event) => {
@@ -182,6 +269,34 @@ const getToolEventDebugText = (event) => {
   const text = JSON.stringify(payload, null, 2);
   if (text.length <= 8000) return text;
   return `${text.slice(0, 8000)}\n...[debug output truncated]`;
+};
+
+const getSelectedImagePathSnapshot = async (context) => {
+  const canvasState = context.store.canvas;
+  const canvasActions = context.actions.canvasActions;
+  const items = canvasState.canvasItems || [];
+  const activeGroup = (canvasState.canvasGroups || []).find(
+    (group) => group.groupId === canvasState.activeCanvasGroupId,
+  );
+  const activeGroupItemIds = new Set(activeGroup?.items || []);
+  const selectedImages = items.filter(
+    (item) =>
+      item?.type === "image" &&
+      item.imagePath &&
+      (item.isSelected || activeGroupItemIds.has(item.itemId)),
+  );
+  const paths = [];
+
+  for (const image of selectedImages) {
+    const rawPath = String(image.imagePath || "").trim();
+    if (!rawPath) continue;
+    const resolvedPath = await canvasActions
+      .resolveLocalImagePath(rawPath, canvasState.currentCanvasName)
+      .catch(() => rawPath);
+    paths.push(resolvedPath || rawPath);
+  }
+
+  return Array.from(new Set(paths.filter(Boolean)));
 };
 
 const isSafeResourceUrl = (value) => {
@@ -593,6 +708,19 @@ const ensureStyles = () => {
       gap: 8px;
       color: #d4d4d4;
     }
+    .pi-agent-thinking-inline {
+      max-width: min(920px, 86%);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 12px;
+      border: 1px solid rgba(103, 232, 249, 0.24);
+      border-radius: 8px;
+      background: rgba(14, 116, 144, 0.08);
+      padding: 8px 10px;
+      color: #d4d4d4;
+      font-size: 12px;
+    }
     .pi-agent-loading-dots {
       display: inline-flex;
       gap: 4px;
@@ -719,9 +847,9 @@ const ensureStyles = () => {
       padding-bottom: 12px;
     }
     .pi-agent-tool-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
       border: 1px solid #262626;
       border-radius: 8px;
       background: rgba(38, 38, 38, 0.55);
@@ -730,8 +858,26 @@ const ensureStyles = () => {
       font-size: 12px;
       color: #d4d4d4;
     }
+    .pi-agent-tool-name {
+      min-width: 0;
+      color: #f5f5f5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pi-agent-tool-status {
+      display: block;
+      min-width: 0;
+      max-height: 220px;
+      overflow: auto;
+      color: #bdbdbd;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .pi-agent-tool-debug {
-      grid-column: 1 / -1;
       max-height: 260px;
       overflow: auto;
       margin: 2px 0 0;
@@ -837,7 +983,7 @@ export const ui = ({ context, plugin }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
-  const [toolEvents, setToolEvents] = useState([]);
+  const [toolEvents, setToolEvents] = useState(() => conversation.toolEvents || []);
   const [runningToolCallIds, setRunningToolCallIds] = useState([]);
   const taskRef = useRef({ taskId: "", cursor: 0, cancelled: false });
   const settingsRef = useRef(settings);
@@ -853,9 +999,27 @@ export const ui = ({ context, plugin }) => {
   };
 
   const writeConversation = (next) => {
-    conversationRef.current = next;
-    saveConversation(next);
-    setConversation(next);
+    const normalized = {
+      sessionId: next.sessionId || conversationRef.current.sessionId || createLocalId("conversation"),
+      messages: next.messages || [],
+      toolEvents: next.toolEvents || conversationRef.current.toolEvents || [],
+    };
+    conversationRef.current = normalized;
+    saveConversation(normalized);
+    setConversation(normalized);
+    setToolEvents(normalized.toolEvents);
+  };
+
+  const writeToolEvents = (updater) => {
+    const previous = conversationRef.current.toolEvents || [];
+    const next = updater(previous).slice(-MAX_STORED_TOOL_EVENTS);
+    conversationRef.current = {
+      ...conversationRef.current,
+      toolEvents: next,
+    };
+    saveConversation(conversationRef.current);
+    setConversation(conversationRef.current);
+    setToolEvents(next);
   };
 
   const appendToolEvent = (event) => {
@@ -868,7 +1032,7 @@ export const ui = ({ context, plugin }) => {
     if (event.type === "tool_execution_end" && event.toolCallId) {
       setRunningToolCallIds((ids) => ids.filter((id) => id !== event.toolCallId));
     }
-    setToolEvents((items) => [...items.slice(-20), { ...event, turnId }]);
+    writeToolEvents((items) => [...items, { ...event, turnId }]);
   };
 
   const setDraft = (value) => {
@@ -884,7 +1048,11 @@ export const ui = ({ context, plugin }) => {
     setDraftText(value);
   };
 
-  const notifyImportedPlugin = () => {
+  const notifyImportedPlugin = (event) => {
+    const dirtyCommand = event?.result?.details?.importedPlugin?.dirtyCommand;
+    if (dirtyCommand) {
+      actions.commandActions.markExternalCommandDirty(dirtyCommand);
+    }
     actions.globalActions.pushToast(
       { key: "toast.command.piAgentAssistant.imported" },
       "success",
@@ -915,14 +1083,11 @@ export const ui = ({ context, plugin }) => {
       if (event.type === "message_update" && event.delta) {
         setDraft((value) => `${value}${event.delta}`);
       }
-      if (event.type === "message_start" && event.role === "assistant") {
-        setDraft("");
-      }
       if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
         appendToolEvent(event);
       }
       if (isImportedPluginEvent(event)) {
-        notifyImportedPlugin();
+        notifyImportedPlugin(event);
       }
     }
   };
@@ -988,10 +1153,13 @@ export const ui = ({ context, plugin }) => {
         ],
       };
       writeConversation(optimistic);
+      const selectedImagePaths = await getSelectedImagePathSnapshot(context);
       const started = await plugin.invoke("startTurn", {
+        conversationId: conversationRef.current.sessionId,
         settings: settingsRef.current,
         messages: conversationRef.current.messages.slice(0, -1),
         prompt,
+        selectedImagePaths,
       });
       taskRef.current = { taskId: started.taskId, cursor: 0, cancelled: false, turnId };
       await pollTask(started.taskId);
@@ -1022,10 +1190,13 @@ export const ui = ({ context, plugin }) => {
   };
 
   const handleClear = () => {
-    const next = { messages: [] };
+    const next = {
+      sessionId: createLocalId("conversation"),
+      messages: [],
+      toolEvents: [],
+    };
     writeConversation(next);
     setDraft("");
-    setToolEvents([]);
     setRunningToolCallIds([]);
     actions.globalActions.pushToast(
       { key: "toast.command.piAgentAssistant.cleared" },
@@ -1038,10 +1209,14 @@ export const ui = ({ context, plugin }) => {
     const target = conversationRef.current.messages[index];
     if (!target) return;
     const nextMessages = conversationRef.current.messages.filter((_, itemIndex) => itemIndex !== index);
-    writeConversation({ messages: nextMessages });
-    if (target.turnId) {
-      setToolEvents((items) => items.filter((event) => event.turnId !== target.turnId));
-    }
+    const nextToolEvents = target.turnId
+      ? (conversationRef.current.toolEvents || []).filter((event) => event.turnId !== target.turnId)
+      : conversationRef.current.toolEvents || [];
+    writeConversation({
+      sessionId: createLocalId("conversation"),
+      messages: nextMessages,
+      toolEvents: nextToolEvents,
+    });
   };
 
   const handleInputKeyDown = (event) => {
@@ -1054,19 +1229,23 @@ export const ui = ({ context, plugin }) => {
   const messages = conversation.messages || [];
   const statusText = t(status.key, status.params);
   const iraState = getIraState(status.key);
-  const showLoadingMessage = isRunning && (!draftText || runningToolCallIds.length > 0);
+  const showToolThinkingInline = Boolean(draftText) && runningToolCallIds.length > 0;
+  const showLoadingMessage = isRunning && !draftText;
   const renderToolEvents = (turnId) => {
     const events = toolEvents.filter((event) => event.turnId && event.turnId === turnId);
-    if (events.length === 0) return null;
+    const rows = getToolEventRows(events);
+    if (rows.length === 0) return null;
     return (
       <section className="pi-agent-tools">
         <div className="pi-agent-label">{t("command.piAgentAssistant.tools")}</div>
-        {events.map((event, index) => {
+        {rows.map((event) => {
           const debugText = settings.debug === true ? getToolEventDebugText(event) : "";
           return (
-            <div className="pi-agent-tool-row" key={`${event.type}-${event.toolCallId || index}`}>
-              <span>{event.toolName || t("command.piAgentAssistant.tool")}</span>
-              <span>{getToolEventText(event, t)}</span>
+            <div className="pi-agent-tool-row" key={event.rowKey}>
+              <span className="pi-agent-tool-name">
+                {event.toolName || t("command.piAgentAssistant.tool")}
+              </span>
+              <span className="pi-agent-tool-status">{getToolEventText(event, t)}</span>
               {debugText ? <pre className="pi-agent-tool-debug">{debugText}</pre> : null}
             </div>
           );
@@ -1226,6 +1405,16 @@ export const ui = ({ context, plugin }) => {
                     {renderMarkdown(React, draftText)}
                   </div>
                 </article>
+              ) : null}
+              {showToolThinkingInline ? (
+                <div className="pi-agent-thinking-inline">
+                  {t("command.piAgentAssistant.thinking")}
+                  <span className="pi-agent-loading-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
               ) : null}
               {showLoadingMessage ? (
                 <article className="pi-agent-message pi-agent-message--loading">
