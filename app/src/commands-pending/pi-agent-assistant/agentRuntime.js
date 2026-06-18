@@ -35,7 +35,7 @@ const BASE_SYSTEM_PROMPT = `
 插件、命令、拓展功能等，都是指的 LookBack 外部命令
 
 生成 LookBack 外部命令时：
-- 用 shell 查看 https://github.com/moayuisuda/lookback/blob/main/llm.txt 了解如何写插件
+- 用 shell 查看 https://github.com/moayuisuda/lookback/blob/main/llm.txt 了解如何写插件，只可使用前面文档的单文件 jsx 形式，不可使用文件夹形式的插件（不对外）。
 - shell 工具的 command 参数就是完整 shell 命令字符串；需要写长文件时，直接用 shell 把完整文件或文件夹写到临时路径。
 - import_plugin 只接收 sourcePath 文件/文件夹绝对路径，导入成功后会自动清理该临时源路径。
 - import_plugin 失败后必须先根据错误原因修复代码，不要连续导入同一套未修复方案。
@@ -58,49 +58,226 @@ const getMessageText = (message) => {
     .join("");
 };
 
-const toStoredMessages = (messages) =>
-  Array.isArray(messages)
-    ? messages
-        .map((message) => {
-          const role = String(message?.role || "");
-          if (role !== "user" && role !== "assistant") return null;
-          const text = getMessageText(message).trim();
-          if (!text) return null;
-          const next = {
-            role,
-            content: text,
-          };
-          if (message.timestamp) next.timestamp = message.timestamp;
-          if (message.turnId) next.turnId = message.turnId;
-          if (
-            role === "assistant" &&
-            (message.stopReason === "error" || message.stopReason === "aborted")
-          ) {
-            next.stopReason = message.stopReason;
-            next.errorMessage = text;
-          }
-          return next;
-        })
-        .filter(Boolean)
-    : [];
+const createEmptyUsage = () => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+});
 
-const parseStoredMessagesForAgent = (messages) =>
-  toStoredMessages(messages).map((message) => ({
-    ...message,
-    content: [{ type: "text", text: getMessageText(message) }],
-  }));
+const cloneJsonValue = (value) => {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+};
+
+const toContentBlocks = (content, allowedTypes) => {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object" || !allowedTypes.has(block.type)) return null;
+      return cloneJsonValue(block);
+    })
+    .filter(Boolean);
+};
+
+const getStoredAssistantContent = (message) => {
+  const content = toContentBlocks(message.content, new Set(["text", "thinking", "toolCall"]));
+  const hasVisibleText = content.some((block) => block.type === "text" && block.text?.trim());
+  if (content.length > 0 && (hasVisibleText || content.some((block) => block.type === "toolCall"))) {
+    return content;
+  }
+  const text = getMessageText(message).trim();
+  return text ? [{ type: "text", text }] : [];
+};
+
+const withCommonMessageFields = (target, message) => {
+  if (message.timestamp) target.timestamp = message.timestamp;
+  if (message.turnId) target.turnId = message.turnId;
+  return target;
+};
+
+const toStoredMessage = (message) => {
+  if (!message || typeof message !== "object") return null;
+  const role = String(message.role || "");
+  if (role === "user") {
+    const content = Array.isArray(message.content)
+      ? toContentBlocks(message.content, new Set(["text", "image"]))
+      : getMessageText(message).trim();
+    if ((Array.isArray(content) && content.length === 0) || (!Array.isArray(content) && !content)) return null;
+    return withCommonMessageFields({ role, content }, message);
+  }
+
+  if (role === "assistant") {
+    const content = getStoredAssistantContent(message);
+    if (content.length === 0) return null;
+    const next = withCommonMessageFields(
+      {
+        role,
+        content,
+        api: message.api,
+        provider: message.provider,
+        model: message.model,
+        responseModel: message.responseModel,
+        responseId: message.responseId,
+        diagnostics: cloneJsonValue(message.diagnostics),
+        usage: cloneJsonValue(message.usage),
+        stopReason: message.stopReason || "stop",
+      },
+      message,
+    );
+    if (message.errorMessage) next.errorMessage = String(message.errorMessage);
+    return next;
+  }
+
+  if (role === "toolResult") {
+    const content = toContentBlocks(message.content, new Set(["text", "image"]));
+    if (!message.toolCallId || !message.toolName || content.length === 0) return null;
+    return withCommonMessageFields(
+      {
+        role,
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        content,
+        details: cloneJsonValue(message.details),
+        isError: message.isError === true,
+      },
+      message,
+    );
+  }
+
+  return null;
+};
+
+const toStoredMessages = (messages) =>
+  Array.isArray(messages) ? messages.map(toStoredMessage).filter(Boolean) : [];
+
+const hasToolTranscriptForTurn = (messages, turnId) =>
+  messages.some(
+    (message) =>
+      message?.turnId === turnId &&
+      (message.role === "toolResult" ||
+        (message.role === "assistant" &&
+          Array.isArray(message.content) &&
+          message.content.some((block) => block?.type === "toolCall"))),
+  );
+
+const getToolResultContent = (result) => {
+  const content = toContentBlocks(result?.content, new Set(["text", "image"]));
+  if (content.length > 0) return content;
+  const text = getToolResultContentText(result);
+  return text ? [{ type: "text", text }] : [];
+};
+
+const getToolCallsByTurn = (toolEvents) => {
+  const callsByTurn = new Map();
+  for (const event of Array.isArray(toolEvents) ? toolEvents : []) {
+    if (!event?.turnId || !event.toolCallId) continue;
+    if (event.type !== "tool_execution_start" && event.type !== "tool_execution_end") continue;
+
+    const calls = callsByTurn.get(event.turnId) || [];
+    let call = calls.find((item) => item.toolCallId === event.toolCallId);
+    if (!call) {
+      call = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName || "",
+        args: {},
+        result: null,
+        isError: false,
+      };
+      calls.push(call);
+      callsByTurn.set(event.turnId, calls);
+    }
+
+    if (event.toolName) call.toolName = event.toolName;
+    if (event.type === "tool_execution_start") call.args = cloneJsonValue(event.args || {});
+    if (event.type === "tool_execution_end") {
+      call.result = event.result || null;
+      call.isError = event.isError === true;
+    }
+  }
+  return callsByTurn;
+};
+
+const createToolTranscriptMessages = (turnId, calls, model, timestamp) => {
+  const completedCalls = calls
+    .map((call) => {
+      const content = getToolResultContent(call.result);
+      if (!call.toolName || content.length === 0) return null;
+      return {
+        ...call,
+        content,
+      };
+    })
+    .filter(Boolean);
+  if (completedCalls.length === 0) return [];
+
+  return [
+    {
+      role: "assistant",
+      content: completedCalls.map((call) => ({
+        type: "toolCall",
+        id: call.toolCallId,
+        name: call.toolName,
+        arguments: call.args || {},
+      })),
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: createEmptyUsage(),
+      stopReason: "toolUse",
+      timestamp,
+      turnId,
+    },
+    ...completedCalls.map((call, index) => ({
+      role: "toolResult",
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      content: call.content,
+      details: cloneJsonValue(call.result?.details),
+      isError: call.isError,
+      timestamp: timestamp + index + 1,
+      turnId,
+    })),
+  ];
+};
+
+const restoreToolTranscriptFromEvents = (messages, toolEvents, model) => {
+  const storedMessages = toStoredMessages(messages);
+  const callsByTurn = getToolCallsByTurn(toolEvents);
+  if (callsByTurn.size === 0) return storedMessages;
+
+  const restored = [];
+  for (const message of storedMessages) {
+    restored.push(message);
+    if (message.role !== "user" || !message.turnId) continue;
+    if (hasToolTranscriptForTurn(storedMessages, message.turnId)) continue;
+
+    restored.push(
+      ...createToolTranscriptMessages(
+        message.turnId,
+        callsByTurn.get(message.turnId) || [],
+        model,
+        Number(message.timestamp || Date.now()) + 1,
+      ),
+    );
+  }
+  return restored;
+};
 
 const normalizeMessageForLlm = (message) => {
   if (!message || typeof message !== "object") return null;
   const role = String(message.role || "");
-  if (role !== "user" && role !== "assistant") return message;
-  if (Array.isArray(message.content)) return message;
-  const text = getMessageText(message).trim();
-  if (!text) return null;
-  return {
-    ...message,
-    content: [{ type: "text", text }],
-  };
+  if (role !== "user" && role !== "assistant" && role !== "toolResult") return message;
+  return toStoredMessage(message);
 };
 
 const normalizeMessagesForLlm = (messages) =>
@@ -314,7 +491,7 @@ const createAgentSession = ({ conversationId, payload, context }) => {
     initialState: {
       systemPrompt: buildSystemPrompt(runtime.systemInfo),
       model,
-      messages: parseStoredMessagesForAgent(payload?.messages),
+      messages: restoreToolTranscriptFromEvents(payload?.messages, payload?.toolEvents, model),
       tools: createRuntimeTools(runtime),
       thinkingLevel: "off",
     },

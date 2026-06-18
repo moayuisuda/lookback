@@ -144,7 +144,7 @@ export const createShellTool = (runtime = {}) => ({
   description: [
     "直接执行一整段 shell 命令字符串，可用于搜索、联网请求、文件处理、脚本执行和其他开放任务。",
     ...getShellDescriptionRules(),
-    "需要写入长文件时，直接生成 shell 脚本把文件写到临时路径，再把该路径交给 import_plugin。",
+    "需要写入命令时，直接生成 shell 脚本把单个 .jsx 文件写到临时路径，再把该文件路径交给 import_plugin。",
     `系统信息：${formatSystemInfoForToolDescription(runtime.systemInfo || {})}`,
   ].join(" "),
   parameters: Type.Object({

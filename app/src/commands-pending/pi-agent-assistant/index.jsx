@@ -122,16 +122,14 @@ const saveConversation = (conversation) => {
 
 const createTurnId = () => createLocalId("turn");
 
-const attachTurnIdToLatestUserMessage = (messages, turnId) => {
+const attachTurnIdToLatestTurn = (messages, turnId) => {
   if (!turnId || !Array.isArray(messages)) return messages || [];
-  let attached = false;
-  return [...messages].reverse().map((message) => {
-    if (!attached && message?.role === "user") {
-      attached = true;
-      return { ...message, turnId: message.turnId || turnId };
-    }
-    return message;
-  }).reverse();
+  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
+  if (latestUserIndex < 0) return messages;
+  return messages.map((message, index) => {
+    if (index < latestUserIndex) return message;
+    return { ...message, turnId: message.turnId || turnId };
+  });
 };
 
 const getMessageText = (message) => {
@@ -168,11 +166,24 @@ const getIraCat = (state) => {
 };
 
 const getLastAssistantError = (messages) => {
-  const lastMessage = Array.isArray(messages) ? messages[messages.length - 1] : null;
+  const lastMessage = Array.isArray(messages)
+    ? [...messages].reverse().find((message) => message?.role === "assistant")
+    : null;
   if (lastMessage?.role !== "assistant") return "";
   if (lastMessage.stopReason !== "error" && lastMessage.stopReason !== "aborted") return "";
   return String(lastMessage.errorMessage || lastMessage.stopReason || "").trim();
 };
+
+const isVisibleMessage = (message) => {
+  if (message?.role === "user") return true;
+  if (message?.role !== "assistant") return false;
+  return getMessageText(message).trim().length > 0;
+};
+
+const getVisibleMessages = (messages) =>
+  (Array.isArray(messages) ? messages : [])
+    .map((message, index) => ({ message, index }))
+    .filter((item) => isVisibleMessage(item.message));
 
 const isImportedPluginEvent = (event) =>
   event?.type === "tool_execution_end" && Boolean(event?.result?.details?.importedPlugin);
@@ -984,7 +995,6 @@ export const ui = ({ context, plugin }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
   const [toolEvents, setToolEvents] = useState(() => conversation.toolEvents || []);
-  const [runningToolCallIds, setRunningToolCallIds] = useState([]);
   const taskRef = useRef({ taskId: "", cursor: 0, cancelled: false });
   const settingsRef = useRef(settings);
   const conversationRef = useRef(conversation);
@@ -1024,14 +1034,6 @@ export const ui = ({ context, plugin }) => {
 
   const appendToolEvent = (event) => {
     const turnId = taskRef.current.turnId || "";
-    if (event.type === "tool_execution_start" && event.toolCallId) {
-      setRunningToolCallIds((ids) =>
-        ids.includes(event.toolCallId) ? ids : [...ids, event.toolCallId],
-      );
-    }
-    if (event.type === "tool_execution_end" && event.toolCallId) {
-      setRunningToolCallIds((ids) => ids.filter((id) => id !== event.toolCallId));
-    }
     writeToolEvents((items) => [...items, { ...event, turnId }]);
   };
 
@@ -1102,7 +1104,7 @@ export const ui = ({ context, plugin }) => {
       await consumeEvents(payload.events || []);
 
       if (payload.status === "completed") {
-        const nextMessages = attachTurnIdToLatestUserMessage(
+        const nextMessages = attachTurnIdToLatestTurn(
           payload.result?.messages || conversationRef.current.messages,
           taskRef.current.turnId,
         );
@@ -1118,7 +1120,6 @@ export const ui = ({ context, plugin }) => {
           setStatus({ key: "command.piAgentAssistant.status.completed" });
         }
         setIsRunning(false);
-        setRunningToolCallIds([]);
         return;
       }
       if (payload.status === "failed") {
@@ -1127,7 +1128,6 @@ export const ui = ({ context, plugin }) => {
       if (payload.status === "cancelled") {
         setStatus({ key: "command.piAgentAssistant.status.cancelled" });
         setIsRunning(false);
-        setRunningToolCallIds([]);
         return;
       }
 
@@ -1143,7 +1143,6 @@ export const ui = ({ context, plugin }) => {
       setInput("");
       setIsRunning(true);
       setDraft("");
-      setRunningToolCallIds([]);
       setStatus({ key: "command.piAgentAssistant.status.running" });
       taskRef.current = { taskId: "", cursor: 0, cancelled: false, turnId };
       const optimistic = {
@@ -1158,6 +1157,7 @@ export const ui = ({ context, plugin }) => {
         conversationId: conversationRef.current.sessionId,
         settings: settingsRef.current,
         messages: conversationRef.current.messages.slice(0, -1),
+        toolEvents: conversationRef.current.toolEvents || [],
         prompt,
         selectedImagePaths,
       });
@@ -1172,7 +1172,6 @@ export const ui = ({ context, plugin }) => {
         params: { error: message },
       });
       setIsRunning(false);
-      setRunningToolCallIds([]);
       actions.globalActions.pushToast(
         { key: "toast.command.piAgentAssistant.failed", params: { error: message } },
         "error",
@@ -1185,7 +1184,6 @@ export const ui = ({ context, plugin }) => {
     taskRef.current.cancelled = true;
     if (taskId) await plugin.invoke("cancelTurn", { taskId });
     setIsRunning(false);
-    setRunningToolCallIds([]);
     setStatus({ key: "command.piAgentAssistant.status.cancelled" });
   };
 
@@ -1197,7 +1195,6 @@ export const ui = ({ context, plugin }) => {
     };
     writeConversation(next);
     setDraft("");
-    setRunningToolCallIds([]);
     actions.globalActions.pushToast(
       { key: "toast.command.piAgentAssistant.cleared" },
       "success",
@@ -1208,7 +1205,9 @@ export const ui = ({ context, plugin }) => {
     if (isRunning) return;
     const target = conversationRef.current.messages[index];
     if (!target) return;
-    const nextMessages = conversationRef.current.messages.filter((_, itemIndex) => itemIndex !== index);
+    const nextMessages = target.turnId
+      ? conversationRef.current.messages.filter((message) => message.turnId !== target.turnId)
+      : conversationRef.current.messages.filter((_, itemIndex) => itemIndex !== index);
     const nextToolEvents = target.turnId
       ? (conversationRef.current.toolEvents || []).filter((event) => event.turnId !== target.turnId)
       : conversationRef.current.toolEvents || [];
@@ -1227,9 +1226,10 @@ export const ui = ({ context, plugin }) => {
   };
 
   const messages = conversation.messages || [];
+  const visibleMessages = getVisibleMessages(messages);
   const statusText = t(status.key, status.params);
   const iraState = getIraState(status.key);
-  const showToolThinkingInline = Boolean(draftText) && runningToolCallIds.length > 0;
+  const showToolThinkingInline = isRunning && Boolean(draftText);
   const showLoadingMessage = isRunning && !draftText;
   const renderToolEvents = (turnId) => {
     const events = toolEvents.filter((event) => event.turnId && event.turnId === turnId);
@@ -1270,12 +1270,11 @@ export const ui = ({ context, plugin }) => {
     });
     return () => cancelAnimationFrame(frame);
   }, [
-    messages.length,
+    visibleMessages.length,
     draftText,
     toolEvents.length,
     status.key,
     isRunning,
-    runningToolCallIds.length,
   ]);
 
   return (
@@ -1349,14 +1348,14 @@ export const ui = ({ context, plugin }) => {
 
       <main className="pi-agent-main">
         <div className="pi-agent-scroll" ref={scrollRef}>
-          {messages.length === 0 && !draftText && !showLoadingMessage ? (
+          {visibleMessages.length === 0 && !draftText && !showLoadingMessage ? (
             <div className="pi-agent-empty">
               <div>{t("command.piAgentAssistant.empty")}</div>
               <div>{t("command.piAgentAssistant.emptyHint")}</div>
             </div>
           ) : (
             <>
-              {messages.map((message, index) => {
+              {visibleMessages.map(({ message, index }) => {
                 const role = String(message.role || "");
                 const text = getMessageText(message);
                 if (!text && role !== "user") return null;

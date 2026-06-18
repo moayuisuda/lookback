@@ -53,7 +53,8 @@ export const formatSystemInfoForPrompt = (systemInfo) =>
     `- pluginDir: ${systemInfo.pluginDir}`,
     "- shell 工具的 command 参数接收完整 shell 命令字符串，默认工作目录由 currentWorkingDirectory 指定。",
     "- 涉及 LookBack 外部命令写入、验证、查找时使用 commandDir / pluginDir，不要猜路径。",
-    "- 生成外部命令时先用 shell 写入临时文件或文件夹，再把绝对路径交给 import_plugin；import_plugin 导入成功后会清理临时源路径。",
+    "- 生成外部命令时先用 shell 写入单个临时 .jsx 文件，再把该文件绝对路径交给 import_plugin；",
+    "- import_plugin 只接收单个 .jsx 文件；导入成功后会清理临时源文件。",
     ...getShellPromptRules(systemInfo),
   ].join("\n");
 
