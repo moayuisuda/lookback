@@ -13,4 +13,4 @@
 
 Release:
 先 commit 所有内容
-执行 scripts/release-tag.sh v当前版本号末尾+1
+bash 执行 scripts/release-tag.sh v当前版本号末尾+1

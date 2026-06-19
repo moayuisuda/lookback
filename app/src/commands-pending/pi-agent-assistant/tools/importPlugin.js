@@ -11,8 +11,17 @@ const MAX_FILE_SIZE = 1024 * 1024;
 const COMMAND_FILE_EXTENSION = ".jsx";
 const SOURCE_FRAME_RADIUS = 3;
 const ROOT_FOLDER = "__root__";
-const COMMAND_ID_PATTERN =
-  /export\s+const\s+config\s*=\s*{[\s\S]*?\bid\s*:\s*['"`]([^'"`]+)['"`]/;
+const SCRIPT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx"]);
+const SKIPPED_PLUGIN_DIRS = new Set(["node_modules", ".lookback-esm", ".lookback-cjs", ".git"]);
+const COMMAND_CONFIG_PATTERN = /export\s+const\s+config\s*=\s*{([\s\S]*?)^\s*};/m;
+const COMMAND_ID_PROPERTY_PATTERN =
+  /\bid\s*:\s*(?:['"`]([^'"`${}]+)['"`]|([A-Za-z_$][\w$]*))/;
+const STRING_CONST_PATTERN = (name) =>
+  new RegExp(
+    "\\bconst\\s+" +
+      name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+      "\\s*=\\s*['\"`]([^'\"`${}]+)['\"`]",
+  );
 
 const getErrorMessage = (error) =>
   error instanceof Error ? error.message : String(error);
@@ -23,7 +32,72 @@ const isSamePath = (first, second) => {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 };
 
-const extractCommandId = (source) => COMMAND_ID_PATTERN.exec(source)?.[1]?.trim() || "";
+const extractCommandId = (source) => {
+  const configBody = COMMAND_CONFIG_PATTERN.exec(source)?.[1] || "";
+  const match = COMMAND_ID_PROPERTY_PATTERN.exec(configBody);
+  if (!match) return "";
+  if (match[1]) return match[1].trim();
+
+  const identifier = match[2];
+  if (!identifier) return "";
+  return STRING_CONST_PATTERN(identifier).exec(source)?.[1]?.trim() || "";
+};
+
+const isScriptFile = (filePath) =>
+  SCRIPT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+
+const readTextOptional = async (filePath) => {
+  try {
+    return await fileLock.readText(filePath);
+  } catch {
+    return "";
+  }
+};
+
+const readJsonOptional = async (filePath) => {
+  try {
+    return await fileLock.readJson(filePath);
+  } catch {
+    return null;
+  }
+};
+
+const readScriptCommandId = async (filePath) => {
+  const source = await readTextOptional(filePath);
+  return source ? extractCommandId(source) : "";
+};
+
+const readDirectoryCommandId = async (dirPath) => {
+  const manifest = await readJsonOptional(path.join(dirPath, "package.json"));
+  const manifestId = String(manifest?.lookback?.id || "").trim();
+  return manifestId;
+};
+
+const readExistingCommandIds = async (commandDir) => {
+  const entries = await fileLock.readdir(commandDir).catch(() => []);
+  const ids = [];
+
+  for (const entry of entries) {
+    const entryPath = assertInside(commandDir, path.join(commandDir, entry.name));
+    if (entry.isFile() && isScriptFile(entryPath)) {
+      const id = await readScriptCommandId(entryPath);
+      if (id) ids.push(id);
+      continue;
+    }
+
+    if (!entry.isDirectory() || SKIPPED_PLUGIN_DIRS.has(entry.name)) continue;
+    const id = await readDirectoryCommandId(entryPath);
+    if (id) ids.push(id);
+  }
+
+  return ids;
+};
+
+const assertNoExistingCommandId = async ({ commandDir, configId }) => {
+  const existingIds = await readExistingCommandIds(commandDir);
+  if (!existingIds.includes(configId)) return;
+  throw new Error(`命令 ID 已存在：${configId}`);
+};
 
 const assertJsxCommandFile = (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
@@ -181,6 +255,12 @@ export const createImportPluginTool = (runtime) => ({
     if (stat.isDirectory()) throw new Error("Ira 只支持导入单个 .jsx 文件，不支持文件夹命令");
 
     const source = await readSingleFileSource(sourcePath, stat);
+    if (!overwrite) {
+      await assertNoExistingCommandId({
+        commandDir: runtime.commandDir,
+        configId: source.configId,
+      });
+    }
     const imported = await copySingleFileCommand({
       commandDir: runtime.commandDir,
       sourcePath,

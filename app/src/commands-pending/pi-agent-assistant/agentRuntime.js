@@ -2,6 +2,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { createOpenAiCompatibleModel } from "./model.js";
 import { createDeepWikiTool } from "./tools/deepwiki.js";
+import { createImageSearchTool } from "./tools/imageSearch.js";
 import { createImportPluginTool } from "./tools/importPlugin.js";
 import { createSelectedImagePathsTool } from "./tools/selectedImagePaths.js";
 import { createShellTool } from "./tools/shell.js";
@@ -12,6 +13,7 @@ const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_TOTAL_TOOL_CALLS = 50;
 const TOOL_CALL_LIMITS = {
   deepwiki_search: 3,
+  image_search: 5,
   import_plugin: 5,
 };
 const tasks = new Map();
@@ -441,6 +443,7 @@ const createRuntimeTools = (runtime) =>
     createSelectedImagePathsTool(runtime),
     createShellTool(runtime),
     createDeepWikiTool(),
+    createImageSearchTool(),
   ].map((tool) => createGuardedTool(tool, runtime));
 
 const normalizeSelectedImagePaths = (paths) => {
