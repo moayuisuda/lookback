@@ -2,7 +2,7 @@
   "name": "lookback-site",
   "private": true,
   "license": "AGPL-3.0-only",
-  "version": "0.2.43",
+  "version": "0.2.44",
   "type": "module",
   "scripts": {
     "dev": "vite",
