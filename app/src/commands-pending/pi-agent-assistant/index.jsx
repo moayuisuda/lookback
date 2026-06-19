@@ -3,6 +3,10 @@ const SETTINGS_KEY = "lookback.command.piAgentAssistant.settings.v1";
 const CONVERSATION_KEY = "lookback.command.piAgentAssistant.conversation.v1";
 const DEFAULT_BASE_URL = "https://zenmux.ai/api/v1";
 const DEFAULT_MODEL = "moonshotai/kimi-k2.7-code-free";
+const DEFAULT_USER_RULES = [
+  "1. 不要简单问题复杂化，用最有效的方式执行",
+  "2. 当需要搜索图片时，优先使用成熟的可用 api",
+].join("\n");
 const POLL_INTERVAL_MS = 500;
 const MAX_STORED_TOOL_EVENTS = 120;
 
@@ -20,6 +24,7 @@ export const config = {
       "command.piAgentAssistant.baseUrl": "Base URL",
       "command.piAgentAssistant.apiKey": "API Key",
       "command.piAgentAssistant.model": "Model",
+      "command.piAgentAssistant.userRules": "User rules",
       "command.piAgentAssistant.debug": "Debug mode",
       "command.piAgentAssistant.save": "Saved",
       "command.piAgentAssistant.clear": "Clear",
@@ -53,6 +58,7 @@ export const config = {
       "command.piAgentAssistant.baseUrl": "Base URL",
       "command.piAgentAssistant.apiKey": "API Key",
       "command.piAgentAssistant.model": "模型",
+      "command.piAgentAssistant.userRules": "用户规则",
       "command.piAgentAssistant.debug": "调试模式",
       "command.piAgentAssistant.save": "已保存",
       "command.piAgentAssistant.clear": "清空",
@@ -92,6 +98,7 @@ const loadSettings = () => ({
   baseUrl: DEFAULT_BASE_URL,
   apiKey: "",
   model: DEFAULT_MODEL,
+  userRules: DEFAULT_USER_RULES,
   debug: false,
   ...parseJson(localStorage.getItem(SETTINGS_KEY), {}),
 });
@@ -598,6 +605,9 @@ const ensureStyles = () => {
       flex-direction: column;
       gap: 6px;
       min-width: 0;
+    }
+    .pi-agent-field--wide {
+      grid-column: 1 / -1;
     }
     .pi-agent-toggle {
       display: flex;
@@ -1331,6 +1341,15 @@ export const ui = ({ context, plugin }) => {
                   className="pi-agent-input"
                   value={settings.model}
                   onChange={(event) => writeSettings({ model: event.target.value })}
+                />
+              </label>
+              <label className="pi-agent-field pi-agent-field--wide">
+                <span className="pi-agent-label">{t("command.piAgentAssistant.userRules")}</span>
+                <textarea
+                  className="pi-agent-textarea"
+                  rows={4}
+                  value={settings.userRules}
+                  onChange={(event) => writeSettings({ userRules: event.target.value })}
                 />
               </label>
               <label className="pi-agent-toggle">

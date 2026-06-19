@@ -41,8 +41,18 @@ const BASE_SYSTEM_PROMPT = `
 - import_plugin 失败后必须先根据错误原因修复代码，不要连续导入同一套未修复方案。
 `.trim();
 
-const buildSystemPrompt = (systemInfo) =>
-  `${BASE_SYSTEM_PROMPT}\n\n${formatSystemInfoForPrompt(systemInfo)}`;
+const formatUserRulesForPrompt = (userRules) => {
+  const rules = String(userRules || "").trim();
+  if (!rules) return "";
+  return `用户规则：\n${rules}`;
+};
+
+const buildSystemPrompt = (systemInfo, settings) =>
+  [
+    BASE_SYSTEM_PROMPT,
+    formatUserRulesForPrompt(settings?.userRules),
+    formatSystemInfoForPrompt(systemInfo),
+  ].filter(Boolean).join("\n\n");
 
 const createTaskId = () =>
   `task_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
@@ -471,6 +481,7 @@ const getSettingsSignature = (settings) =>
   JSON.stringify({
     baseUrl: String(settings?.baseUrl || ""),
     model: String(settings?.model || ""),
+    userRules: String(settings?.userRules || ""),
   });
 
 const createAgentSession = ({ conversationId, payload, context }) => {
@@ -489,7 +500,7 @@ const createAgentSession = ({ conversationId, payload, context }) => {
   const model = createOpenAiCompatibleModel(settings);
   const agent = new Agent({
     initialState: {
-      systemPrompt: buildSystemPrompt(runtime.systemInfo),
+      systemPrompt: buildSystemPrompt(runtime.systemInfo, settings),
       model,
       messages: restoreToolTranscriptFromEvents(payload?.messages, payload?.toolEvents, model),
       tools: createRuntimeTools(runtime),
