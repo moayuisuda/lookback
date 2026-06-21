@@ -15,6 +15,7 @@ import {
   Download,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { useMemoizedFn } from "ahooks";
 import { globalActions, globalState } from "../store/globalStore";
 import { canvasActions, canvasState } from "../store/canvasStore";
 import { commandState } from "../store/commandStore";
@@ -34,6 +35,8 @@ import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmModal } from "./ConfirmModal";
 import { Tooltip } from "./Tooltip";
 import { findShortcutConflict } from "../utils/shortcutConflicts";
+
+const TITLE_BAR_REVEAL_TOP_PX = 48;
 
 export const TitleBar: React.FC = () => {
   const snap = useSnapshot(globalState);
@@ -219,11 +222,32 @@ export const TitleBar: React.FC = () => {
     }
   };
 
+  const [isPointerNearTop, setIsPointerNearTop] = useState(false);
+  const isPointerNearTopRef = useRef(false);
+  const isPointerDownRef = useRef(false);
+
+  const updatePointerNearTop = useMemoizedFn((nearTop: boolean) => {
+    if (isPointerNearTopRef.current === nearTop) return;
+    isPointerNearTopRef.current = nearTop;
+    setIsPointerNearTop(nearTop);
+  });
+
+  const resetPointerRevealState = useMemoizedFn(() => {
+    isPointerDownRef.current = false;
+    updatePointerNearTop(false);
+  });
+
   useEffect(() => {
     const handleFocus = () => setIsWindowActive(true);
-    const handleBlur = () => setIsWindowActive(false);
+    const handleBlur = () => {
+      setIsWindowActive(false);
+      resetPointerRevealState();
+    };
     const handleVisibilityChange = () => {
       setIsWindowActive(!document.hidden);
+      if (document.hidden) {
+        resetPointerRevealState();
+      }
     };
 
     window.addEventListener("focus", handleFocus);
@@ -236,7 +260,7 @@ export const TitleBar: React.FC = () => {
       window.removeEventListener("blur", handleBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [resetPointerRevealState]);
 
   const handleToggleSettings = () => {
     setSettingsOpen((prev) => !prev);
@@ -440,10 +464,6 @@ export const TitleBar: React.FC = () => {
     window.electron?.setIgnoreMouseEvents?.(true, { forward: true });
   }, [snap.mouseThrough]);
 
-  const [pointerY, setPointerY] = useState(1000);
-  const [isHovering, setIsHovering] = useState(false);
-  const isPointerDownRef = useRef(false);
-
   useEffect(() => {
     if (!snap.mouseThrough) return;
 
@@ -453,17 +473,15 @@ export const TitleBar: React.FC = () => {
     setIsCreatingCanvas(false);
     setEditingCanvas(null);
     setDeleteConfirmCanvas(null);
-    setIsHovering(false);
-    setPointerY(1000);
-    isPointerDownRef.current = false;
-  }, [snap.mouseThrough]);
+    resetPointerRevealState();
+  }, [snap.mouseThrough, resetPointerRevealState]);
 
   useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
       // 拖拽画布或素材时不通过顶部接近触发标题栏，避免数位笔拖动中途误弹出。
       if (globalState.mouseThrough) return;
       if (isPointerDownRef.current) return;
-      setPointerY(e.clientY);
+      updatePointerNearTop(e.clientY < TITLE_BAR_REVEAL_TOP_PX);
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -476,11 +494,13 @@ export const TitleBar: React.FC = () => {
         return;
       }
       isPointerDownRef.current = true;
-      setIsHovering(false);
+      updatePointerNearTop(false);
     };
 
-    const handlePointerUp = () => {
+    const handlePointerUp = (e: PointerEvent) => {
       isPointerDownRef.current = false;
+      if (globalState.mouseThrough) return;
+      updatePointerNearTop(e.clientY < TITLE_BAR_REVEAL_TOP_PX);
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -493,12 +513,11 @@ export const TitleBar: React.FC = () => {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, []);
+  }, [updatePointerNearTop]);
 
   const shouldShow =
     !snap.mouseThrough &&
-    (pointerY < 48 ||
-      isHovering ||
+    (isPointerNearTop ||
       settingsOpen ||
       canvasMenuOpen ||
       pinMenuOpen ||
@@ -596,8 +615,6 @@ export const TitleBar: React.FC = () => {
       className={clsx(
         "flex w-full fixed left-0 right-0 z-[100] title-bar-container draggable",
       )}
-      onPointerEnter={() => setIsHovering(true)}
-      onPointerLeave={() => setIsHovering(false)}
     >
       <div
         style={{ top: shouldShow ? 0 : -32 }}
