@@ -19,7 +19,11 @@ import {
 
 const EXTERNAL_COMMAND_SHORTCUTS_KEY = "externalCommandShortcuts";
 const EXTERNAL_COMMAND_CONTEXT_MENUS_KEY = "externalCommandContextMenus";
+const PLUGIN_PANEL_WIDTHS_KEY = "pluginPanelWidths";
 const COMMAND_PANEL_ANIMATION_MS = 220;
+
+export const DEFAULT_PLUGIN_PANEL_WIDTH = 500;
+export const MIN_PLUGIN_PANEL_WIDTH = 100;
 
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let externalCommandLoadVersion = 0;
@@ -59,6 +63,27 @@ const normalizeContextMenuMap = (value: unknown): Record<string, boolean> => {
     next[id] = raw;
   });
   return next;
+};
+
+const readPluginPanelWidths = (): Record<string, number> => {
+  const raw = window.localStorage.getItem(PLUGIN_PANEL_WIDTHS_KEY);
+  if (!raw) return {};
+
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const widths: Record<string, number> = {};
+  Object.entries(value).forEach(([commandId, width]) => {
+    if (
+      commandId &&
+      typeof width === "number" &&
+      Number.isFinite(width) &&
+      width >= MIN_PLUGIN_PANEL_WIDTH
+    ) {
+      widths[commandId] = Math.round(width);
+    }
+  });
+  return widths;
 };
 
 const replaceExternalCommand = (
@@ -179,6 +204,7 @@ export const commandState = proxy<{
   externalCommands: CommandDefinition[];
   externalCommandShortcuts: Record<string, string>;
   externalCommandContextMenus: Record<string, boolean>;
+  pluginPanelWidths: Record<string, number>;
   deleteTarget: {
     id: string;
     title: string;
@@ -194,6 +220,7 @@ export const commandState = proxy<{
   externalCommands: [],
   externalCommandShortcuts: {},
   externalCommandContextMenus: {},
+  pluginPanelWidths: readPluginPanelWidths(),
   deleteTarget: null,
 });
 
@@ -265,6 +292,18 @@ export const commandActions = {
   },
   setActiveCommand: (commandId: string | null) => {
     commandState.activeCommandId = commandId;
+  },
+  setPluginPanelWidth: (commandId: string, width: number) => {
+    const id = commandId.trim();
+    if (!id || !Number.isFinite(width) || width < MIN_PLUGIN_PANEL_WIDTH)
+      return;
+    commandState.pluginPanelWidths[id] = Math.round(width);
+  },
+  persistPluginPanelWidths: () => {
+    window.localStorage.setItem(
+      PLUGIN_PANEL_WIDTHS_KEY,
+      JSON.stringify(commandState.pluginPanelWidths),
+    );
   },
   setDeleteTarget: (
     target: {

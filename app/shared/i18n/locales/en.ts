@@ -35,6 +35,7 @@ export const en = {
   "commandPalette.clearColor": "Clear",
   "commandPalette.back": "Back",
   "commandPalette.collapse": "Collapse",
+  "commandPalette.resizePanel": "Resize plugin panel",
   "commandPalette.communityCommands": "Community Commands",
   "commandPalette.import": "Import Command",
   "commandPalette.importUnavailable": "Import is unavailable",

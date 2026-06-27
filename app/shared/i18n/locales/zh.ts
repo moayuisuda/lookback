@@ -35,6 +35,7 @@ export const zh = {
   "commandPalette.clearColor": "清除",
   "commandPalette.back": "返回",
   "commandPalette.collapse": "收起",
+  "commandPalette.resizePanel": "调整插件面板宽度",
   "commandPalette.communityCommands": "社区命令",
   "commandPalette.import": "导入命令",
   "commandPalette.importUnavailable": "导入不可用",

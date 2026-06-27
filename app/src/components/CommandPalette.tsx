@@ -12,7 +12,12 @@ import Input, { type InputRef } from "rc-input";
 import { useSnapshot } from "valtio";
 import { useMemoizedFn } from "ahooks";
 import { useT } from "../i18n/useT";
-import { commandActions, commandState } from "../store/commandStore";
+import {
+  commandActions,
+  commandState,
+  DEFAULT_PLUGIN_PANEL_WIDTH,
+  MIN_PLUGIN_PANEL_WIDTH,
+} from "../store/commandStore";
 import { globalActions, globalState } from "../store/globalStore";
 import { isAcceleratorMatch } from "../utils/hotkeys";
 import {
@@ -48,7 +53,18 @@ type ImageResult = {
 type SearchResult = CommandResult | TextResult | ImageResult;
 
 const COMMUNITY_COMMANDS_URL = "https://lookback.top/#/market";
+const COMMAND_PANEL_HORIZONTAL_MARGIN = 32;
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
+
+const getPluginPanelWidthBounds = () => {
+  const max = Math.max(0, window.innerWidth - COMMAND_PANEL_HORIZONTAL_MARGIN);
+  return { min: Math.min(MIN_PLUGIN_PANEL_WIDTH, max), max };
+};
+
+const clampPluginPanelWidth = (width: number) => {
+  const { min, max } = getPluginPanelWidthBounds();
+  return Math.round(Math.min(Math.max(width, min), max));
+};
 
 const isUiComponent = (
   ui: CommandDefinition["ui"],
@@ -62,6 +78,12 @@ export const CommandPalette: React.FC = () => {
   const canvasSnap = useSnapshot(canvasState);
   const { t } = useT();
   const inputRef = useRef<InputRef | null>(null);
+  const panelResizeRef = useRef<{
+    pointerId: number;
+    commandId: string;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   void snap.externalCommands;
   const deleteTarget = snap.deleteTarget;
 
@@ -182,6 +204,65 @@ export const CommandPalette: React.FC = () => {
   );
   const activeUi = activeCommand?.ui;
   const isTaskUi = !!activeUi;
+  const storedPluginPanelWidth = activeCommand
+    ? snap.pluginPanelWidths[activeCommand.id]
+    : undefined;
+  const panelWidth = isTaskUi
+    ? clampPluginPanelWidth(
+        storedPluginPanelWidth ?? DEFAULT_PLUGIN_PANEL_WIDTH,
+      )
+    : clampPluginPanelWidth(DEFAULT_PLUGIN_PANEL_WIDTH);
+  const panelWidthBounds = getPluginPanelWidthBounds();
+
+  const handlePanelResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!commandState.activeCommandId) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    panelResizeRef.current = {
+      pointerId: e.pointerId,
+      commandId: commandState.activeCommandId,
+      startX: e.clientX,
+      startWidth:
+        e.currentTarget.parentElement?.getBoundingClientRect().width ??
+        DEFAULT_PLUGIN_PANEL_WIDTH,
+    };
+  };
+
+  const handlePanelResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = panelResizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+    const width = clampPluginPanelWidth(
+      resize.startWidth + resize.startX - e.clientX,
+    );
+    commandActions.setPluginPanelWidth(resize.commandId, width);
+  };
+
+  const handlePanelResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = panelResizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+    panelResizeRef.current = null;
+    commandActions.persistPluginPanelWidths();
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const handlePanelResizeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const commandId = commandState.activeCommandId;
+    if (!commandId) return;
+    e.preventDefault();
+    const currentWidth = clampPluginPanelWidth(
+      commandState.pluginPanelWidths[commandId] ?? DEFAULT_PLUGIN_PANEL_WIDTH,
+    );
+    const step = e.shiftKey ? 50 : 10;
+    const direction = e.key === "ArrowLeft" ? 1 : -1;
+    commandActions.setPluginPanelWidth(
+      commandId,
+      clampPluginPanelWidth(currentWidth + direction * step),
+    );
+    commandActions.persistPluginPanelWidths();
+  };
 
   useEffect(() => {
     if (!snap.isOpen) return;
@@ -316,12 +397,32 @@ export const CommandPalette: React.FC = () => {
     <>
       <aside
         className={clsx(
-          "command-palette-panel fixed right-4 top-4 bottom-4 z-[90] flex w-[min(500px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
+          "command-palette-panel fixed right-4 top-4 bottom-4 z-[90] flex flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
           snap.isClosing && "command-palette-panel--closing pointer-events-none",
         )}
+        style={{ width: panelWidth }}
       >
         {isTaskUi ? (
           <>
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-label={t("commandPalette.resizePanel")}
+              aria-valuemin={panelWidthBounds.min}
+              aria-valuemax={panelWidthBounds.max}
+              aria-valuenow={panelWidth}
+              title={t("commandPalette.resizePanel")}
+              onPointerDown={handlePanelResizeStart}
+              onPointerMove={handlePanelResizeMove}
+              onPointerUp={handlePanelResizeEnd}
+              onPointerCancel={handlePanelResizeEnd}
+              onLostPointerCapture={handlePanelResizeEnd}
+              onKeyDown={handlePanelResizeKeyDown}
+              className="group absolute inset-y-0 left-0 z-20 w-2 cursor-ew-resize touch-none outline-none"
+            >
+              <span className="absolute left-0.5 top-1/2 h-12 w-0.5 -translate-y-1/2 rounded-full bg-neutral-600 opacity-70 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+            </div>
             <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between gap-3">
               <span className="font-medium text-sm text-neutral-200">
                 {activeCommand ? getCommandTitle(activeCommand, t) : ""}
