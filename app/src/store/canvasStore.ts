@@ -776,6 +776,8 @@ interface CanvasStoreState {
     x: number;
     y: number;
   };
+  // 记录 SVG 本地坐标，视口缩放或平移后仍可准确换算 cursor 对应的世界坐标。
+  cursorLocalPoint: CanvasPoint | null;
   commandTriggerPoint: CanvasPoint | null;
   currentCanvasName: string;
   activeCanvasGroupId: string | null;
@@ -822,6 +824,7 @@ export const canvasState = proxy<CanvasStoreState>({
     x: 0,
     y: 0,
   },
+  cursorLocalPoint: null,
   commandTriggerPoint: null,
   currentCanvasName: "Default",
   activeCanvasGroupId: null,

@@ -143,10 +143,11 @@ function App() {
           Number.isFinite(canvasViewport.y) &&
           Number.isFinite(scale) &&
           scale > 0;
-        const center = hasViewport
+        const cursor = canvasState.cursorLocalPoint;
+        const insertionPoint = hasViewport
           ? {
-              x: (width / 2 - canvasViewport.x) / scale,
-              y: (height / 2 - canvasViewport.y) / scale,
+              x: ((cursor?.x ?? width / 2) - canvasViewport.x) / scale,
+              y: ((cursor?.y ?? height / 2) - canvasViewport.y) / scale,
             }
           : null;
 
@@ -160,12 +161,19 @@ function App() {
         if (metas.length === 0) return;
 
         if (metas.length > 1) {
-          canvasActions.addManyImagesToCanvasCentered(metas, center ?? { x: 100, y: 100 });
+          canvasActions.addManyImagesToCanvasCentered(
+            metas,
+            insertionPoint ?? { x: 100, y: 100 },
+          );
           return;
         }
 
-        if (center) {
-          canvasActions.addToCanvas(metas[0], center.x, center.y);
+        if (insertionPoint) {
+          canvasActions.addToCanvas(
+            metas[0],
+            insertionPoint.x,
+            insertionPoint.y,
+          );
           return;
         }
 

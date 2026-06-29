@@ -53,6 +53,10 @@ const isModClick = (
     | React.MouseEvent<SVGTextElement>,
 ) => event.metaKey || event.ctrlKey;
 
+const TEXT_LINE_HEIGHT = 1.2;
+
+const getTextLines = (text: string) => text.split("\n");
+
 export const CanvasText = ({
   item,
   onDragStart,
@@ -67,7 +71,10 @@ export const CanvasText = ({
   const itemSnap = useSnapshot(item);
   const textRef = useRef<SVGTextElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const editingRef = useRef(false);
   const [isEditing, setIsEditing] = useState(false);
+  const textLines = getTextLines(itemSnap.text);
+  const lineHeight = itemSnap.fontSize * TEXT_LINE_HEIGHT;
   const textUrl = getTextUrl(itemSnap.text);
   const linkTitle = textUrl
     ? t("canvas.text.openLinkHint", { url: textUrl })
@@ -88,11 +95,8 @@ export const CanvasText = ({
     if (!node) return;
     const bbox = node.getBBox();
     const nextWidth = Math.max(0, bbox.width);
-    const nextHeight = Math.max(0, bbox.height);
-    if (
-      !isEditing &&
-      (itemSnap.width !== nextWidth || itemSnap.height !== nextHeight)
-    ) {
+    const nextHeight = lineHeight * textLines.length;
+    if (itemSnap.width !== nextWidth || itemSnap.height !== nextHeight) {
       canvasActions.updateCanvasImageSilent(itemSnap.itemId, {
         width: nextWidth,
         height: nextHeight,
@@ -105,14 +109,16 @@ export const CanvasText = ({
     itemSnap.width,
     itemSnap.height,
     itemSnap.itemId,
-    isEditing,
+    lineHeight,
+    textLines.length,
   ]);
 
   const startEditing = useMemoizedFn((initialSelection: "all" | "end") => {
     const textNode = textRef.current;
     if (!textNode) return false;
-    if (isEditing) return false;
+    if (editingRef.current) return false;
 
+    editingRef.current = true;
     setIsEditing(true);
     textNode.style.visibility = "hidden";
 
@@ -121,113 +127,148 @@ export const CanvasText = ({
     const centerY = bbox.top + bbox.height / 2;
     const host = document.body;
 
-    const input = document.createElement("input");
-    input.type = "text";
-    host.appendChild(input);
+    const textarea = document.createElement("textarea");
+    let focusTimer: number | null = null;
+    let isRemoved = false;
+    textarea.rows = 1;
+    textarea.wrap = "off";
+    host.appendChild(textarea);
 
-    input.value = itemSnap.text;
-    input.style.position = "absolute";
-    input.style.border = "none";
-    input.style.padding = "0px";
-    input.style.margin = "0px";
-    input.style.overflow = "hidden";
-    input.style.background = "none";
-    input.style.outline = "none";
-    input.style.lineHeight = "1.2";
-    input.style.fontFamily = "inherit";
-    input.style.textAlign = "center";
-    input.style.zIndex = "50";
+    textarea.value = itemSnap.text;
+    textarea.style.position = "absolute";
+    textarea.style.boxSizing = "border-box";
+    textarea.style.border = "none";
+    textarea.style.padding = "0px";
+    textarea.style.margin = "0px";
+    textarea.style.overflow = "hidden";
+    textarea.style.resize = "none";
+    textarea.style.whiteSpace = "pre";
+    textarea.style.background = "none";
+    textarea.style.outline = "none";
+    textarea.style.lineHeight = String(TEXT_LINE_HEIGHT);
+    textarea.style.fontFamily = "inherit";
+    textarea.style.textAlign = "center";
+    textarea.style.zIndex = "50";
 
-    input.style.color = getTextUrl(input.value) ? THEME.primary : itemSnap.fill;
+    textarea.style.color = getTextUrl(textarea.value)
+      ? THEME.primary
+      : itemSnap.fill;
 
-    const visualScale = canvasState.canvasViewport.scale || 1;
+    const visualScale =
+      (canvasState.canvasViewport.scale || 1) * (itemSnap.scale || 1);
     const screenFontSize = itemSnap.fontSize * visualScale;
-    input.style.fontSize = `${screenFontSize}px`;
+    const screenLineHeight = screenFontSize * TEXT_LINE_HEIGHT;
+    textarea.style.fontSize = `${screenFontSize}px`;
 
-    const baseWidth = bbox.width * visualScale;
-    const baseHeight = Math.max(screenFontSize * 1.2, bbox.height);
-    let currentWidth = baseWidth;
-    const currentHeight = baseHeight;
+    let currentWidth = Math.max(screenFontSize, bbox.width);
+    let currentHeight = Math.max(screenLineHeight, bbox.height);
 
     const updatePosition = () => {
       const left = centerX - currentWidth / 2 + window.scrollX;
       const top = centerY - currentHeight / 2 + window.scrollY;
-      input.style.left = `${left}px`;
-      input.style.top = `${top}px`;
+      textarea.style.left = `${left}px`;
+      textarea.style.top = `${top}px`;
     };
 
-    input.style.width = `${baseWidth}px`;
-    input.style.height = `${baseHeight}px`;
+    textarea.style.width = `${currentWidth}px`;
+    textarea.style.height = `${currentHeight}px`;
     updatePosition();
 
     const syncSize = () => {
-      input.style.width = "auto";
-
-      const measuredWidth = input.scrollWidth || baseWidth;
-      input.style.width = `${measuredWidth}px`;
-      currentWidth = measuredWidth;
+      const lines = getTextLines(textarea.value);
+      textarea.style.width = "1px";
+      currentWidth = Math.max(screenFontSize, textarea.scrollWidth + 2);
+      currentHeight = Math.max(screenLineHeight, lines.length * screenLineHeight);
+      textarea.style.width = `${currentWidth}px`;
+      textarea.style.height = `${currentHeight}px`;
       updatePosition();
-      input.style.color = getTextUrl(input.value)
+      textarea.style.color = getTextUrl(textarea.value)
         ? THEME.primary
         : itemSnap.fill;
 
       onCommit({
-        text: input.value,
+        text: textarea.value,
       });
     };
 
-    syncSize();
-    setTimeout(() => {
-      input.focus();
-      if (initialSelection === "all") {
-        input.setSelectionRange(0, input.value.length);
-      } else {
-        input.setSelectionRange(input.value.length, input.value.length);
+    const removeTextarea = (commit: boolean) => {
+      if (isRemoved) return;
+      isRemoved = true;
+      if (focusTimer !== null) {
+        window.clearTimeout(focusTimer);
+        focusTimer = null;
       }
-    }, 100);
-
-    const removeInput = (commit: boolean) => {
-      if (input.parentNode) {
-        input.parentNode.removeChild(input);
+      if (textarea.parentNode) {
+        textarea.parentNode.removeChild(textarea);
       }
-      window.removeEventListener("click", handleOutsideClick);
+      window.removeEventListener("pointerdown", handleOutsidePointerDown);
+      editingRef.current = false;
       setIsEditing(false);
       textNode.style.visibility = "visible";
       cleanupRef.current = null;
       if (commit) {
         onCommit({
-          text: input.value,
+          text: textarea.value,
         });
       }
     };
 
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (e.target !== input) {
-        removeInput(true);
+    const handleOutsidePointerDown = (e: PointerEvent) => {
+      if (e.target !== textarea) {
+        removeTextarea(true);
       }
     };
 
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
-        removeInput(true);
+        removeTextarea(true);
         onCommitEnter?.();
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        removeInput(false);
+        removeTextarea(false);
       }
     });
 
-    input.addEventListener("input", () => {
+    textarea.addEventListener("paste", (e) => {
+      const pastedText = e.clipboardData?.getData("text/plain");
+      if (!pastedText) return;
+
+      e.preventDefault();
+      const normalizedText = pastedText.replace(/\r\n?/g, "\n");
+      textarea.setRangeText(
+        normalizedText,
+        textarea.selectionStart,
+        textarea.selectionEnd,
+        "end",
+      );
       syncSize();
     });
 
-    setTimeout(() => {
-      window.addEventListener("click", handleOutsideClick);
+    textarea.addEventListener("input", () => {
+      syncSize();
     });
 
-    cleanupRef.current = () => removeInput(false);
+    syncSize();
+    focusTimer = window.setTimeout(() => {
+      focusTimer = null;
+      if (!textarea.isConnected) return;
+      textarea.focus();
+      if (initialSelection === "all") {
+        textarea.setSelectionRange(0, textarea.value.length);
+      } else {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
+    }, 100);
+
+    // 等当前 pointerdown 完整传播后再监听，避免双击事件关闭刚创建的编辑器。
+    queueMicrotask(() => {
+      if (isRemoved || !textarea.isConnected) return;
+      window.addEventListener("pointerdown", handleOutsidePointerDown);
+    });
+
+    cleanupRef.current = () => removeTextarea(false);
 
     return true;
   });
@@ -264,7 +305,7 @@ export const CanvasText = ({
   };
 
   const handleDoubleClick = (e: CanvasTextActivationEvent) => {
-    if (isEditing) return;
+    if (editingRef.current) return;
     const target = e.target as Element | null;
     if (target && target.closest("[data-control]")) return;
     startEditing("end");
@@ -311,7 +352,15 @@ export const CanvasText = ({
           style={textUrl ? { cursor: "alias" } : undefined}
         >
           {linkTitle ? <title>{linkTitle}</title> : null}
-          {itemSnap.text}
+          {textLines.map((line, index) => (
+            <tspan
+              key={index}
+              x={0}
+              y={(index - (textLines.length - 1) / 2) * lineHeight}
+            >
+              {line || "\u200b"}
+            </tspan>
+          ))}
         </text>
       </g>
     </CanvasNode>

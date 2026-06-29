@@ -1766,6 +1766,16 @@ export const Canvas: React.FC = () => {
 
   const handlePointerMove = useMemoizedFn(
     (e: React.PointerEvent<SVGSVGElement>) => {
+      const local = getLocalPointFromClient(e.clientX, e.clientY);
+      const { width, height } = canvasState.dimensions;
+      const isInsideCanvas =
+        local !== null &&
+        local.x >= 0 &&
+        local.y >= 0 &&
+        local.x <= width &&
+        local.y <= height;
+      canvasState.cursorLocalPoint = isInsideCanvas ? local : null;
+
       if (
         multiScaleRef.current.active &&
         multiScaleRef.current.pointerId === e.pointerId
@@ -1799,6 +1809,10 @@ export const Canvas: React.FC = () => {
       }
     },
   );
+
+  const handlePointerLeave = () => {
+    canvasState.cursorLocalPoint = null;
+  };
 
   const handlePointerUp = useMemoizedFn(
     (e: React.PointerEvent<SVGSVGElement>) => {
@@ -2682,6 +2696,7 @@ export const Canvas: React.FC = () => {
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
         onWheel={handleWheel}
