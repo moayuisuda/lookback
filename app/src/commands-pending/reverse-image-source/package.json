@@ -1,0 +1,14 @@
+{
+  "name": "reverse-image-source",
+  "version": "0.2.46",
+  "private": true,
+  "type": "module",
+  "lookback": {
+    "id": "reverseImageSource",
+    "ui": "index.jsx",
+    "server": "server.js"
+  },
+  "dependencies": {
+    "sagiri": "4.3.0"
+  }
+}
