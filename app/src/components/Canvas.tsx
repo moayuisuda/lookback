@@ -514,8 +514,6 @@ export const Canvas: React.FC = () => {
     canvasState.isSpaceDown = value;
   });
 
-  const isSpaceContainBlockedRef = useRef(false);
-
   const getSelectedIds = useMemoizedFn(() => {
     const ids = new Set<string>();
     canvasState.canvasItems.forEach((item) => {
@@ -1162,7 +1160,6 @@ export const Canvas: React.FC = () => {
       if (e.code === "Space") {
         e.preventDefault();
         if (canvasState.isSpaceDown) return;
-        isSpaceContainBlockedRef.current = false;
         setIsSpaceDown(true);
         const svg = svgRef.current;
         if (svg && !isPanningRef.current) {
@@ -1173,20 +1170,7 @@ export const Canvas: React.FC = () => {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         e.preventDefault();
-        const wasActive = canvasState.isSpaceDown;
-        const shouldContain = wasActive && !isSpaceContainBlockedRef.current;
         setIsSpaceDown(false);
-        isSpaceContainBlockedRef.current = false;
-        if (shouldContain) {
-          const targetItems = getContainLayoutTargetItems();
-          const contained = containCanvasItems(
-            targetItems,
-            canvasState.primaryId,
-          );
-          if (!contained) {
-            handleZoomToFit();
-          }
-        }
         const svg = svgRef.current;
         if (svg && !isPanningRef.current) {
           svg.style.cursor = getCanvasIdleCursor();
@@ -1195,7 +1179,6 @@ export const Canvas: React.FC = () => {
     };
     const handleBlur = () => {
       setIsSpaceDown(false);
-      isSpaceContainBlockedRef.current = false;
       isPanningRef.current = false;
       lastPanPointRef.current = null;
       if (canvasState.isDrawingPath) {
@@ -1216,13 +1199,8 @@ export const Canvas: React.FC = () => {
     };
   }, [
     closeContextMenu,
-    containCanvasItems,
     getCanvasIdleCursor,
-    getContainLayoutTargetItems,
-    handleContainItem,
-    handleZoomToFit,
     setIsSpaceDown,
-    zoomToBounds,
   ]);
 
   useEffect(() => {
@@ -1672,12 +1650,6 @@ export const Canvas: React.FC = () => {
     (e: React.PointerEvent<SVGSVGElement>) => {
       closeContextMenu();
       const isSpaceDownNow = canvasState.isSpaceDown;
-      if (
-        isSpaceDownNow &&
-        (e.button === 0 || e.button === 1 || e.button === 2)
-      ) {
-        isSpaceContainBlockedRef.current = true;
-      }
 
       if (
         !isSpaceDownNow &&

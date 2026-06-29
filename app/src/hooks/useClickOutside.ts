@@ -1,10 +1,10 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from "react";
 
-type Handler = (event: MouseEvent | TouchEvent) => void;
+type Handler = (event: PointerEvent) => void;
 
 export const useClickOutside = <T extends HTMLElement = HTMLElement>(
   ref: RefObject<T | null> | RefObject<T | null>[],
-  handler: Handler
+  handler: Handler,
 ): void => {
   const savedHandler = useRef(handler);
 
@@ -13,28 +13,26 @@ export const useClickOutside = <T extends HTMLElement = HTMLElement>(
   }, [handler]);
 
   useEffect(() => {
-    const listener = (event: MouseEvent | TouchEvent) => {
+    const listener = (event: PointerEvent) => {
       const refs = Array.isArray(ref) ? ref : [ref];
-      
-      // Check if click is inside any of the refs
-      const isInside = refs.some(r => {
-        const el = r?.current;
+
+      const isInside = refs.some((itemRef) => {
+        const el = itemRef.current;
         return el && el.contains(event.target as Node);
       });
 
       if (isInside) {
         return;
       }
-      
+
       savedHandler.current(event);
     };
 
-    document.addEventListener('mousedown', listener);
-    document.addEventListener('touchstart', listener);
+    // 捕获 pointerdown，确保画布阻止后续鼠标事件时仍能识别外部点击。
+    document.addEventListener("pointerdown", listener, true);
 
     return () => {
-      document.removeEventListener('mousedown', listener);
-      document.removeEventListener('touchstart', listener);
+      document.removeEventListener("pointerdown", listener, true);
     };
-  }, [ref]); // Remove handler from dependency
+  }, [ref]);
 };
