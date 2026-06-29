@@ -4,6 +4,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import {
   canvasState,
   canvasActions,
+  getCanvasGroupBounds,
   getRenderBbox,
   getLiveStroke,
   type CanvasItem,
@@ -1081,18 +1082,34 @@ export const Canvas: React.FC = () => {
     return true;
   });
 
+  const containCanvasBounds = useMemoizedFn(
+    (bounds: { x: number; y: number; width: number; height: number }) => {
+      const currentViewport = cloneCanvasViewport(canvasState.canvasViewport);
+      const nextViewport = getViewportForBounds(bounds, 0);
+      if (!nextViewport) return false;
+
+      canvasActions.setCanvasViewport(nextViewport);
+      viewportRestoreSessionRef.current = {
+        before: currentViewport,
+        after: cloneCanvasViewport(nextViewport),
+      };
+      return true;
+    },
+  );
+
+  const toggleContainCanvasBounds = useMemoizedFn(
+    (bounds: { x: number; y: number; width: number; height: number }) => {
+      if (restoreViewportIfUnchanged()) return true;
+      return containCanvasBounds(bounds);
+    },
+  );
+
   const toggleContainCanvasItems = useMemoizedFn(
     (
       targetItems: readonly Snapshot<CanvasItem>[],
       fallbackItemId?: string | null,
     ) => {
       if (restoreViewportIfUnchanged()) return true;
-
-      const currentViewport = cloneCanvasViewport(canvasState.canvasViewport);
-      const restoreSession = viewportRestoreSessionRef.current;
-      if (restoreSession) {
-        viewportRestoreSessionRef.current = null;
-      }
 
       const itemIds = targetItems.map((item) => item.itemId);
       if (itemIds.length === 0 && fallbackItemId) {
@@ -1110,15 +1127,7 @@ export const Canvas: React.FC = () => {
       );
       const bbox = getItemsBoundingBox(resolvedItems);
       if (!bbox) return false;
-
-      const nextViewport = getViewportForBounds(bbox, 0);
-      if (!nextViewport) return false;
-
-      canvasActions.setCanvasViewport(nextViewport);
-      viewportRestoreSessionRef.current = {
-        before: currentViewport,
-        after: cloneCanvasViewport(nextViewport),
-      };
+      if (!containCanvasBounds(bbox)) return false;
 
       if (resolvedItems.length === 1) {
         canvasState.primaryId = null;
@@ -1133,13 +1142,6 @@ export const Canvas: React.FC = () => {
   const handleContainItem = useMemoizedFn((id: string) => {
     toggleContainCanvasItems([], id);
   });
-
-  const containCanvasItems = useMemoizedFn(
-    (
-      targetItems: readonly Snapshot<CanvasItem>[],
-      fallbackItemId?: string | null,
-    ) => toggleContainCanvasItems(targetItems, fallbackItemId),
-  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2430,11 +2432,9 @@ export const Canvas: React.FC = () => {
       canvasActions.toggleCanvasGroupCollapse(groupId);
     }
 
-    const itemIds = new Set(group.items);
-    const targetItems = canvasState.canvasItems.filter((item) =>
-      itemIds.has(item.itemId),
-    );
-    containCanvasItems(targetItems);
+    const bounds = getCanvasGroupBounds(group, canvasState.canvasItems);
+    if (!bounds) return;
+    toggleContainCanvasBounds(bounds);
   });
 
   const handleItemSelect = useMemoizedFn(
