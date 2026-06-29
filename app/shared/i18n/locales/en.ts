@@ -172,6 +172,7 @@ export const en = {
   "toast.commandDeleted": "Command deleted",
   "toast.commandDeleteFailed": "Failed to delete command: {{error}}",
   "toast.loadRunningAppsFailed": "Failed to load app list: {{error}}",
+  "toast.canvasUrlImporting": "Importing web image…",
   "toast.canvasUrlImportFailed": "Failed to import web image: {{error}}",
 
   "indexing.starting": "Starting...",

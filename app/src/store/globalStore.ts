@@ -344,6 +344,7 @@ export const globalActions = {
         globalActions.removeToast(id);
       }, timeoutMs);
     }
+    return id;
   },
 
   removeToast: (id: string) => {

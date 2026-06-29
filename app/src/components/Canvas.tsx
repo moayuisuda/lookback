@@ -37,14 +37,14 @@ import {
 } from "./canvas/SelectionRect";
 import { useT } from "../i18n/useT";
 import {
-  createTempMetaFromImageUrl,
+  createTempMetaFromImageUrls,
   createTempMetasFromFiles,
   getNativeFilePath,
   logImageImport,
   resolveDroppedFiles,
 } from "../utils/import";
 import { normalizeImagePath } from "../../shared/canvasImagePath";
-import { extractDroppedImageUrl } from "../utils/droppedImageUrl";
+import { extractDroppedImageUrls } from "../utils/droppedImageUrl";
 import { CANVAS_AUTO_LAYOUT, CANVAS_ZOOM_TO_FIT } from "../events/uiEvents";
 import { getCssFilters } from "../utils/imageFilters";
 import { ImagePlus, Upload, MousePointer2 } from "lucide-react";
@@ -776,16 +776,25 @@ export const Canvas: React.FC = () => {
           }
         }
 
-        const url = extractDroppedImageUrl(e.dataTransfer);
-        if (url) {
-          const urlHost = getImportUrlHost(url);
+        const imageUrls = extractDroppedImageUrls(e.dataTransfer);
+        if (imageUrls.length > 0) {
+          const urlHost = getImportUrlHost(imageUrls[0]);
+          let importingToastId: string | null = null;
+          // 小图通常可以瞬间完成，仅在网页图片导入超过 1 秒时给出持续反馈。
+          const importingToastTimer = window.setTimeout(() => {
+            importingToastId = globalActions.pushToast(
+              { key: "toast.canvasUrlImporting" },
+              "info",
+              0,
+            );
+          }, 400);
           try {
             logImageImport("info", "canvas url import started", {
               source: "drop-url",
               canvasName: canvasSnap.currentCanvasName,
               host: urlHost,
             });
-            const meta = await createTempMetaFromImageUrl(url, {
+            const meta = await createTempMetaFromImageUrls(imageUrls, {
               canvasName: canvasSnap.currentCanvasName,
               source: "drop-url",
             });
@@ -815,6 +824,11 @@ export const Canvas: React.FC = () => {
               },
               "error",
             );
+          } finally {
+            window.clearTimeout(importingToastTimer);
+            if (importingToastId) {
+              globalActions.removeToast(importingToastId);
+            }
           }
           return;
         }

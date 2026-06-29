@@ -13,6 +13,8 @@ const HUABAN_PROCESS_SEGMENT_RE =
 const HUABAN_PROCESS_QUERY_RE =
   /^(?:imageMogr2|imageView2|x-oss-process=)|(?:thumbnail|format\/webp|quality\/\d+)/i;
 
+export const MAX_IMPORTED_IMAGE_URL_CANDIDATES = 20;
+
 const normalizePinterestImageUrl = (parsed: URL): void => {
   if (!parsed.hostname.toLowerCase().endsWith("pinimg.com")) {
     return;
@@ -77,7 +79,7 @@ const normalizeHuabanImageUrl = (parsed: URL): void => {
   }
 };
 
-export const normalizeImportedImageUrl = (value: string): string => {
+const optimizeImportedImageUrl = (value: string): string => {
   try {
     const parsed = new URL(value);
     normalizePinterestImageUrl(parsed);
@@ -87,4 +89,34 @@ export const normalizeImportedImageUrl = (value: string): string => {
   } catch {
     return value;
   }
+};
+
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * 为同一张网页图片生成按清晰度从高到低排列的导入候选。
+ * 站点原图地址优先，网页实际提供的地址作为后续候选。
+ */
+export const buildImportedImageUrlCandidates = (
+  values: readonly string[],
+): string[] => {
+  const sources = Array.from(
+    new Set(values.map((value) => value.trim()).filter(isHttpUrl)),
+  );
+  const candidates: string[] = [];
+
+  sources.forEach((source) => {
+    const optimized = optimizeImportedImageUrl(source);
+    if (!candidates.includes(optimized)) candidates.push(optimized);
+    if (!candidates.includes(source)) candidates.push(source);
+  });
+
+  return candidates.slice(0, MAX_IMPORTED_IMAGE_URL_CANDIDATES);
 };

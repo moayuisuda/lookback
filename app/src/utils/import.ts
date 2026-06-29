@@ -1,7 +1,6 @@
 import { type ImageMeta } from '../store/canvasStore';
-import { downloadTempImageUrl, uploadTempImageBinary } from '../service';
+import { downloadTempImageUrls, uploadTempImageBinary } from '../service';
 import { globalActions } from '../store/globalStore';
-import { normalizeDroppedImageUrl } from './droppedImageUrl';
 
 const MAX_DROP_SCAN_CONCURRENCY = 16;
 const MAX_UPLOAD_CONCURRENCY = 16;
@@ -251,12 +250,11 @@ export const resolveDroppedFiles = async (
   return mergeDroppedFiles(scannedFiles, directFiles);
 };
 
-export const createTempMetaFromImageUrl = async (
-  imageUrl: string,
+export const createTempMetaFromImageUrls = async (
+  imageUrls: string[],
   options: Pick<CreateTempMetasOptions, 'canvasName' | 'source'>,
 ): Promise<ImageMeta> => {
-  const normalizedUrl = normalizeDroppedImageUrl(imageUrl.trim());
-  const uploaded = await downloadTempImageUrl(normalizedUrl, options.canvasName);
+  const uploaded = await downloadTempImageUrls(imageUrls, options.canvasName);
   if (
     !uploaded ||
     !uploaded.success ||
@@ -269,7 +267,7 @@ export const createTempMetaFromImageUrl = async (
   logImageImport('info', 'canvas url import downloaded', {
     source: options.source,
     canvasName: options.canvasName ?? '',
-    url: normalizedUrl,
+    candidateCount: imageUrls.length,
     filename: uploaded.filename,
     imagePath: uploaded.path,
     ...(uploaded.diskPath ? { diskPath: uploaded.diskPath } : {}),

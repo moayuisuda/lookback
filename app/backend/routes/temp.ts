@@ -3,10 +3,11 @@ import express from "express";
 import fs from "fs-extra";
 import sharp from "sharp";
 import { withFileLock } from "../fileLock";
+import { MAX_IMPORTED_IMAGE_URL_CANDIDATES } from "../../shared/imageUrl";
 
 type TempRouteDeps = {
   getCanvasAssetsDir: (canvasName: string) => string;
-  downloadImage: (url: string, targetPath: string) => Promise<void>;
+  downloadImage: (urls: string[], targetPath: string) => Promise<void>;
   getDominantColor: (arg: string) => Promise<string | null>;
   getTone: (arg: string) => Promise<string | null>;
 };
@@ -50,6 +51,14 @@ export const createTempRouter = (deps: TempRouteDeps) => {
       return rawUrl;
     }
   };
+  const isRemoteUrl = (rawUrl: string): boolean => {
+    try {
+      const protocol = new URL(rawUrl).protocol;
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
   const resolveUniqueFilename = async (
     assetsDir: string,
     desired: string
@@ -76,31 +85,35 @@ export const createTempRouter = (deps: TempRouteDeps) => {
     let dominantColorMs = 0;
     let toneMs = 0;
     try {
-      const { url, canvasName } = req.body as {
-        url?: string;
+      const { urls: rawUrls, canvasName } = req.body as {
+        urls?: unknown;
         canvasName?: string;
       };
-      if (!url || typeof url !== "string") {
-        res.status(400).json({ error: "URL is required" });
-        return;
-      }
-
-      const trimmedUrl = url.trim();
       if (
-        !trimmedUrl.startsWith("http://") &&
-        !trimmedUrl.startsWith("https://")
+        !Array.isArray(rawUrls) ||
+        rawUrls.length === 0 ||
+        rawUrls.length > MAX_IMPORTED_IMAGE_URL_CANDIDATES
       ) {
-        res.status(400).json({ error: "Invalid URL" });
+        res.status(400).json({ error: "URL candidates are required" });
         return;
       }
+      const normalizedUrls = rawUrls.map((url) =>
+        typeof url === "string" ? url.trim() : ""
+      );
+      if (normalizedUrls.some((url) => !isRemoteUrl(url))) {
+        res.status(400).json({ error: "Invalid URL candidate" });
+        return;
+      }
+      const urls = Array.from(new Set(normalizedUrls));
       console.info(`[temp][download-url][${requestId}] start`, {
         canvasName: canvasName || "Default",
-        url: normalizeLogUrl(trimmedUrl),
+        candidateCount: urls.length,
+        urls: urls.map(normalizeLogUrl),
       });
 
       let urlFilename = "image.jpg";
       try {
-        const urlObj = new URL(trimmedUrl);
+        const urlObj = new URL(urls[0]);
         const pathname = urlObj.pathname;
         const baseName = path.basename(pathname).split("?")[0];
         if (baseName && /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(baseName)) {
@@ -140,7 +153,7 @@ export const createTempRouter = (deps: TempRouteDeps) => {
 
         stage = "download-image";
         const downloadStartedAt = Date.now();
-        await deps.downloadImage(trimmedUrl, filepath);
+        await deps.downloadImage(urls, filepath);
         downloadMs = Date.now() - downloadStartedAt;
 
         try {

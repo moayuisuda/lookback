@@ -313,14 +313,14 @@ export async function uploadTempImageBinary(
   return (await res.json()) as UploadTempImageResponse;
 }
 
-export async function downloadTempImageUrl(
-  url: string,
+export async function downloadTempImageUrls(
+  urls: string[],
   canvasName?: string
 ): Promise<DownloadTempImageResponse> {
   const res = await apiFetch("/api/download-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, canvasName }),
+    body: JSON.stringify({ urls, canvasName }),
   });
   if (!res.ok) {
     await throwApiError("/api/download-url", "POST", res);

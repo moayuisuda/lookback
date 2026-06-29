@@ -14,7 +14,6 @@ import { createTempRouter } from "./routes/temp";
 import { createShellRouter } from "./routes/shell";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
 import { calculateTone, getDominantColor } from "./imageAnalysis";
-import { normalizeImportedImageUrl } from "../shared/imageUrl";
 import AdmZip from "adm-zip";
 
 export type RendererChannel =
@@ -290,7 +289,8 @@ const cleanupCanvasAssets = async () => {
   }
 };
 
-function downloadImage(url: string, dest: string): Promise<void> {
+// 实际最后下载图片的地方
+function downloadImage(urls: string[], dest: string): Promise<void> {
   const REQUEST_TIMEOUT_MS = 15000;
   const MAX_RETRY_ATTEMPTS = 3;
   const REMOTE_REFERER_RULES = [
@@ -303,21 +303,6 @@ function downloadImage(url: string, dest: string): Promise<void> {
       referer: "https://huaban.com",
     },
   ] as const;
-
-  const copyFromLocalPath = async (targetUrl: string): Promise<void> => {
-    let srcPath = targetUrl;
-    if (targetUrl.startsWith("file://")) {
-      srcPath = new URL(targetUrl).pathname;
-      if (
-        process.platform === "win32" &&
-        srcPath.startsWith("/") &&
-        srcPath.includes(":")
-      ) {
-        srcPath = srcPath.substring(1);
-      }
-    }
-    await fs.copy(decodeURIComponent(srcPath), dest);
-  };
 
   const isRetryableDownloadError = (error: Error): boolean => {
     const code = (error as NodeJS.ErrnoException).code;
@@ -333,9 +318,6 @@ function downloadImage(url: string, dest: string): Promise<void> {
     }
     return /socket hang up|timeout|network/i.test(error.message);
   };
-
-  const normalizeRemoteUrl = (rawUrl: string): string =>
-    normalizeImportedImageUrl(rawUrl);
 
   const requestRemoteOnce = async (targetUrl: string): Promise<void> => {
     const referer = (() => {
@@ -393,37 +375,38 @@ function downloadImage(url: string, dest: string): Promise<void> {
     }
   };
 
-  const requestRemote = async (targetUrl: string): Promise<void> => {
-    const normalizedUrl = normalizeRemoteUrl(targetUrl);
+  const requestRemote = async (targetUrls: string[]): Promise<void> => {
     let lastError: Error | null = null;
-    for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
-      try {
-        console.info("[temp][download] attempt", {
-          attempt,
-          targetUrl: normalizedUrl,
-        });
-        await requestRemoteOnce(normalizedUrl);
-        return;
-      } catch (error) {
-        const normalized =
-          error instanceof Error ? error : new Error(String(error));
-        lastError = normalized;
-        const shouldRetry =
-          attempt < MAX_RETRY_ATTEMPTS &&
-          isRetryableDownloadError(normalized);
-        if (!shouldRetry) break;
-        await new Promise((resolve) => {
-          setTimeout(resolve, attempt * 250);
-        });
+    for (let candidateIndex = 0; candidateIndex < targetUrls.length; candidateIndex += 1) {
+      const targetUrl = targetUrls[candidateIndex];
+      for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+          console.info("[temp][download] attempt", {
+            candidate: candidateIndex + 1,
+            candidateCount: targetUrls.length,
+            attempt,
+            targetUrl,
+          });
+          await requestRemoteOnce(targetUrl);
+          return;
+        } catch (error) {
+          const normalized =
+            error instanceof Error ? error : new Error(String(error));
+          lastError = normalized;
+          const shouldRetry =
+            attempt < MAX_RETRY_ATTEMPTS &&
+            isRetryableDownloadError(normalized);
+          if (!shouldRetry) break;
+          await new Promise((resolve) => {
+            setTimeout(resolve, attempt * 250);
+          });
+        }
       }
     }
     throw lastError ?? new Error("Download failed");
   };
 
-  if (url.startsWith("file://") || url.startsWith("/")) {
-    return copyFromLocalPath(url);
-  }
-  return requestRemote(url);
+  return requestRemote(urls);
 }
 
 const listenOnAvailablePort = (
