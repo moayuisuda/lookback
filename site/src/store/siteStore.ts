@@ -13,14 +13,17 @@ const COMMAND_MARKET_RAW_PREFIX =
   "https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/";
 const COMMAND_MARKET_CONTENTS_PREFIX =
   "https://api.github.com/repos/moayuisuda/lookback/contents/";
-const LLM_TEXT_URL =
-  "https://xget-5sd.pages.dev/gh/moayuisuda/lookback/raw/refs/heads/main/llm.txt";
-
+const DEVELOPER_DOC_URLS = {
+  jsx: "https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/open/dev-jsx-command.md",
+  folder:
+    "https://raw.githubusercontent.com/moayuisuda/lookback/refs/heads/main/open/dev-folder-command.md",
+} as const;
 const LOOKBACK_IMPORT_DEEP_LINK = "lookback://import-command";
 const LOOKBACK_IMPORT_FALLBACK_MS = 1800;
-const LLM_TEXT_COPIED_VISIBLE_MS = 1800;
+const DEVELOPER_DOC_COPIED_VISIBLE_MS = 1800;
 
-export type SiteRoute = "/" | "/market" | "/picaptain";
+export type SiteRoute = "/" | "/market" | "/developer" | "/picaptain";
+type DeveloperDocId = keyof typeof DEVELOPER_DOC_URLS;
 
 type ReleaseAsset = {
   name: string;
@@ -88,9 +91,9 @@ type SiteState = {
   commandMarketLoading: boolean;
   commandMarketError: string;
   commandMarketDownloadingId: string | null;
-  llmTextCopying: boolean;
-  llmTextCopied: boolean;
-  llmTextError: string;
+  developerDocCopyingId: DeveloperDocId | null;
+  developerDocCopiedId: DeveloperDocId | null;
+  developerDocCopyErrorId: DeveloperDocId | null;
   picaptainRelease: LatestRelease | null;
   picaptainReleaseVersion: string;
   picaptainReleasePage: string;
@@ -108,9 +111,9 @@ export const siteState = proxy<SiteState>({
   commandMarketLoading: false,
   commandMarketError: "",
   commandMarketDownloadingId: null,
-  llmTextCopying: false,
-  llmTextCopied: false,
-  llmTextError: "",
+  developerDocCopyingId: null,
+  developerDocCopiedId: null,
+  developerDocCopyErrorId: null,
   picaptainRelease: null,
   picaptainReleaseVersion: "1.0.0",
   picaptainReleasePage: "https://github.com/moayuisuda/OnlyRef/releases/tag/v1.0.0",
@@ -172,6 +175,7 @@ function getPluginDir(path: string) {
 function toLocalRoute(hash: string): SiteRoute {
   const normalized = hash.replace(/^#/, "").replace(/\/+$/, "");
   if (normalized === "/market") return "/market";
+  if (normalized === "/developer") return "/developer";
   if (normalized === "/picaptain") return "/picaptain";
   return "/";
 }
@@ -257,25 +261,6 @@ async function loadCommandScript(path: string) {
     throw new Error(`HTTP ${response.status}`);
   }
   return response.text();
-}
-
-async function loadLlmText() {
-  const response = await fetch(LLM_TEXT_URL, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  return response.text();
-}
-
-async function writeTextToClipboard(text: string) {
-  const value = text.trim();
-  if (!value) {
-    throw new Error("Clipboard text is empty");
-  }
-  if (!navigator.clipboard?.writeText) {
-    throw new Error("Clipboard API unavailable");
-  }
-  await navigator.clipboard.writeText(value);
 }
 
 function extractConfigBlock(source: string) {
@@ -416,6 +401,21 @@ async function parseCommandScript(
     downloadUrl: `${COMMAND_MARKET_RAW_PREFIX}${path}`,
     kind: "script",
   };
+}
+
+async function loadDeveloperDoc(id: DeveloperDocId) {
+  const response = await fetch(DEVELOPER_DOC_URLS[id], { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
+async function writeTextToClipboard(text: string) {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API unavailable");
+  }
+  await navigator.clipboard.writeText(text);
 }
 
 function parsePluginManifest(packageJson: string) {
@@ -689,23 +689,24 @@ export const siteActions = {
       return null;
     }
   },
-  async copyLlmText() {
-    if (siteState.llmTextCopying) return;
-    siteState.llmTextCopying = true;
-    siteState.llmTextCopied = false;
-    siteState.llmTextError = "";
+  async copyDeveloperDoc(id: DeveloperDocId) {
+    if (siteState.developerDocCopyingId !== null) return;
+    siteState.developerDocCopyingId = id;
+    siteState.developerDocCopiedId = null;
+    siteState.developerDocCopyErrorId = null;
     try {
-      const content = await loadLlmText();
+      const content = await loadDeveloperDoc(id);
       await writeTextToClipboard(content);
-      siteState.llmTextCopied = true;
+      siteState.developerDocCopiedId = id;
       window.setTimeout(() => {
-        siteState.llmTextCopied = false;
-      }, LLM_TEXT_COPIED_VISIBLE_MS);
-    } catch (error) {
-      siteState.llmTextError =
-        error instanceof Error ? error.message : String(error);
+        if (siteState.developerDocCopiedId === id) {
+          siteState.developerDocCopiedId = null;
+        }
+      }, DEVELOPER_DOC_COPIED_VISIBLE_MS);
+    } catch {
+      siteState.developerDocCopyErrorId = id;
     } finally {
-      siteState.llmTextCopying = false;
+      siteState.developerDocCopyingId = null;
     }
   },
   pickWindowsAsset(assets: ReleaseAsset[]) {

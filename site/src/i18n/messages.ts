@@ -5,11 +5,8 @@ export const zh = {
   'nav.language.en': 'EN',
   'nav.download': '下载页',
   'nav.market': '社区命令',
+  'nav.developer': '开发者',
   'nav.picaptain': 'PiCaptain',
-  'nav.llmTextAria': '复制 llm.txt',
-  'nav.llmTextTooltip': '将复制内容放到任意 AI 中，生成自定义命令。',
-  'nav.llmTextCopied': 'llm.txt 已复制',
-  'nav.llmTextCopyFailed': '复制失败：{{error}}',
 
   'hero.badge': '素材整理画布',
   'hero.title': '在一个画布中整理、参考视觉素材',
@@ -108,6 +105,39 @@ export const zh = {
   'commandMarket.shortcutDemo.desc': '/ 键唤出命令菜单，绑定常用命令快捷键。',
   'commandMarket.shortcutDemo.alt': '命令市场中为命令绑定快捷键的界面示意图',
 
+  'developer.badge': '插件开发',
+  'developer.title': '把你的想法做成 LookBack 插件',
+  'developer.desc':
+    '不用先弄懂代码结构。直接复制开发文档给 AI，再告诉它你想做什么。',
+  'developer.decisionAria': '插件形式选择规则',
+  'developer.decision.no': '一个按钮或小面板就能完成',
+  'developer.decision.yes': '包含多个步骤、设置或后台处理',
+  'developer.decision.jsx': '做一个简单工具',
+  'developer.decision.folder': '做一个复杂插件',
+  'developer.jsx.title': '做一个简单工具',
+  'developer.jsx.desc':
+    '适合目标明确、打开就能使用的功能。制作快、导入简单，也方便分享给其他人。',
+  'developer.jsx.reasonTitle': '比如你想',
+  'developer.jsx.reason.1': '一键整理或修改画布内容',
+  'developer.jsx.reason.2': '批量处理、搜索或导出图片',
+  'developer.jsx.reason.3': '增加一个输入面板或快捷操作',
+  'developer.jsx.output': '一个可以直接导入 LookBack 的插件文件',
+  'developer.folder.title': '做一个复杂插件',
+  'developer.folder.desc':
+    '适合需要与其他软件、站点或服务联动的功能，也可以承载多个操作步骤、持续保存的数据和后台任务。',
+  'developer.folder.reasonTitle': '比如你想',
+  'developer.folder.reason.1': '连接其他软件、网站或在线服务',
+  'developer.folder.reason.2': '长期保存账号、设置或任务结果',
+  'developer.folder.reason.3': '在后台下载内容、分析文件或执行耗时任务',
+  'developer.folder.output': '一个包含界面与功能模块的插件文件夹',
+  'developer.outputLabel': '最终会得到',
+  'developer.copyDoc': '复制开发文档',
+  'developer.copyingDoc': '复制中...',
+  'developer.copiedDoc': '已复制',
+  'developer.copyDocRetry': '复制失败，重试',
+  'developer.note':
+    '只是想试试？先做一个简单工具。以后需要与外部软件或服务联动时，再把它扩展成复杂插件。',
+
   'footer.line': 'LookBack · 素材整理画布',
   'footer.contact': '联系邮箱：ahhcr68@gmail.com',
   'footer.sponsor': '赞助 LookBack',
@@ -121,12 +151,8 @@ export const en = {
   'nav.language.en': 'EN',
   'nav.download': 'Download',
   'nav.market': 'Community Commands',
+  'nav.developer': 'Developer',
   'nav.picaptain': 'PiCaptain',
-  'nav.llmTextAria': 'Copy llm.txt',
-  'nav.llmTextTooltip':
-    'Put the copied content into any AI chat to generate a custom command.',
-  'nav.llmTextCopied': 'llm.txt copied',
-  'nav.llmTextCopyFailed': 'Copy failed: {{error}}',
 
   'hero.badge': 'Assets Organization Canvas',
   'hero.title': 'Organize visual assets in one canvas',
@@ -233,6 +259,40 @@ export const en = {
     'Press / to open the command menu and bind shortcuts for frequent commands.',
   'commandMarket.shortcutDemo.alt':
     'Command market interface showing shortcut binding for commands',
+
+  'developer.badge': 'Plugin Development',
+  'developer.title': 'Turn your idea into a LookBack plugin',
+  'developer.desc':
+    'You do not need to understand the code structure. Copy the development guide to an AI, then describe what you want to build.',
+  'developer.decisionAria': 'Plugin format decision rule',
+  'developer.decision.no': 'One button or a small panel is enough',
+  'developer.decision.yes': 'Several steps, settings, or background work',
+  'developer.decision.jsx': 'Build a simple tool',
+  'developer.decision.folder': 'Build a complex plugin',
+  'developer.jsx.title': 'Build a simple tool',
+  'developer.jsx.desc':
+    'Best for one focused feature that works as soon as it opens. It is quick to build, simple to import, and easy to share.',
+  'developer.jsx.reasonTitle': 'For example',
+  'developer.jsx.reason.1': 'Organize or change canvas content in one click',
+  'developer.jsx.reason.2': 'Process, search, or export images in batches',
+  'developer.jsx.reason.3': 'Add an input panel or quick action',
+  'developer.jsx.output': 'One plugin file that imports directly into LookBack',
+  'developer.folder.title': 'Build a complex plugin',
+  'developer.folder.desc':
+    'Best for features that connect with other software, websites, or services, or need multiple steps, persistent data, and background work.',
+  'developer.folder.reasonTitle': 'For example',
+  'developer.folder.reason.1': 'Connect to other software, websites, or online services',
+  'developer.folder.reason.2': 'Keep accounts, settings, or task results over time',
+  'developer.folder.reason.3':
+    'Download content, analyze files, or run long tasks in the background',
+  'developer.folder.output': 'A plugin folder containing its interface and feature modules',
+  'developer.outputLabel': 'What you will get',
+  'developer.copyDoc': 'Copy development guide',
+  'developer.copyingDoc': 'Copying...',
+  'developer.copiedDoc': 'Copied',
+  'developer.copyDocRetry': 'Copy failed, retry',
+  'developer.note':
+    'Just trying things out? Start with a simple tool. Expand it into a complex plugin when it needs to connect with external software or services.',
 
   'footer.line': 'LookBack · Assets Organization Canvas',
   'footer.contact': 'Contact: ahhcr68@gmail.com',

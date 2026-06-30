@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useSnapshot } from "valtio";
+import { DeveloperPage } from "./components/DeveloperPage";
 import { FEATURE_LIST } from "./data/features";
 import { PICAPTAIN_FEATURE_LIST } from "./data/picaptainFeatures";
 import { useT } from "./i18n/useT";
@@ -97,31 +98,17 @@ function App() {
           >
             {t("nav.market")}
           </button>
-          <div className="llm-copy">
-            <button
-              type="button"
-              className="topbar-nav-btn"
-              aria-label={t("nav.llmTextAria")}
-              aria-describedby="llm-copy-tooltip"
-              disabled={snap.llmTextCopying}
-              onClick={() => {
-                void siteActions.copyLlmText();
-              }}
-            >
-              llm.txt
-            </button>
-            <span
-              id="llm-copy-tooltip"
-              className="llm-copy-tooltip"
-              role="tooltip"
-            >
-              {snap.llmTextError
-                ? t("nav.llmTextCopyFailed", { error: snap.llmTextError })
-                : snap.llmTextCopied
-                  ? t("nav.llmTextCopied")
-              : t("nav.llmTextTooltip")}
-            </span>
-          </div>
+          <button
+            type="button"
+            className={
+              snap.route === "/developer"
+                ? "topbar-nav-btn active"
+                : "topbar-nav-btn"
+            }
+            onClick={() => siteActions.goToRoute("/developer")}
+          >
+            {t("nav.developer")}
+          </button>
           <button
             type="button"
             className={
@@ -431,6 +418,8 @@ function App() {
               />
             </figure>
           </section>
+        ) : snap.route === "/developer" ? (
+          <DeveloperPage />
         ) : (
           <section
             className="picaptain-page"
