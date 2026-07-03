@@ -5,6 +5,7 @@ import {
   getRenderBbox,
 } from "../../store/canvasStore";
 import { globalState } from "../../store/globalStore";
+import { useT } from "../../i18n/useT";
 import { THEME } from "../../theme";
 import { CanvasControlButton } from "./CanvasButton";
 import { CANVAS_ICONS } from "./CanvasIcons";
@@ -16,10 +17,12 @@ interface SelectOverlayProps {
   onDeleteSelection: () => void;
   onFlipSelection: () => void;
   onFlipYSelection: () => void;
+  onTogglePixelSelection: () => void;
   onScaleStart: (client: { x: number; y: number; pointerId: number }) => void;
   onDeleteItem: (id: string) => void;
   onFlipItem: (id: string) => void;
   onFlipYItem: (id: string) => void;
+  onTogglePixelItem: (id: string) => void;
   onRotateItemStart: (
     id: string,
     client: { x: number; y: number; pointerId: number },
@@ -79,22 +82,29 @@ const getItemsUnion = (items: Snapshot<CanvasItem[]>) => {
   };
 };
 
+const isImageSelectionPixelated = (items: readonly Snapshot<CanvasItem>[]) =>
+  items.some((item) => item.type === "image") &&
+  items.every((item) => item.type !== "image" || item.pixelated === true);
+
 export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   stageScale,
   isSelectionBoxActive,
   onDeleteSelection,
   onFlipSelection,
   onFlipYSelection,
+  onTogglePixelSelection,
   onScaleStart,
   onDeleteItem,
   onFlipItem,
   onFlipYItem,
+  onTogglePixelItem,
   onRotateItemStart,
   onScaleStartItem,
   onCommitItem,
 }) => {
   const canvasSnap = useSnapshot(canvasState);
   const globalSnap = useSnapshot(globalState);
+  const { t } = useT();
 
   // In ghost mode (mouse through), we should not show the selection overlay
   if (globalSnap.mouseThrough) return null;
@@ -115,11 +125,49 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   if (selectedItems.length === 0) return null;
 
   const btnScale = 1 / stageScale;
+  const pixelButtonOffset = 28 * btnScale;
+  const renderPixelButton = ({
+    x,
+    y,
+    active,
+    onClick,
+  }: {
+    x: number;
+    y: number;
+    active: boolean;
+    onClick: (
+      e: React.MouseEvent<SVGGElement> | React.TouchEvent<SVGGElement>,
+    ) => void;
+  }) => (
+    <CanvasControlButton
+      x={x}
+      y={y}
+      scale={btnScale}
+      size={24}
+      fill={active ? THEME.primary : "#111827"}
+      stroke={active ? "white" : THEME.primary}
+      strokeWidth={2}
+      iconPath={CANVAS_ICONS.PIXEL.PATH}
+      iconFill={active ? "white" : THEME.primary}
+      iconScale={CANVAS_ICONS.PIXEL.SCALE}
+      iconOffsetX={CANVAS_ICONS.PIXEL.OFFSET_X}
+      iconOffsetY={CANVAS_ICONS.PIXEL.OFFSET_Y}
+      iconStroke="none"
+      iconStrokeWidth={0}
+      title={t(
+        active
+          ? "canvas.selection.pixelated.disable"
+          : "canvas.selection.pixelated.enable",
+      )}
+      onClick={onClick}
+    />
+  );
 
   if (selectedItems.length === 1) {
     const item = selectedItems[0];
     const singleUnion = getItemUnion(item);
     if (!singleUnion) return null;
+    const isPixelated = item.type === "image" && item.pixelated === true;
 
     return (
       <>
@@ -161,6 +209,16 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
             onCommitItem(item.itemId, { rotation: 0 });
           }}
         />
+        {item.type === "image" &&
+          renderPixelButton({
+            x: singleUnion.x + pixelButtonOffset,
+            y: singleUnion.y,
+            active: isPixelated,
+            onClick: (e) => {
+              e.stopPropagation();
+              onTogglePixelItem(item.itemId);
+            },
+          })}
         {item.type === "image" && (
           <CanvasControlButton
             x={singleUnion.x}
@@ -244,6 +302,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   const union = getItemsUnion(selectedItems);
   if (!union) return null;
   const hasImageSelection = selectedItems.some((item) => item.type === "image");
+  const pixelSelectionActive = isImageSelectionPixelated(selectedItems);
 
   return (
     <>
@@ -259,6 +318,16 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         fill="none"
         pointerEvents="none"
       />
+      {hasImageSelection &&
+        renderPixelButton({
+          x: union.x + pixelButtonOffset,
+          y: union.y,
+          active: pixelSelectionActive,
+          onClick: (e) => {
+            e.stopPropagation();
+            onTogglePixelSelection();
+          },
+        })}
       {hasImageSelection && (
         <CanvasControlButton
           x={union.x}

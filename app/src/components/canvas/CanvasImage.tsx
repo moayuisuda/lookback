@@ -67,6 +67,7 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   const scale = imageSnap.scale || 1;
   const flipX = imageSnap.flipX === true;
   const flipY = imageSnap.flipY === true;
+  const imageRendering = imageSnap.pixelated === true ? "pixelated" : "auto";
 
   const handleSelect = (
     e: React.MouseEvent<SVGGElement> | React.PointerEvent<SVGGElement>,
@@ -120,6 +121,7 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
           y={-baseHeight / 2}
           width={baseWidth}
           height={baseHeight}
+          style={{ imageRendering }}
           transform={
             flipX || flipY
               ? `scale(${flipX ? -1 : 1} ${flipY ? -1 : 1})`

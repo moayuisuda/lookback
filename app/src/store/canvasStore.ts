@@ -108,6 +108,7 @@ export interface CanvasImage extends ImageMeta {
   scale: number;
   flipX?: boolean;
   flipY?: boolean;
+  pixelated?: boolean;
   rotation: number;
   width: number;
   height: number;
@@ -158,6 +159,7 @@ export interface CanvasPersistedItem {
   // Image specific
   flipX?: boolean;
   flipY?: boolean;
+  pixelated?: boolean;
   imageId?: string;
   imagePath?: string;
   dominantColor?: string | null;
@@ -887,6 +889,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
           scale: img.scale,
           flipX: img.flipX,
           flipY: img.flipY,
+          pixelated: img.pixelated,
           width: img.width,
           height: img.height,
           grayscale: img.grayscale,
@@ -910,6 +913,7 @@ const persistCanvasItems = async (items: CanvasItem[]) => {
         scale: img.scale,
         flipX: img.flipX,
         flipY: img.flipY,
+        pixelated: img.pixelated,
         width: img.width,
         height: img.height,
         grayscale: img.grayscale,
@@ -1265,6 +1269,7 @@ export const canvasActions = {
             scale: temp.scale,
             flipX: temp.flipX,
             flipY: temp.flipY,
+            pixelated: temp.pixelated,
             rotation: temp.rotation,
             width: temp.width!,
             height: temp.height!,
@@ -1304,6 +1309,7 @@ export const canvasActions = {
             scale: ref.scale,
             flipX: ref.flipX,
             flipY: ref.flipY,
+            pixelated: ref.pixelated,
             rotation: ref.rotation,
             width: ref.width!,
             height: ref.height!,
@@ -2123,6 +2129,7 @@ export const canvasActions = {
         x,
         y,
         scale: 1,
+        pixelated: false,
         rotation: 0,
         isSelected: false,
       } satisfies CanvasImage;

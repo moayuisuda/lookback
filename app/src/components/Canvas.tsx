@@ -2007,6 +2007,29 @@ export const Canvas: React.FC = () => {
     }, 0);
   });
 
+  const handleTogglePixelSelection = useMemoizedFn(() => {
+    const selectedItems = getSelectedItems();
+    if (selectedItems.length === 0) return;
+
+    const imageItems = selectedItems.filter((item) => item.type === "image");
+    if (imageItems.length === 0) return;
+
+    const shouldEnablePixelated = imageItems.some(
+      (item) => item.pixelated !== true,
+    );
+
+    imageItems.forEach((item) => {
+      canvasActions.updateCanvasImageSilent(item.itemId, {
+        pixelated: shouldEnablePixelated,
+      });
+    });
+
+    canvasActions.commitCanvasChange();
+    setTimeout(() => {
+      setMultiSelectUnion(computeMultiSelectUnion(getSelectedIds()));
+    }, 0);
+  });
+
   useHotkeys(
     "mod+f",
     (e) => {
@@ -2219,6 +2242,14 @@ export const Canvas: React.FC = () => {
     const currentFlipY = target.flipY === true;
     canvasActions.updateCanvasImage(id, {
       flipY: !currentFlipY,
+    });
+  });
+
+  const handleTogglePixelItem = useMemoizedFn((id: string) => {
+    const target = canvasState.canvasItems.find((item) => item.itemId === id);
+    if (!target || target.type !== "image") return;
+    canvasActions.updateCanvasImage(id, {
+      pixelated: target.pixelated !== true,
     });
   });
 
@@ -2728,10 +2759,12 @@ export const Canvas: React.FC = () => {
             onDeleteSelection={handleDeleteSelection}
             onFlipSelection={handleFlipSelection}
             onFlipYSelection={handleFlipYSelection}
+            onTogglePixelSelection={handleTogglePixelSelection}
             onScaleStart={handleGroupScaleStart}
             onDeleteItem={handleDeleteItem}
             onFlipItem={handleFlipItem}
             onFlipYItem={handleFlipYItem}
+            onTogglePixelItem={handleTogglePixelItem}
             onRotateItemStart={handleRotateItemStart}
             onScaleStartItem={handleItemScaleStart}
             onCommitItem={handleCommitItem}

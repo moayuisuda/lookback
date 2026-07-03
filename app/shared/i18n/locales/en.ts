@@ -241,6 +241,8 @@ export const en = {
   "canvas.clearCanvasMessage":
     "Are you sure you want to clear the canvas? This action cannot be undone.",
   "canvas.clearCanvasConfirm": "Clear",
+  "canvas.selection.pixelated.enable": "Enable pixel interpolation",
+  "canvas.selection.pixelated.disable": "Disable pixel interpolation",
   "canvas.empty.title": "Start Your Canvas",
   "canvas.empty.dragHint": "Drag images or folders here to begin",
   "canvas.empty.panHint": "Middle Click or Space + Drag to Pan",

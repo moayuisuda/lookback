@@ -17,6 +17,12 @@ export const CANVAS_ICONS = {
     OFFSET_X: -10,
     OFFSET_Y: -10,
   },
+  PIXEL: {
+    PATH: "M4 4h3v3H4zM12 4h3v3h-3zM20 4h3v3h-3zM8 8h3v3H8zM16 8h3v3h-3zM4 12h3v3H4zM12 12h3v3h-3zM20 12h3v3h-3zM8 16h3v3H8zM16 16h3v3h-3zM4 20h3v3H4zM12 20h3v3h-3zM20 20h3v3h-3z",
+    SCALE: 0.7,
+    OFFSET_X: -9,
+    OFFSET_Y: -9,
+  },
   ROTATE: {
     PATH: "M21 12a9 9 0 1 1-9-9c2.52 0 4.83.99 6.57 2.6L21 8M21 3v5h-5",
     SCALE: 0.65,

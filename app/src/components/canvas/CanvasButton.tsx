@@ -19,10 +19,12 @@ interface CanvasControlButtonProps {
   iconPath?: string;
   iconStroke?: string;
   iconStrokeWidth?: number;
+  iconFill?: string;
   iconScale?: number;
   iconOffsetX?: number;
   iconOffsetY?: number;
   cursor?: string;
+  title?: string;
   onClick?: (
     e: React.MouseEvent<SVGGElement> | React.TouchEvent<SVGGElement>,
   ) => void;
@@ -46,10 +48,12 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
   iconPath,
   iconStroke = "white",
   iconStrokeWidth = 2,
+  iconFill = "transparent",
   iconScale = 0.8,
   iconOffsetX = -10,
   iconOffsetY = -8,
   cursor = "pointer",
+  title,
   onClick,
   onMouseDown,
   onPointerDown,
@@ -101,6 +105,7 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
         onPointerDown?.(e);
       }}
     >
+      {title ? <title>{title}</title> : null}
       <rect
         x={-size / 2}
         y={-size / 2}
@@ -127,7 +132,7 @@ export const CanvasControlButton: React.FC<CanvasControlButtonProps> = ({
           stroke={iconStroke}
           strokeWidth={iconStrokeWidth}
           strokeLinecap="round"
-          fill="transparent"
+          fill={iconFill}
           strokeLinejoin="round"
           transform={`translate(${iconOffsetX} ${iconOffsetY}) scale(${iconScale})`}
         />
