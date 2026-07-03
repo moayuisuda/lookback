@@ -41,7 +41,7 @@ export const CanvasTextEditor = ({
   onCommitEnter,
 }: CanvasTextEditorProps) => {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const itemSnap = useSnapshot(item);
+  const itemSnap = useSnapshot(item, { sync: true });
   const canvasSnap = useSnapshot(canvasState);
   const viewportX = canvasSnap.canvasViewport.x;
   const viewportY = canvasSnap.canvasViewport.y;
