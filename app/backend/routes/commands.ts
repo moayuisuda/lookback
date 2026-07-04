@@ -317,6 +317,7 @@ const runNpmInstall = async (pluginDir: string) => {
         "--omit=dev",
         "--no-audit",
         "--no-fund",
+        "--ignore-scripts",
         `--registry=${NPM_REGISTRY}`,
       ],
       {
