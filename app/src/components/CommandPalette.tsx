@@ -72,6 +72,15 @@ const isUiComponent = (
   return typeof ui === "function" || (typeof ui === "object" && ui !== null);
 };
 
+const isEditableElement = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable
+  );
+};
+
 export const CommandPalette: React.FC = () => {
   const snap = useSnapshot(commandState, { sync: true });
   const globalSnap = useSnapshot(globalState);
@@ -118,6 +127,12 @@ export const CommandPalette: React.FC = () => {
     globalActions.pushToast({ key: "toast.shortcutInvalid" }, "error");
   });
 
+  const blurSearchInput = useMemoizedFn(() => {
+    const searchInput = inputRef.current?.input;
+    if (!searchInput || document.activeElement !== searchInput) return;
+    inputRef.current?.blur();
+  });
+
   const handleSetExternalCommandShortcut = useMemoizedFn(
     async (commandId: string, accelerator: string) => {
       await commandActions.setExternalCommandShortcut(commandId, accelerator);
@@ -152,14 +167,29 @@ export const CommandPalette: React.FC = () => {
     if (!snap.isOpen) return;
     // 已有 activeCommandId 说明是从 contextmenu 直接触发 UI 命令，
     // 命令列表已加载过，跳过重新加载以避免模块实例被替换导致 ui 组件重挂载
-    if (!snap.activeCommandId) {
-      void commandActions.loadExternalCommands();
+    if (snap.activeCommandId) {
+      blurSearchInput();
+      return;
     }
+    void commandActions.loadExternalCommands();
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
-  }, [snap.isOpen, snap.activeCommandId]);
+  }, [snap.isOpen, snap.activeCommandId, blurSearchInput]);
+
+  useEffect(() => {
+    if (!snap.isOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (isEditableElement(event.target)) return;
+      blurSearchInput();
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () =>
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [snap.isOpen, blurSearchInput]);
 
   const commands = getCommands();
   const commandContext = getCommandContext();
@@ -395,18 +425,28 @@ export const CommandPalette: React.FC = () => {
 
   return (
     <>
-      <aside
-        className={clsx(
-          "command-palette-panel fixed right-4 top-4 bottom-4 z-[90] flex flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md no-drag",
-          snap.isClosing && "command-palette-panel--closing pointer-events-none",
-        )}
-        style={{ width: panelWidth }}
-      >
-        {isTaskUi ? (
-          <>
-            <div
-              role="separator"
-              tabIndex={0}
+	      <aside
+	        className={clsx(
+	          "command-palette-panel fixed right-4 top-4 bottom-4 z-[90] no-drag",
+	          snap.isClosing && "command-palette-panel--closing pointer-events-none",
+	        )}
+	        style={{ width: panelWidth }}
+	      >
+	        <button
+	          type="button"
+	          onClick={commandActions.close}
+	          className="absolute left-0 top-1/2 z-30 flex h-9 w-8 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-lg border border-r-0 border-neutral-800 bg-neutral-950/95 text-neutral-400 shadow-[-8px_0_24px_rgba(0,0,0,0.25)] backdrop-blur-md transition-colors hover:border-neutral-700 hover:bg-neutral-900 hover:text-neutral-100"
+	          title={t("commandPalette.collapse")}
+	          aria-label={t("commandPalette.collapse")}
+	        >
+	          <X size={15} />
+	        </button>
+	        <div className="relative flex h-full flex-col overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/95 shadow-[-16px_0_40px_rgba(0,0,0,0.35)] backdrop-blur-md">
+	          {isTaskUi ? (
+	            <>
+	            <div
+	              role="separator"
+	              tabIndex={0}
               aria-orientation="vertical"
               aria-label={t("commandPalette.resizePanel")}
               aria-valuemin={panelWidthBounds.min}
@@ -433,33 +473,24 @@ export const CommandPalette: React.FC = () => {
                   onClick={() => {
                     commandActions.setActiveCommand(null);
                   }}
-                  className="text-xs text-neutral-400 hover:text-neutral-200"
-                >
-                  {t("commandPalette.back")}
-                </button>
-                <button
-                  type="button"
-                  onClick={commandActions.close}
-                  className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
-                  title={t("commandPalette.collapse")}
-                  aria-label={t("commandPalette.collapse")}
-                >
-                  <X size={15} />
-                </button>
-              </div>
-            </div>
-            {isUiComponent(activeUi) ? (
+	                  className="text-xs text-neutral-400 hover:text-neutral-200"
+	                >
+	                  {t("commandPalette.back")}
+	                </button>
+	              </div>
+	            </div>
+	            {isUiComponent(activeUi) ? (
               <div className="min-h-0 flex-1 overflow-y-auto dark-scrollbar">
                 {React.createElement(activeUi, {
                   context: commandContext,
                 })}
               </div>
             ) : null}
-          </>
-        ) : (
-          <>
-            <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-3">
-              <Input
+	            </>
+	          ) : (
+	            <>
+	            <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-3">
+	              <Input
                 ref={inputRef}
                 value={snap.query}
                 onChange={(e) => commandActions.setQuery(e.target.value)}
@@ -485,19 +516,10 @@ export const CommandPalette: React.FC = () => {
                 onClick={handleImportCommand}
                 className="text-neutral-400 hover:text-neutral-200 p-1 rounded hover:bg-neutral-800 transition-colors"
                 title={t("commandPalette.import")}
-              >
-                <FileUp size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={commandActions.close}
-                className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
-                title={t("commandPalette.collapse")}
-                aria-label={t("commandPalette.collapse")}
-              >
-                <X size={15} />
-              </button>
-            </div>
+	              >
+	                <FileUp size={16} />
+	              </button>
+	            </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto dark-scrollbar">
                 {results.length === 0 && (
@@ -697,9 +719,10 @@ export const CommandPalette: React.FC = () => {
                   return null;
                 })}
             </div>
-          </>
-        )}
-      </aside>
+	            </>
+	          )}
+	        </div>
+	      </aside>
       <ConfirmModal
         isOpen={Boolean(deleteTarget)}
         title={t("commandPalette.deleteTitle")}
