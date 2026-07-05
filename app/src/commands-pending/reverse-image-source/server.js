@@ -5,8 +5,9 @@ import { lockedFs } from "./fileLock.js";
 const COMMAND_RUNTIME_DIR = "reverse-image-source";
 const CONFIG_FILE = "config.json";
 const RESULT_LIMIT = 12;
-const MAX_NETWORK_ATTEMPTS = 2;
-const NETWORK_RETRY_DELAY_MS = 350;
+const MAX_SEARCH_RETRIES = 3;
+const MAX_SEARCH_ATTEMPTS = MAX_SEARCH_RETRIES + 1;
+const SEARCH_RETRY_DELAY_MS = 350;
 const DEFAULT_API_KEY = "07304d5567e5d5fc5f17ffdcb6fe432c012d257d";
 
 const getConfigPath = async (context) => {
@@ -177,12 +178,29 @@ const mapThrownError = (error, message) => {
   return "SEARCH_FAILED";
 };
 
-const isTransientNetworkError = (error) => {
+const getHttpStatusCode = (error) => {
+  const statusCode =
+    error?.response?.statusCode ??
+    error?.response?.status ??
+    error?.statusCode ??
+    error?.status;
+  const parsed = Number.parseInt(String(statusCode || ""), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const isRetryableSearchError = (error) => {
   const message = getThrownErrorMessage(error);
   const code = String(error?.code || error?.cause?.code || "").toUpperCase();
+  const statusCode = getHttpStatusCode(error);
+
+  if (mapRemoteError({ message }) !== "REMOTE_ERROR") return false;
+
   return (
+    statusCode === 408 ||
+    statusCode >= 500 ||
     /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EPIPE/.test(code) ||
-    /network|socket|timeout|timed out|connection|fetch failed/i.test(message)
+    /network|socket|timeout|timed out|connection|fetch failed/i.test(message) ||
+    /json|unexpected token|invalid response|parse/i.test(message)
   );
 };
 
@@ -206,19 +224,21 @@ const executeSearchOnce = async (imageInput, apiKey) => {
 
 const executeSearch = async (imageInput, apiKey) => {
   let lastError = null;
-  for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= MAX_SEARCH_ATTEMPTS; attempt += 1) {
     try {
       return await executeSearchOnce(imageInput, apiKey);
     } catch (error) {
       lastError = error;
-      if (attempt >= MAX_NETWORK_ATTEMPTS || !isTransientNetworkError(error)) {
+      if (attempt >= MAX_SEARCH_ATTEMPTS || !isRetryableSearchError(error)) {
         throw error;
       }
-      console.warn("[reverse-image-source] retry transient network error", {
+      console.warn("[reverse-image-source] retry transient search error", {
         attempt,
+        nextAttempt: attempt + 1,
+        retriesRemaining: MAX_SEARCH_ATTEMPTS - attempt - 1,
         message: getThrownErrorMessage(error),
       });
-      await sleep(NETWORK_RETRY_DELAY_MS);
+      await sleep(SEARCH_RETRY_DELAY_MS * attempt);
     }
   }
   throw lastError;
