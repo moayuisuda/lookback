@@ -488,6 +488,14 @@ function App() {
           <a className="footer-link" href="mailto:ahhcr68@gmail.com">
             {t("footer.contact")}
           </a>
+          <a
+            className="footer-link"
+            href="https://qm.qq.com/q/A9fsBnRyNO"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t("footer.qqGroup")}
+          </a>
           <p>{t("footer.copyright")}</p>
         </div>
         <a

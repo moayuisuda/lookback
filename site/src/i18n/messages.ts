@@ -140,6 +140,7 @@ export const zh = {
 
   'footer.line': 'LookBack · 素材整理画布',
   'footer.contact': '联系邮箱：ahhcr68@gmail.com',
+  'footer.qqGroup': '加入 QQ 群',
   'footer.sponsor': '赞助 LookBack',
   'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } as const;
@@ -296,6 +297,7 @@ export const en = {
 
   'footer.line': 'LookBack · Assets Organization Canvas',
   'footer.contact': 'Contact: ahhcr68@gmail.com',
+  'footer.qqGroup': 'Join QQ Group',
   'footer.sponsor': 'Sponsor LookBack',
   'footer.copyright': 'Copyright © 2026 LookBack. All rights reserved.',
 } satisfies Record<keyof typeof zh, string>;
