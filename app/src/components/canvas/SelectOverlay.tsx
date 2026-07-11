@@ -18,6 +18,7 @@ interface SelectOverlayProps {
   onFlipSelection: () => void;
   onFlipYSelection: () => void;
   onTogglePixelSelection: () => void;
+  onGroupSelection: () => void;
   onScaleStart: (client: { x: number; y: number; pointerId: number }) => void;
   onDeleteItem: (id: string) => void;
   onFlipItem: (id: string) => void;
@@ -93,6 +94,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   onFlipSelection,
   onFlipYSelection,
   onTogglePixelSelection,
+  onGroupSelection,
   onScaleStart,
   onDeleteItem,
   onFlipItem,
@@ -303,6 +305,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
   if (!union) return null;
   const hasImageSelection = selectedItems.some((item) => item.type === "image");
   const pixelSelectionActive = isImageSelectionPixelated(selectedItems);
+  const multiSelectControlOffset = 28 * btnScale;
 
   return (
     <>
@@ -318,9 +321,27 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         fill="none"
         pointerEvents="none"
       />
+      <CanvasControlButton
+        x={union.x}
+        y={union.y}
+        scale={btnScale}
+        size={24}
+        fill={THEME.primary}
+        stroke="white"
+        strokeWidth={2}
+        iconPath={CANVAS_ICONS.GROUP.PATH}
+        iconScale={CANVAS_ICONS.GROUP.SCALE}
+        iconOffsetX={CANVAS_ICONS.GROUP.OFFSET_X}
+        iconOffsetY={CANVAS_ICONS.GROUP.OFFSET_Y}
+        title={t("canvas.selection.group")}
+        onClick={(e) => {
+          e.stopPropagation();
+          onGroupSelection();
+        }}
+      />
       {hasImageSelection &&
         renderPixelButton({
-          x: union.x + pixelButtonOffset,
+          x: union.x + multiSelectControlOffset * 2,
           y: union.y,
           active: pixelSelectionActive,
           onClick: (e) => {
@@ -330,7 +351,7 @@ export const SelectOverlay: React.FC<SelectOverlayProps> = ({
         })}
       {hasImageSelection && (
         <CanvasControlButton
-          x={union.x}
+          x={union.x + multiSelectControlOffset}
           y={union.y}
           scale={btnScale}
           size={24}

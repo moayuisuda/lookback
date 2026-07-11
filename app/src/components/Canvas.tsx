@@ -2161,6 +2161,10 @@ export const Canvas: React.FC = () => {
     },
   );
 
+  const handleGroupSelection = useMemoizedFn(() => {
+    canvasActions.groupSelectedItems();
+  });
+
   const handleItemScaleStart = useMemoizedFn(
     (id: string, client: { x: number; y: number; pointerId: number }) => {
       const target = canvasState.canvasItems.find((it) => it.itemId === id);
@@ -2760,6 +2764,7 @@ export const Canvas: React.FC = () => {
             onFlipSelection={handleFlipSelection}
             onFlipYSelection={handleFlipYSelection}
             onTogglePixelSelection={handleTogglePixelSelection}
+            onGroupSelection={handleGroupSelection}
             onScaleStart={handleGroupScaleStart}
             onDeleteItem={handleDeleteItem}
             onFlipItem={handleFlipItem}

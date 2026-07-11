@@ -243,6 +243,7 @@ export const en = {
   "canvas.clearCanvasConfirm": "Clear",
   "canvas.selection.pixelated.enable": "Enable pixel interpolation",
   "canvas.selection.pixelated.disable": "Disable pixel interpolation",
+  "canvas.selection.group": "Group selection",
   "canvas.empty.title": "Start Your Canvas",
   "canvas.empty.dragHint": "Drag images or folders here to begin",
   "canvas.empty.panHint": "Middle Click or Space + Drag to Pan",

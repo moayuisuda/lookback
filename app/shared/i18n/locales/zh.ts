@@ -247,6 +247,7 @@ export const zh = {
   "canvas.clearCanvasConfirm": "清空",
   "canvas.selection.pixelated.enable": "开启像素插值",
   "canvas.selection.pixelated.disable": "关闭像素插值",
+  "canvas.selection.group": "编组选中项",
   "canvas.empty.title": "开始你的画布",
   "canvas.empty.dragHint": "拖拽图片或文件夹到此处开始",
   "canvas.empty.panHint": "中键或空格拖拽平移",

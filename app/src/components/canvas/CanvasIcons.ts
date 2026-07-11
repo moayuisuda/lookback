@@ -1,4 +1,10 @@
 export const CANVAS_ICONS = {
+  GROUP: {
+    PATH: "M4 4h16v16H4zM7 7h5v4H7zM12 13h5v4h-5z",
+    SCALE: 0.7,
+    OFFSET_X: -8.4,
+    OFFSET_Y: -8.4,
+  },
   TRASH: {
     PATH: "M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3",
     SCALE: 0.65,
@@ -18,10 +24,10 @@ export const CANVAS_ICONS = {
     OFFSET_Y: -10,
   },
   PIXEL: {
-    PATH: "M4 4h3v3H4zM12 4h3v3h-3zM20 4h3v3h-3zM8 8h3v3H8zM16 8h3v3h-3zM4 12h3v3H4zM12 12h3v3h-3zM20 12h3v3h-3zM8 16h3v3H8zM16 16h3v3h-3zM4 20h3v3H4zM12 20h3v3h-3zM20 20h3v3h-3z",
+    PATH: "M2 2h4v4H2zM10 2h4v4h-4zM18 2h4v4h-4zM6 6h4v4H6zM14 6h4v4h-4zM2 10h4v4H2zM10 10h4v4h-4zM18 10h4v4h-4zM6 14h4v4H6zM14 14h4v4h-4zM2 18h4v4H2zM10 18h4v4h-4zM18 18h4v4h-4z",
     SCALE: 0.7,
-    OFFSET_X: -9,
-    OFFSET_Y: -9,
+    OFFSET_X: -8.4,
+    OFFSET_Y: -8.4,
   },
   ROTATE: {
     PATH: "M21 12a9 9 0 1 1-9-9c2.52 0 4.83.99 6.57 2.6L21 8M21 3v5h-5",
