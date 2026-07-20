@@ -7,23 +7,7 @@ import {
 import { canvasState } from "../../store/canvasStore";
 import { CanvasNode } from "./CanvasNode";
 import { API_BASE_URL } from "../../config";
-
-const getImageUrl = (imagePath: string, canvasName?: string) => {
-  let normalized = imagePath.replace(/\\/g, "/");
-  if (normalized.startsWith("/")) {
-    normalized = normalized.slice(1);
-  }
-  if (normalized.startsWith("assets/")) {
-    const filename = normalized.split("/").pop() || normalized;
-    const safeCanvasName = encodeURIComponent(canvasName || "Default");
-    const safeFilename = encodeURIComponent(filename);
-    return `${API_BASE_URL}/api/assets/${safeCanvasName}/${safeFilename}`;
-  }
-  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
-    return normalized;
-  }
-  return `${API_BASE_URL}/${normalized}`;
-};
+import { resolveCanvasImageUrl } from "../../../shared/canvasImagePath";
 
 interface CanvasImageProps {
   image: CanvasImageState;
@@ -59,9 +43,10 @@ export const CanvasImage: React.FC<CanvasImageProps> = ({
   useVisualRenderCheck(`CanvasImage:${image.itemId}`);
   const imageSnap = useSnapshot(image);
   const canvasSnap = useSnapshot(canvasState);
-  const imageUrl = getImageUrl(
+  const imageUrl = resolveCanvasImageUrl(
     imageSnap.imagePath,
     canvasSnap.currentCanvasName,
+    API_BASE_URL,
   );
 
   const scale = imageSnap.scale || 1;

@@ -108,6 +108,16 @@ const DEFAULT_CANVAS_PEN_SHORTCUT = isMac ? 'Command+P' : 'Ctrl+P';
 const DEFAULT_CANVAS_PEN_ERASE_SHORTCUT = 'E';
 const DEFAULT_WINDOW_DRAG_SHORTCUT = '';
 const DEFAULT_COMMAND_PALETTE_SHORTCUT = '/';
+const NATIVE_CANVAS_SHORTCUT_ENTRIES: ShortcutEntry[] = [
+  {
+    id: 'canvasCopy',
+    accelerator: isMac ? 'Command+C' : 'Ctrl+C',
+  },
+  {
+    id: 'canvasPaste',
+    accelerator: isMac ? 'Command+V' : 'Ctrl+V',
+  },
+];
 const GLOBAL_SHORTCUT_FIELDS = [
   'toggleWindowShortcut',
   'canvasOpacityUpShortcut',
@@ -159,10 +169,13 @@ export const globalState = proxy<GlobalState>({
 });
 
 export const getGlobalShortcutEntries = (): ShortcutEntry[] =>
-  GLOBAL_SHORTCUT_FIELDS.map((field) => ({
-    id: field,
-    accelerator: globalState[field],
-  })).filter((entry) => entry.accelerator.trim());
+  [
+    ...NATIVE_CANVAS_SHORTCUT_ENTRIES,
+    ...GLOBAL_SHORTCUT_FIELDS.map((field) => ({
+      id: field,
+      accelerator: globalState[field],
+    })),
+  ].filter((entry) => entry.accelerator.trim());
 
 const isGlobalShortcutAvailable = (
   field: GlobalShortcutField,

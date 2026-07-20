@@ -9,6 +9,8 @@ import {
   saveCanvasViewport,
   localApi,
   saveCanvasGroups,
+  copyCanvasAssetImages,
+  deleteCanvasAssetImages,
   type CanvasViewport,
 } from "../service";
 import { debounce } from "radash";
@@ -21,8 +23,15 @@ import {
   getImagePathDirname,
   isAssetImagePath,
   isRemoteImagePath,
+  normalizeImagePath,
   resolveLocalImagePathFromStorage,
 } from "../../shared/canvasImagePath";
+import {
+  createCanvasClipboardPayload,
+  parseCanvasClipboardPayload,
+  serializeCanvasClipboardPayload,
+  type CanvasClipboardPayload,
+} from "../utils/canvasClipboard";
 
 // 绘制中的实时笔画数据，存于 plain JS 完全绕过 valtio，零 React re-render
 interface LiveStrokeData {
@@ -131,6 +140,7 @@ const DEFAULT_CANVAS_PATH_COLOR_SLOTS = [
   "#ef4444",
 ] as const;
 const DEFAULT_CANVAS_GROUP_COLOR = "#39c5bb";
+const CANVAS_PASTE_CASCADE_SCREEN_OFFSET = 24;
 export const CANVAS_GROUP_PADDING_X = 64;
 export const CANVAS_GROUP_PADDING_Y = 64;
 
@@ -953,6 +963,163 @@ const persistCanvasGroupsForCurrentCanvas = async (groups: CanvasGroup[]) => {
 const cloneCanvasItem = (item: CanvasItem): CanvasItem => clonePlain(item);
 const cloneCanvasGroup = (group: CanvasGroup): CanvasGroup => clonePlain(group);
 
+const canvasPasteCascadeByCanvas = new Map<
+  string,
+  { clipboardId: string; count: number }
+>();
+
+const getCanvasItemsBounds = (items: CanvasItem[]) => {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  items.forEach((item) => {
+    const bounds = getCanvasItemBounds(item);
+    if (!bounds) return;
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
+  });
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+const getCanvasInsertionPoint = () => {
+  const { canvasViewport, cursorLocalPoint, dimensions } = canvasState;
+  const width = dimensions.width || canvasViewport.width;
+  const height = dimensions.height || canvasViewport.height;
+  const scale = canvasViewport.scale || 1;
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    !Number.isFinite(canvasViewport.x) ||
+    !Number.isFinite(canvasViewport.y) ||
+    !Number.isFinite(scale) ||
+    scale <= 0
+  ) {
+    return { x: 100, y: 100 };
+  }
+
+  return {
+    x: ((cursorLocalPoint?.x ?? width / 2) - canvasViewport.x) / scale,
+    y: ((cursorLocalPoint?.y ?? height / 2) - canvasViewport.y) / scale,
+  };
+};
+
+const getClipboardItemIdPrefix = (item: CanvasItem) => {
+  if (item.type === "image") return "img";
+  if (item.type === "text") return "text";
+  return "path";
+};
+
+const normalizeCanvasAssetPath = (imagePath: string) =>
+  normalizeImagePath(imagePath).replace(/^\/+/, "");
+
+const getCanvasPasteCascadeCount = (
+  clipboardId: string,
+  targetCanvasName: string,
+) => {
+  const previous = canvasPasteCascadeByCanvas.get(targetCanvasName);
+  if (previous?.clipboardId === clipboardId) {
+    previous.count += 1;
+    return previous.count;
+  }
+
+  canvasPasteCascadeByCanvas.set(targetCanvasName, {
+    clipboardId,
+    count: 0,
+  });
+  return 0;
+};
+
+const copyClipboardAssetsToCanvas = async (
+  payload: CanvasClipboardPayload,
+  targetCanvasName: string,
+) => {
+  if (payload.sourceCanvasName === targetCanvasName) {
+    return {
+      items: payload.items.map(cloneCanvasItem),
+      copiedAssetPaths: [],
+    };
+  }
+
+  const sourceAssetPaths = Array.from(
+    new Set(
+      payload.items
+        .filter(
+          (item): item is CanvasImage =>
+            item.type === "image" && isAssetImagePath(item.imagePath),
+        )
+        .map((item) => normalizeCanvasAssetPath(item.imagePath)),
+    ),
+  );
+  if (sourceAssetPaths.length === 0) {
+    return {
+      items: payload.items.map(cloneCanvasItem),
+      copiedAssetPaths: [],
+    };
+  }
+
+  const copiedAssets = await copyCanvasAssetImages(
+    sourceAssetPaths,
+    payload.sourceCanvasName,
+    targetCanvasName,
+  );
+  const copiedAssetPaths = copiedAssets.map((asset) => asset.path);
+
+  try {
+    const copiedBySourcePath = new Map(
+      copiedAssets.map((asset) => [
+        normalizeCanvasAssetPath(asset.sourcePath),
+        asset,
+      ]),
+    );
+    const items = payload.items.map((item) => {
+      const nextItem = cloneCanvasItem(item);
+      if (
+        nextItem.type !== "image" ||
+        !isAssetImagePath(nextItem.imagePath)
+      ) {
+        return nextItem;
+      }
+
+      const copiedAsset = copiedBySourcePath.get(
+        normalizeCanvasAssetPath(nextItem.imagePath),
+      );
+      if (!copiedAsset) {
+        throw new Error("Copied canvas asset is missing");
+      }
+
+      nextItem.id = `temp_${crypto.randomUUID()}`;
+      nextItem.filename = copiedAsset.filename;
+      nextItem.imagePath = copiedAsset.path;
+      return nextItem;
+    });
+    return { items, copiedAssetPaths };
+  } catch (error) {
+    await deleteCanvasAssetImages(copiedAssetPaths, targetCanvasName);
+    throw error;
+  }
+};
+
 const syncCanvasItem = (target: CanvasItem, source: CanvasItem) => {
   syncProxyRecord(target, source);
 };
@@ -1450,6 +1617,137 @@ export const canvasActions = {
       start: null,
       current: null,
     };
+  },
+
+  copyCanvasSelection: () => {
+    const selectedItems = canvasState.canvasItems.filter(
+      (item) => item.isSelected,
+    );
+    const activeGroup =
+      selectedItems.length === 0 && canvasState.activeCanvasGroupId
+        ? canvasState.canvasGroups.find(
+            (group) => group.groupId === canvasState.activeCanvasGroupId,
+          )
+        : null;
+    const activeGroupItemIds = activeGroup
+      ? new Set(activeGroup.items)
+      : null;
+    const sourceItems = activeGroupItemIds
+      ? canvasState.canvasItems.filter((item) =>
+          activeGroupItemIds.has(item.itemId),
+        )
+      : selectedItems;
+    if (sourceItems.length === 0) return null;
+
+    const sourceItemIds = new Set(sourceItems.map((item) => item.itemId));
+    const sourceGroups = canvasState.canvasGroups.filter((group) =>
+      group.items.every((itemId) => sourceItemIds.has(itemId)),
+    );
+    const items = sourceItems.map((item) => {
+      const copied = cloneCanvasItem(item);
+      copied.isSelected = false;
+      if (copied.type === "text") {
+        copied.isAutoEdit = false;
+      }
+      return copied;
+    });
+    const groups = sourceGroups.map(cloneCanvasGroup);
+
+    return serializeCanvasClipboardPayload(
+      createCanvasClipboardPayload({
+        sourceCanvasName: canvasState.currentCanvasName,
+        items,
+        groups,
+      }),
+    );
+  },
+
+  pasteCanvasSelection: async (serialized: string) => {
+    const payload = parseCanvasClipboardPayload(serialized);
+    if (!payload || payload.items.length === 0) return [];
+
+    const targetCanvasName = canvasState.currentCanvasName;
+    const { items: sourceItems, copiedAssetPaths } =
+      await copyClipboardAssetsToCanvas(
+        payload,
+        targetCanvasName,
+      );
+    let assetsAttached = false;
+
+    try {
+      if (canvasState.currentCanvasName !== targetCanvasName) return [];
+
+      const sourceBounds = getCanvasItemsBounds(sourceItems);
+      if (!sourceBounds) return [];
+
+      const viewportScale = canvasState.canvasViewport.scale || 1;
+      const insertionPoint = getCanvasInsertionPoint();
+      const cascadeCount = getCanvasPasteCascadeCount(
+        payload.clipboardId,
+        targetCanvasName,
+      );
+      const cascadeOffset =
+        (CANVAS_PASTE_CASCADE_SCREEN_OFFSET * cascadeCount) / viewportScale;
+      const offsetX =
+        insertionPoint.x + cascadeOffset -
+        (sourceBounds.x + sourceBounds.width / 2);
+      const offsetY =
+        insertionPoint.y + cascadeOffset -
+        (sourceBounds.y + sourceBounds.height / 2);
+
+      const itemIdMap = new Map<string, string>();
+      const pastedItems = sourceItems.map((item) => {
+        const itemId = `${getClipboardItemIdPrefix(item)}_${crypto.randomUUID()}`;
+        itemIdMap.set(item.itemId, itemId);
+        const pasted = cloneCanvasItem(item);
+        pasted.itemId = itemId;
+        pasted.x += offsetX;
+        pasted.y += offsetY;
+        pasted.isSelected = false;
+        if (pasted.type === "text") {
+          pasted.isAutoEdit = false;
+        }
+        return pasted;
+      });
+      const pastedGroups = payload.groups.map((group) => ({
+        ...cloneCanvasGroup(group),
+        groupId: `group_${crypto.randomUUID()}`,
+        items: group.items.map((itemId) => itemIdMap.get(itemId)!),
+      }));
+
+      canvasState.canvasItems.forEach((item) => {
+        item.isSelected = false;
+      });
+      canvasState.canvasItems.push(...pastedItems);
+      canvasState.canvasGroups.push(...pastedGroups);
+      assetsAttached = true;
+      canvasState.activeCanvasGroupColorPickerId = null;
+      canvasState.selectionBox = { start: null, current: null };
+
+      const isSingleGroupSelection =
+        pastedGroups.length === 1 &&
+        pastedGroups[0].items.length === pastedItems.length;
+      if (isSingleGroupSelection) {
+        canvasState.activeCanvasGroupId = pastedGroups[0].groupId;
+        canvasState.primaryId = null;
+        canvasState.multiSelectUnion = null;
+      } else {
+        pastedItems.forEach((item) => {
+          item.isSelected = true;
+        });
+        canvasState.activeCanvasGroupId = null;
+        canvasState.primaryId = pastedItems[0]?.itemId ?? null;
+        canvasState.multiSelectUnion =
+          pastedItems.length > 1 ? getCanvasItemsBounds(pastedItems) : null;
+      }
+
+      canvasActions.commitCanvasChange();
+      return pastedItems.map((item) => item.itemId);
+    } finally {
+      if (!assetsAttached && copiedAssetPaths.length > 0) {
+        await deleteCanvasAssetImages(copiedAssetPaths, targetCanvasName);
+      }
+    }
   },
 
   setPenMode: (enabled: boolean) => {

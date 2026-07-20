@@ -8,7 +8,7 @@ import {
 } from "./store/globalStore";
 import { canvasActions, canvasState } from "./store/canvasStore";
 import { anchorActions } from "./store/anchorStore";
-import { commandActions } from "./store/commandStore";
+import { commandActions, commandState } from "./store/commandStore";
 import { useSnapshot } from "valtio";
 import { clsx } from "clsx";
 
@@ -18,12 +18,24 @@ import { isI18nKey } from "../shared/i18n/guards";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { versionActions } from "./store/versionStore";
 import { writeTextToClipboard } from "./utils/clipboard";
+import {
+  parseCanvasClipboardPayload,
+  readCanvasClipboard,
+  writeCanvasClipboard,
+} from "./utils/canvasClipboard";
+import { API_BASE_URL } from "./config";
 
 import { WindowResizer } from "./components/WindowResizer";
 import { CommandPalette } from "./components/CommandPalette";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+const isEditableClipboardTarget = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable);
 
 function App() {
   useAppShortcuts();
@@ -113,23 +125,79 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handlePaste = async (e: ClipboardEvent) => {
-      if (document.hidden) return;
-      // 1. Try to get files directly (works for Finder files and most screenshots)
-      let files = Array.from(e.clipboardData?.files || []);
+    const handleCopy = (event: ClipboardEvent) => {
+      if (
+        document.hidden ||
+        commandState.isOpen ||
+        isEditableClipboardTarget(event.target)
+      ) {
+        return;
+      }
 
-      // 2. If no files found, check items (some browsers/OS might put image data here without populating files)
+      const serialized = canvasActions.copyCanvasSelection();
+      if (!serialized) return;
+
+      event.preventDefault();
+      const payload = parseCanvasClipboardPayload(serialized);
+      if (!payload) return;
+      void writeCanvasClipboard(payload, serialized, API_BASE_URL).catch(
+        (error) => {
+          globalActions.pushToast(
+            {
+              key: "toast.canvasCopyFailed",
+              params: {
+                error:
+                  error instanceof Error ? error.message : String(error),
+              },
+            },
+            "error",
+          );
+        },
+      );
+    };
+
+    const handlePaste = async (e: ClipboardEvent) => {
+      if (
+        document.hidden ||
+        commandState.isOpen ||
+        isEditableClipboardTarget(e.target)
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      const canvasSelectionTask = readCanvasClipboard(e.clipboardData);
+
+      // ClipboardEvent 返回后 DataTransfer 可能失效，因此必须同步提取文件。
+      let files = Array.from(e.clipboardData?.files || []);
       if (files.length === 0 && e.clipboardData?.items) {
         const items = Array.from(e.clipboardData.items);
         files = items
           .filter((item) => item.type.startsWith("image/"))
           .map((item) => item.getAsFile())
-          .filter((f): f is File => f !== null);
+          .filter((file): file is File => file !== null);
+      }
+
+      const canvasSelection = await canvasSelectionTask;
+      if (canvasSelection) {
+        try {
+          await canvasActions.pasteCanvasSelection(canvasSelection);
+        } catch (error) {
+          globalActions.pushToast(
+            {
+              key: "toast.canvasPasteFailed",
+              params: {
+                error:
+                  error instanceof Error ? error.message : String(error),
+              },
+            },
+            "error",
+          );
+        }
+        return;
       }
 
       if (files.length > 0) {
-        e.preventDefault();
-
         const { canvasViewport, dimensions } = canvasState;
         const width = dimensions.width || canvasViewport.width;
         const height = dimensions.height || canvasViewport.height;
@@ -181,8 +249,12 @@ function App() {
       }
     };
 
+    window.addEventListener("copy", handleCopy);
     window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("copy", handleCopy);
+      window.removeEventListener("paste", handlePaste);
+    };
   }, []);
 
   const upload = globalSnap.uploadProgress;

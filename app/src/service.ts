@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "./config";
 import type { Locale } from "../shared/i18n/types";
+import type { CopiedCanvasAsset } from "../shared/canvasAssetTransfer";
 
 const buildApiBaseUrl = (port: number): string => `http://localhost:${port}`;
 const isValidPort = (value: unknown): value is number =>
@@ -311,6 +312,35 @@ export async function uploadTempImageBinary(
     await throwApiError(endpoint, "POST", res);
   }
   return (await res.json()) as UploadTempImageResponse;
+}
+
+export async function copyCanvasAssetImages(
+  imagePaths: string[],
+  sourceCanvasName: string,
+  targetCanvasName: string,
+): Promise<CopiedCanvasAsset[]> {
+  const response = await localApi<{
+    success?: boolean;
+    assets?: CopiedCanvasAsset[];
+  }>("/api/canvas-assets/copy", {
+    imagePaths,
+    sourceCanvasName,
+    targetCanvasName,
+  });
+  if (response.success !== true || !Array.isArray(response.assets)) {
+    throw new Error("Failed to copy canvas assets");
+  }
+  return response.assets;
+}
+
+export async function deleteCanvasAssetImages(
+  imagePaths: string[],
+  canvasName: string,
+): Promise<void> {
+  await localApi("/api/canvas-assets/delete", {
+    imagePaths,
+    canvasName,
+  });
 }
 
 export async function downloadTempImageUrls(

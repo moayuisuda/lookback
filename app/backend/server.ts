@@ -11,6 +11,7 @@ import { createCanvasRouter } from "./routes/canvas";
 import { createAnchorsRouter } from "./routes/anchors";
 import { createCommandsRouter } from "./routes/commands";
 import { createTempRouter } from "./routes/temp";
+import { createCanvasAssetsRouter } from "./routes/canvasAssets";
 import { createShellRouter } from "./routes/shell";
 import { lockedFs, withFileLock, withFileLocks } from "./fileLock";
 import { calculateTone, getDominantColor } from "./imageAnalysis";
@@ -514,6 +515,11 @@ export async function startServer(): Promise<number> {
       downloadImage,
       getDominantColor,
       getTone: calculateTone,
+    })
+  );
+  server.use(
+    createCanvasAssetsRouter({
+      getCanvasAssetsDir,
     })
   );
   server.use(

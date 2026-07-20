@@ -10,6 +10,22 @@ export const isAssetImagePath = (value: string) => {
   return normalized.startsWith("assets/");
 };
 
+export const resolveCanvasImageUrl = (
+  imagePath: string,
+  canvasName: string,
+  apiBaseUrl: string,
+) => {
+  const normalized = normalizeImagePath(imagePath).replace(/^\/+/, "");
+  if (normalized.startsWith("assets/")) {
+    const filename = normalized.split("/").pop() || normalized;
+    return `${apiBaseUrl}/api/assets/${encodeURIComponent(
+      canvasName,
+    )}/${encodeURIComponent(filename)}`;
+  }
+  if (isRemoteImagePath(normalized)) return normalized;
+  return `${apiBaseUrl}/${normalized}`;
+};
+
 export const sanitizeCanvasNameForPath = (value: string) => {
   const safe = value.replace(/[/\\:*?"<>|]/g, "_").trim();
   return safe || "Default";

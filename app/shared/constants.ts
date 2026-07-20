@@ -10,7 +10,6 @@ export const DEFAULT_COMMAND_FILES = [
   // "poseSearch.jsx",
   // "imageGene.jsx",
   // "multiSearch.jsx",
-  // "copySelectedImageToClipboard.jsx",
   // "packageCanvasAssetsZip.jsx",
   // "openSelectedImageInFolder.jsx",
 ];

@@ -128,6 +128,8 @@ export const zh = {
   "toast.logCopyFailed": "复制日志失败",
   "toast.clickToCopy": "点击复制",
   "toast.copyContentFailed": "复制内容失败：{{error}}",
+  "toast.canvasCopyFailed": "复制画布内容失败：{{error}}",
+  "toast.canvasPasteFailed": "粘贴画布内容失败：{{error}}",
   "toast.tagRenamed": "标签已重命名",
   "toast.tagRenameFailed": "重命名标签失败",
   "toast.updateTagsFailed": "更新标签失败",

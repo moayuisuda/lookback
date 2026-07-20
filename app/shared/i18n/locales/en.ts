@@ -139,6 +139,8 @@ export const en = {
   "toast.logCopyFailed": "Failed to copy log",
   "toast.clickToCopy": "Click to copy",
   "toast.copyContentFailed": "Failed to copy content: {{error}}",
+  "toast.canvasCopyFailed": "Failed to copy canvas content: {{error}}",
+  "toast.canvasPasteFailed": "Failed to paste canvas content: {{error}}",
   "toast.logExported": "Log exported",
   "toast.logExportFailed": "Failed to export log: {{error}}",
   "toast.tagRenamed": "Tag renamed",
