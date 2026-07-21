@@ -198,26 +198,34 @@ const canvasToPngBlob = (canvas: HTMLCanvasElement) =>
     }, "image/png");
   });
 
+const throwIfClipboardWriteAborted = (signal?: AbortSignal) => {
+  signal?.throwIfAborted();
+};
+
 const loadCanvasImageAsPng = async (
   image: CanvasImage,
   sourceCanvasName: string,
   apiBaseUrl: string,
+  signal?: AbortSignal,
 ) => {
+  throwIfClipboardWriteAborted(signal);
   const imageUrl = resolveCanvasImageUrl(
     image.imagePath,
     sourceCanvasName,
     apiBaseUrl,
   );
-  const response = await fetch(imageUrl);
+  const response = await fetch(imageUrl, { signal });
   if (!response.ok) {
     throw new Error(`Failed to load copied image: ${response.status}`);
   }
 
   const sourceBlob = await response.blob();
+  throwIfClipboardWriteAborted(signal);
   if (sourceBlob.type === "image/png") return sourceBlob;
 
   const bitmap = await createImageBitmap(sourceBlob);
   try {
+    throwIfClipboardWriteAborted(signal);
     if (bitmap.width <= 0 || bitmap.height <= 0) {
       throw new Error("Copied image dimensions are invalid");
     }
@@ -229,7 +237,9 @@ const loadCanvasImageAsPng = async (
       throw new Error("Canvas 2D context is unavailable");
     }
     context.drawImage(bitmap, 0, 0);
-    return await canvasToPngBlob(canvas);
+    const pngBlob = await canvasToPngBlob(canvas);
+    throwIfClipboardWriteAborted(signal);
+    return pngBlob;
   } finally {
     bitmap.close();
   }
@@ -239,7 +249,9 @@ export const writeCanvasClipboard = (
   payload: CanvasClipboardPayload,
   serialized: string,
   apiBaseUrl: string,
+  signal?: AbortSignal,
 ) => {
+  throwIfClipboardWriteAborted(signal);
   if (!navigator.clipboard?.write) {
     throw new Error("Clipboard write is unavailable");
   }
@@ -257,6 +269,7 @@ export const writeCanvasClipboard = (
       image,
       payload.sourceCanvasName,
       apiBaseUrl,
+      signal,
     );
   } else if (payload.items.length === 1 && payload.items[0].type === "text") {
     clipboardData["text/plain"] = new Blob([payload.items[0].text], {

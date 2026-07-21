@@ -37,6 +37,13 @@ const isEditableClipboardTarget = (target: EventTarget | null) =>
     target.tagName === "TEXTAREA" ||
     target.isContentEditable);
 
+const hasNativeTextSelection = () => {
+  const selection = window.getSelection();
+  return Boolean(
+    selection && selection.rangeCount > 0 && !selection.isCollapsed,
+  );
+};
+
 function App() {
   useAppShortcuts();
   const globalSnap = useSnapshot(globalState);
@@ -125,11 +132,22 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let activeCanvasCopyController: AbortController | null = null;
+
+    const cancelActiveCanvasCopy = () => {
+      activeCanvasCopyController?.abort();
+      activeCanvasCopyController = null;
+    };
+
     const handleCopy = (event: ClipboardEvent) => {
+      // 新复制动作必须立即终止旧任务，避免慢图片覆盖更新的剪贴板内容。
+      cancelActiveCanvasCopy();
       if (
+        event.defaultPrevented ||
         document.hidden ||
         commandState.isOpen ||
-        isEditableClipboardTarget(event.target)
+        isEditableClipboardTarget(event.target) ||
+        hasNativeTextSelection()
       ) {
         return;
       }
@@ -137,11 +155,20 @@ function App() {
       const serialized = canvasActions.copyCanvasSelection();
       if (!serialized) return;
 
-      event.preventDefault();
       const payload = parseCanvasClipboardPayload(serialized);
       if (!payload) return;
-      void writeCanvasClipboard(payload, serialized, API_BASE_URL).catch(
-        (error) => {
+
+      event.preventDefault();
+      const controller = new AbortController();
+      activeCanvasCopyController = controller;
+      void writeCanvasClipboard(
+        payload,
+        serialized,
+        API_BASE_URL,
+        controller.signal,
+      )
+        .catch((error) => {
+          if (controller.signal.aborted) return;
           globalActions.pushToast(
             {
               key: "toast.canvasCopyFailed",
@@ -152,8 +179,12 @@ function App() {
             },
             "error",
           );
-        },
-      );
+        })
+        .finally(() => {
+          if (activeCanvasCopyController === controller) {
+            activeCanvasCopyController = null;
+          }
+        });
     };
 
     const handlePaste = async (e: ClipboardEvent) => {
@@ -252,6 +283,7 @@ function App() {
     window.addEventListener("copy", handleCopy);
     window.addEventListener("paste", handlePaste);
     return () => {
+      cancelActiveCanvasCopy();
       window.removeEventListener("copy", handleCopy);
       window.removeEventListener("paste", handlePaste);
     };
