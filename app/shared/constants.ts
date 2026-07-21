@@ -6,6 +6,7 @@ export const DEFAULT_COMMAND_FILES = [
   "stitchExport.jsx",
   "clip.jsx",
   "pi-agent-assistant",
+  // "follow-practice",
   // "reverse-image-source"
   // "poseSearch.jsx",
   // "imageGene.jsx",

@@ -153,15 +153,14 @@ const getTodoTitleKey = (todo) => getTodoTextKey(todo?.title || todo?.noteId);
 
 const mergeTodoRecord = (previous, scraped, now) => {
   const imageUrls = Array.isArray(scraped?.imageUrls) ? scraped.imageUrls.filter(Boolean) : [];
-  const previousImages = Array.isArray(previous?.imageUrls) ? previous.imageUrls.filter(Boolean) : [];
   return normalizeTodo({
     ...previous,
     noteId: String(scraped?.noteId || previous?.noteId || ""),
     url: String(scraped?.url || previous?.url || ""),
     title: String(scraped?.title || previous?.title || ""),
     desc: String(scraped?.desc || previous?.desc || ""),
-    coverUrl: String(scraped?.coverUrl || previous?.coverUrl || imageUrls[0] || previousImages[0] || ""),
-    imageUrls: imageUrls.length > 0 ? unique([...previousImages, ...imageUrls]) : previousImages,
+    coverUrl: String(scraped?.coverUrl || previous?.coverUrl || imageUrls[0] || ""),
+    imageUrls,
     status: previous?.status || "pending",
     createdAt: previous?.createdAt || now,
     updatedAt: now,
@@ -247,7 +246,7 @@ const downloadTodoImages = async (context, todo, canvasName) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        url: imageUrl,
+        urls: [imageUrl],
         canvasName,
       }),
     });
@@ -498,24 +497,23 @@ export const ui = ({ context, plugin }) => {
       setActiveNoteId(todo.noteId);
       let activeTodo = todo;
       let detailDebugTrace = "";
-      if (!activeTodo.imageUrls.length) {
-        setStatus({ key: "command.followPractice.status.fetchingImages" });
-        if (!storedStateRef.current.browserReady) setStatePatch({ browserReady: true });
-        const detail = await invokeFollowPractice(plugin, "scrapeTodoDetail", {
-          userId: userIdRef.current,
-          todo: activeTodo,
-          headless: headlessRef.current,
-        });
-        detailDebugTrace = String(detail.__debugTrace || "");
-        activeTodo = normalizeTodo({
-          ...activeTodo,
-          ...detail,
-          noteId: activeTodo.noteId,
-          imageUrls: Array.isArray(detail.imageUrls) ? detail.imageUrls : [],
-          updatedAt: Date.now(),
-        });
-        updateTodo(todo.noteId, activeTodo);
-      }
+      // 小红书 CDN 图片地址带有短期签名，每次跟练都必须重新抓取详情。
+      setStatus({ key: "command.followPractice.status.fetchingImages" });
+      if (!storedStateRef.current.browserReady) setStatePatch({ browserReady: true });
+      const detail = await invokeFollowPractice(plugin, "scrapeTodoDetail", {
+        userId: userIdRef.current,
+        todo: activeTodo,
+        headless: headlessRef.current,
+      });
+      detailDebugTrace = String(detail.__debugTrace || "");
+      activeTodo = normalizeTodo({
+        ...activeTodo,
+        ...detail,
+        noteId: activeTodo.noteId,
+        imageUrls: Array.isArray(detail.imageUrls) ? detail.imageUrls : [],
+        updatedAt: Date.now(),
+      });
+      updateTodo(todo.noteId, activeTodo);
 
       setStatus({ key: "command.followPractice.status.importing" });
       if (!activeTodo.imageUrls.length) {
