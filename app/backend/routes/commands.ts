@@ -3,7 +3,9 @@ import express from "express";
 import path from "path";
 import fs from "fs-extra";
 import { spawn } from "node:child_process";
-import { transform } from "sucrase";
+import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
+import { compileInWorker } from "../compileInWorker";
 import { lockedFs, withFileLock } from "../fileLock";
 
 type CommandsRouteDeps = {
@@ -37,6 +39,7 @@ type ExternalCommandManifest = {
 
 const ROOT_FOLDER = "__root__";
 const COMPILED_PLUGIN_DIR = ".lookback-esm";
+const COMPILED_PLUGIN_VERSION = "2";
 const NPM_REGISTRY = "https://registry.npmmirror.com";
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCRIPT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx"]);
@@ -47,6 +50,7 @@ const SKIPPED_PLUGIN_DIRS = new Set([
   ".lookback-cjs",
   ".git",
 ]);
+const preparedPluginDirs = new Set<string>();
 
 const COMMAND_ID_PATTERN =
   /export\s+const\s+config\s*=\s*{[\s\S]*?\bid\s*:\s*['"`]([^'"`]+)['"`]/;
@@ -99,9 +103,6 @@ const toOutputRelativePath = (relativePath: string) => {
   const parsed = path.posix.parse(normalized);
   return path.posix.join(parsed.dir, `${parsed.name}.js`);
 };
-
-const createCompiledBuildId = () =>
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const toEsmFileUrl = (folder: string, relativePath: string) =>
   `/api/commands/${encodeURIComponent(folder)}/esm-file/${normalizeRelativePath(relativePath)
@@ -360,38 +361,42 @@ const runNpmInstall = async (pluginDir: string) => {
   });
 };
 
-const rewriteCompiledImportExtensions = (code: string) =>
-  code.replace(
-    /((?:from\s*|import\s*(?:\(\s*)?)["'])(\.{1,2}\/[^"'()]+?)\.(jsx|mjs|tsx|ts)(["'])/g,
-    "$1$2.js$4",
-  );
-
-const hasReactBinding = (code: string) =>
-  /\bimport\s+React\b/.test(code) ||
-  /\bimport\s+\*\s+as\s+React\b/.test(code) ||
-  /\b(?:const|let|var|function|class)\s+React\b/.test(code);
-
-const injectReactGlobalPrelude = (code: string) =>
-  hasReactBinding(code) ? code : `const React = globalThis.React;\n${code}`;
-
-const compilePluginSource = (source: string, filePath: string) => {
-  const ext = path.extname(filePath).toLowerCase();
-  if (!SCRIPT_EXTENSIONS.has(ext)) return source;
-  const transforms: Array<"jsx" | "typescript"> = [];
-  if (ext === ".jsx" || ext === ".tsx") transforms.push("jsx");
-  if (ext === ".ts" || ext === ".tsx") transforms.push("typescript");
-  if (transforms.length === 0) {
-    return injectReactGlobalPrelude(rewriteCompiledImportExtensions(source));
-  }
-  const compiled = transform(source, {
-    transforms,
-    production: true,
-  }).code;
-  return injectReactGlobalPrelude(rewriteCompiledImportExtensions(compiled));
+const writeCompiledPackageManifest = async (outputDir: string) => {
+  await lockedFs.writeJson(path.join(outputDir, "package.json"), { type: "module" });
 };
 
-const writeCompiledPackageManifest = async (outputDir: string) => {
-  await fs.writeJson(path.join(outputDir, "package.json"), { type: "module" }, { spaces: 2 });
+const readPluginEntries = async (pluginDir: string, sourceDir: string): Promise<Dirent[]> => {
+  // prepare 已持有插件根目录锁，根目录不可再通过 lockedFs 重入加锁。
+  return sourceDir === pluginDir
+    ? fs.readdir(sourceDir, { withFileTypes: true })
+    : lockedFs.readdir(sourceDir, { withFileTypes: true }) as Promise<Dirent[]>;
+};
+
+const getPluginSourceHash = async (pluginDir: string): Promise<string> => {
+  const hash = createHash("sha256").update(COMPILED_PLUGIN_VERSION);
+  const visit = async (sourceDir: string): Promise<void> => {
+    const entries = await readPluginEntries(pluginDir, sourceDir);
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const sourcePath = path.join(sourceDir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIPPED_PLUGIN_DIRS.has(entry.name)) await visit(sourcePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const relativePath = path.relative(pluginDir, sourcePath).replace(/\\/g, "/");
+      hash.update(relativePath).update("\0");
+      if (SCRIPT_EXTENSIONS.has(path.extname(sourcePath).toLowerCase()) || entry.name === "package.json") {
+        hash.update(await lockedFs.readFile(sourcePath) as Buffer);
+      } else {
+        const stat = await lockedFs.stat(sourcePath);
+        hash.update(`${stat.size}:${stat.mtimeMs}`);
+      }
+      hash.update("\0");
+    }
+  };
+  await visit(pluginDir);
+  return hash.digest("hex");
 };
 
 const copyPluginAsEsm = async (
@@ -399,7 +404,7 @@ const copyPluginAsEsm = async (
   sourceDir: string,
   outputDir: string,
 ) => {
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  const entries = await readPluginEntries(pluginDir, sourceDir);
   for (const entry of entries) {
     const sourcePath = path.join(sourceDir, entry.name);
     const relativePath = path.relative(pluginDir, sourcePath).replace(/\\/g, "/");
@@ -412,16 +417,16 @@ const copyPluginAsEsm = async (
 
     const outputRelativePath = toOutputRelativePath(relativePath);
     const outputPath = toFilePath(outputDir, outputRelativePath);
-    await fs.ensureDir(path.dirname(outputPath));
+    await lockedFs.ensureDir(path.dirname(outputPath));
 
     const ext = path.extname(sourcePath).toLowerCase();
     if (SCRIPT_EXTENSIONS.has(ext)) {
-      const source = await fs.readFile(sourcePath, "utf-8");
-      await fs.writeFile(outputPath, compilePluginSource(source, sourcePath), "utf-8");
+      const source = await lockedFs.readFile(sourcePath, "utf-8") as string;
+      await lockedFs.writeFile(outputPath, await compileInWorker(source, sourcePath), "utf-8");
       continue;
     }
 
-    await fs.copy(sourcePath, outputPath);
+    await lockedFs.copy(sourcePath, outputPath);
   }
 };
 
@@ -603,12 +608,8 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
         }
 
         const outputRoot = path.join(pluginDir, COMPILED_PLUGIN_DIR);
-        const buildId = createCompiledBuildId();
+        const buildId = await getPluginSourceHash(pluginDir);
         const outputDir = path.join(outputRoot, buildId);
-        await lockedFs.remove(outputRoot);
-        await lockedFs.ensureDir(outputDir);
-        await copyPluginAsEsm(pluginDir, pluginDir, outputDir);
-        await writeCompiledPackageManifest(outputDir);
         const compiledEntry = path.posix.join(buildId, toOutputRelativePath(entry));
         const compiledEntryPath = toFilePath(outputRoot, compiledEntry);
         const serverEntry = await resolveDirectoryServerEntry(pluginDir, manifest).catch(() => "");
@@ -618,6 +619,30 @@ export const createCommandsRouter = (deps: CommandsRouteDeps) => {
         const compiledServerEntryPath = compiledServerEntry
           ? toFilePath(outputRoot, compiledServerEntry)
           : "";
+
+        await lockedFs.ensureDir(outputRoot);
+        if (!preparedPluginDirs.has(pluginDir)) {
+          // 进程启动后的首次准备可以清理上次运行留下的旧版本；当前进程使用的版本保留。
+          const oldBuilds = await lockedFs.readdir(outputRoot) as string[];
+          for (const oldBuild of oldBuilds) {
+            if (oldBuild !== buildId) {
+              await lockedFs.remove(toFilePath(outputRoot, oldBuild));
+            }
+          }
+          preparedPluginDirs.add(pluginDir);
+        }
+
+        const completePath = path.join(outputDir, ".complete");
+        const cacheReady = await lockedFs.pathExists(completePath) &&
+          await lockedFs.pathExists(compiledEntryPath) &&
+          (!compiledServerEntryPath || await lockedFs.pathExists(compiledServerEntryPath));
+        if (!cacheReady) {
+          await lockedFs.remove(outputDir);
+          await lockedFs.ensureDir(outputDir);
+          await copyPluginAsEsm(pluginDir, pluginDir, outputDir);
+          await writeCompiledPackageManifest(outputDir);
+          await lockedFs.writeFile(completePath, buildId, "utf-8");
+        }
 
         res.json({
           success: true,

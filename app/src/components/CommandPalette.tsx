@@ -320,7 +320,10 @@ export const CommandPalette: React.FC = () => {
     const current = result ?? results[snap.selectedIndex];
     if (!current) return;
     if (current.kind === "command") {
-      const command = current.command;
+      const command = current.command.deferred
+        ? await commandActions.resolveExternalCommand(current.command)
+        : current.command;
+      if (command.loadError) return;
       if (command.ui) {
         commandActions.setActiveCommand(command.id);
         return;

@@ -338,15 +338,29 @@ export const useAppShortcuts = () => {
       e.preventDefault();
       e.stopPropagation();
 
-      if (matched.command.ui) {
-        commandActions.open();
-        commandActions.setActiveCommand(matched.command.id);
-        return;
-      }
-      if (matched.command.run) {
-        commandActions.close();
-        void matched.command.run(getCommandContext());
-      }
+      void (async () => {
+        const current = commandState.externalCommands.find(
+          (item) => item.id === matched.command.id,
+        );
+        if (!current) return;
+        const command = current.deferred
+          ? await commandActions.resolveExternalCommand(current)
+          : current;
+        if (command.loadError) {
+          globalActions.pushToast({
+            key: "toast.command.scriptFailedWithReason",
+            params: { error: command.loadError },
+          }, "error");
+          return;
+        }
+        if (command.ui) {
+          commandActions.open();
+          commandActions.setActiveCommand(command.id);
+        } else if (command.run) {
+          commandActions.close();
+          await command.run(getCommandContext());
+        }
+      })();
     };
     window.addEventListener("keydown", handler, true);
     return () => {

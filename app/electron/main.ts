@@ -20,9 +20,9 @@ import {
   type UpdateInfo,
 } from "electron-updater";
 import { execFile, spawn, ChildProcess } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import * as readline from "node:readline";
 import { lockedFs, withFileLock, withFileLocks } from "../backend/fileLock";
+import { pluginRuntime } from "../backend/pluginRuntime";
 
 // Ensure app name is correct for log paths
 if (!app.isPackaged) {
@@ -2296,28 +2296,6 @@ function unregisterGlobalShortcuts() {
   globalShortcut.unregisterAll();
 }
 
-type PluginServerAction = (
-  payload: unknown,
-  context: {
-    pluginKey: string;
-    folder: string;
-    storageDir: string;
-    commandDir: string;
-    pluginDir: string;
-  },
-) => Promise<unknown> | unknown;
-
-type PluginServerRegistryEntry = {
-  folder: string;
-  entryPath: string;
-  actions: Map<string, PluginServerAction>;
-};
-
-const pluginServerRegistry = new Map<string, PluginServerRegistryEntry>();
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value) && typeof value === "object";
-
 const isSafeStorageSegment = (value: string) =>
   value.length > 0 &&
   value !== "." &&
@@ -2334,21 +2312,6 @@ const assertInsidePath = (root: string, target: string) => {
     return resolvedTarget;
   }
   throw new Error("Invalid plugin path");
-};
-
-const collectPluginServerActions = (serverModule: unknown) => {
-  const actions = new Map<string, PluginServerAction>();
-  const source = isRecord(serverModule) && isRecord(serverModule.default)
-    ? serverModule.default
-    : serverModule;
-  if (!isRecord(source)) return actions;
-
-  Object.entries(source).forEach(([name, value]) => {
-    if (name === "default") return;
-    if (typeof value !== "function") return;
-    actions.set(name, value as PluginServerAction);
-  });
-  return actions;
 };
 
 const resolvePluginServerPaths = (folder: string, entryPath: string) => {
@@ -2392,16 +2355,9 @@ ipcMain.handle(
       }
 
       const paths = resolvePluginServerPaths(folder, entryPath);
-      const importUrl = pathToFileURL(paths.entryPath).href;
-      const serverModule = await import(`${importUrl}?t=${Date.now()}`);
-      const actions = collectPluginServerActions(serverModule);
-      pluginServerRegistry.set(pluginKey, {
-        folder,
-        entryPath: paths.entryPath,
-        actions,
-      });
+      const actions = await pluginRuntime.load(pluginKey, folder, paths.entryPath);
 
-      return { success: true, actions: Array.from(actions.keys()) };
+      return { success: true, actions };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.error("Failed to load command plugin server:", message);
@@ -2427,17 +2383,16 @@ ipcMain.handle(
         return { success: false, error: "Invalid plugin action payload" };
       }
 
-      const plugin = pluginServerRegistry.get(pluginKey);
-      const action = plugin?.actions.get(actionName);
-      if (!plugin || !action) {
+      const folder = pluginRuntime.getFolder(pluginKey);
+      if (!folder) {
         return { success: false, error: `Plugin action not found: ${actionName}` };
       }
 
       const commandDir = path.join(getStorageDir(), "commands");
-      const pluginDir = assertInsidePath(commandDir, path.join(commandDir, plugin.folder));
-      const result = await action(payload?.payload, {
+      const pluginDir = assertInsidePath(commandDir, path.join(commandDir, folder));
+      const result = await pluginRuntime.invoke(pluginKey, actionName, payload?.payload, {
         pluginKey,
-        folder: plugin.folder,
+        folder,
         storageDir: getStorageDir(),
         commandDir,
         pluginDir,

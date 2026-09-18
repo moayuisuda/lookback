@@ -18,7 +18,9 @@
     "compression": "maximum",
     "icon": "resources/icon.png",
     "asarUnpack": [
-      "src/commands-pending/**"
+      "src/commands-pending/**",
+      "dist-electron/commandCompilerWorker.cjs",
+      "dist-electron/pluginServerWorker.cjs"
     ],
     "mac": {
       "icon": "resources/icon.icns",
@@ -62,10 +64,10 @@
     }
   },
   "scripts": {
-    "dev": "concurrently \"tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --external sharp --watch --onSuccess \\\"electron .\\\"\" \"vite\"",
-    "build": "tsc -b && vite build && tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --external sharp && electron-builder",
+    "dev": "concurrently \"tsup --watch --onSuccess \\\"electron .\\\"\" \"vite\"",
+    "build": "tsc -b && vite build && tsup && electron-builder",
     "build:mac": "npm run build -- --mac --arm64",
-    "build:win": "tsc -b && vite build && tsup electron/main.ts electron/preload.ts --format cjs --out-dir dist-electron --external electron --external sharp && electron-builder --win",
+    "build:win": "tsc -b && vite build && tsup && electron-builder --win",
     "lint": "tsc -b --noEmit && eslint .",
     "preview": "vite preview"
   },

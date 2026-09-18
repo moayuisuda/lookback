@@ -27,8 +27,11 @@ export const MIN_PLUGIN_PANEL_WIDTH = 100;
 
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let externalCommandLoadVersion = 0;
+let externalCommandFetchVersion = 0;
 let externalCommandManifestSignature = "";
 const externalCommandDirtyKeys = new Set<string>();
+const externalCommandRecords = new Map<string, ExternalCommandRecord>();
+const externalCommandLoadTasks = new Map<string, Promise<CommandDefinition>>();
 
 type ExternalCommandDirtyTarget = Pick<
   ExternalCommandRecord,
@@ -379,12 +382,35 @@ export const commandActions = {
       getExternalCommandRecordKey({ folder, entry, id }),
     );
   },
+  resolveExternalCommand: async (command: CommandDefinition): Promise<CommandDefinition> => {
+    if (!command.deferred && !command.loading) return command;
+    const recordKey = getExternalCommandKey(command);
+    const record = externalCommandRecords.get(recordKey);
+    if (!record) return command;
+    const existing = externalCommandLoadTasks.get(recordKey);
+    if (existing) return existing;
+
+    const version = externalCommandLoadVersion;
+    replaceExternalCommand(record, { ...command, deferred: false, loading: true });
+    const task = mapExternalCommand(record).then((loaded) => {
+      if (version === externalCommandLoadVersion && externalCommandRecords.get(recordKey) === record) {
+        replaceExternalCommand(record, loaded);
+        if (!loaded.loadError) externalCommandDirtyKeys.delete(recordKey);
+      }
+      return loaded;
+    }).finally(() => {
+      if (externalCommandLoadTasks.get(recordKey) === task) {
+        externalCommandLoadTasks.delete(recordKey);
+      }
+    });
+    externalCommandLoadTasks.set(recordKey, task);
+    return task;
+  },
   loadExternalCommands: async () => {
-    const loadVersion = externalCommandLoadVersion + 1;
-    externalCommandLoadVersion = loadVersion;
+    const fetchVersion = ++externalCommandFetchVersion;
     try {
       const commands = await loadExternalCommands();
-      if (loadVersion !== externalCommandLoadVersion) return;
+      if (fetchVersion !== externalCommandFetchVersion) return;
       const filtered = uniqueExternalCommandRecords(
         commands.filter((item): item is ExternalCommandRecord =>
           Boolean(
@@ -400,11 +426,18 @@ export const commandActions = {
       const nextSignature = createExternalCommandManifestSignature(filtered);
       if (
         externalCommandDirtyKeys.size === 0 &&
+        !commandState.externalCommands.some((command) => command.loadError) &&
         nextSignature === externalCommandManifestSignature
       )
         return;
 
-      const recordsToLoad: ExternalCommandRecord[] = [];
+      externalCommandLoadVersion++;
+      externalCommandLoadTasks.clear();
+      externalCommandRecords.clear();
+      filtered.forEach((record) => {
+        externalCommandRecords.set(getExternalCommandRecordKey(record), record);
+      });
+
       const currentByKey = new Map(
         commandState.externalCommands.map((command) => [
           getExternalCommandKey(command),
@@ -417,7 +450,6 @@ export const commandActions = {
           ? undefined
           : currentByKey.get(recordKey);
         if (current && !current.loadError && !current.loading) return current;
-        recordsToLoad.push(record);
         return createExternalCommandPlaceholder(record);
       });
 
@@ -427,41 +459,8 @@ export const commandActions = {
         ...uniqueExternalCommands(nextCommands),
       );
 
-      void Promise.all(
-        recordsToLoad.map(async (record) => {
-          const mapped = await mapExternalCommand(record);
-          if (loadVersion !== externalCommandLoadVersion) {
-            return { record, mapped };
-          }
-          replaceExternalCommand(record, mapped);
-          commandState.externalCommands.splice(
-            0,
-            commandState.externalCommands.length,
-            ...uniqueExternalCommands(commandState.externalCommands),
-          );
-          return { record, mapped };
-        }),
-      ).then(async (loaded) => {
-        if (loadVersion !== externalCommandLoadVersion) return;
-        commandState.externalCommands.splice(
-          0,
-          commandState.externalCommands.length,
-          ...uniqueExternalCommands(commandState.externalCommands),
-        );
-        const mapped = loaded.map((item) => item.mapped);
-        const validIds = new Set(
-          commandState.externalCommands
-            .map((item) => item.id)
-            .concat(mapped.map((item) => item.id)),
-        );
-        await cleanupExternalCommandSettings(validIds);
-        loaded.forEach(({ record, mapped: command }) => {
-          if (command.loadError) return;
-          externalCommandDirtyKeys.delete(getExternalCommandRecordKey(record));
-        });
-        if (mapped.some((command) => command.loadError)) return;
-        externalCommandManifestSignature = nextSignature;
-      });
+      await cleanupExternalCommandSettings(new Set(filtered.map((record) => record.id)));
+      externalCommandManifestSignature = nextSignature;
     } catch (error) {
       void error;
     }

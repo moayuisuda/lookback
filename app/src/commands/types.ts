@@ -42,6 +42,7 @@ export type CommandDefinition = {
   description?: string;
   keywords?: string[];
   loading?: boolean;
+  deferred?: boolean;
   loadError?: string;
   ui?: React.FC<{ context: CommandContext }>;
   run?: (context: CommandContext) => Promise<void> | void;

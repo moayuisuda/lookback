@@ -1217,6 +1217,16 @@ export const Canvas: React.FC = () => {
 
   const handleRunContextMenuCommand = useMemoizedFn(
     async (command: CommandDefinition) => {
+      if (command.deferred) {
+        command = await commandActions.resolveExternalCommand(command);
+      }
+      if (command.loadError) {
+        globalActions.pushToast({
+          key: "toast.command.scriptFailedWithReason",
+          params: { error: command.loadError },
+        }, "error");
+        return;
+      }
       if (command.ui) {
         closeContextMenu();
         commandActions.open();

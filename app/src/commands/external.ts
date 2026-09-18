@@ -5,7 +5,7 @@ import {
   prepareCommandEsm,
 } from '../service';
 import * as React from 'react';
-import { transform } from 'sucrase';
+import { compileInWorker } from './compileInWorker';
 import type { I18nDict, Locale } from '../../shared/i18n/types';
 import { registerI18n } from '../../shared/i18n/t';
 import { writeTextToClipboard } from '../utils/clipboard';
@@ -59,14 +59,6 @@ const ROOT_FOLDER = '__root__';
 const installExternalCommandGlobals = () => {
   Object.assign(globalThis, { React });
 };
-
-const hasReactBinding = (code: string) =>
-  /\bimport\s+React\b/.test(code) ||
-  /\bimport\s+\*\s+as\s+React\b/.test(code) ||
-  /\b(?:const|let|var|function|class)\s+React\b/.test(code);
-
-const injectReactGlobalPrelude = (code: string) =>
-  hasReactBinding(code) ? code : `const React = globalThis.React;\n${code}`;
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -127,7 +119,7 @@ export const createExternalCommandPlaceholder = (
     description: record.description,
     descriptionKey: record.descriptionKey,
     keywords: record.keywords,
-    loading: true,
+    deferred: true,
     external: {
       folder: record.folder,
       entry: record.entry,
@@ -198,15 +190,12 @@ const loadModule = async (
 
   let compiled = '';
   try {
-    compiled = transform(script, {
-      transforms: ['jsx'],
-      production: true,
-    }).code;
+    compiled = await compileInWorker(script, record.entry);
   } catch (error) {
     throw new Error(`Compile failed: ${getErrorMessage(error)}`);
   }
 
-  const blob = new Blob([injectReactGlobalPrelude(compiled)], { type: 'text/javascript' });
+  const blob = new Blob([compiled], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
   try {
     return { module: (await import(/* @vite-ignore */ url)) as CommandModule };
@@ -287,14 +276,12 @@ export const mapExternalCommand = async (
         run: hasRun
           ? async (ctx: CommandContext) => {
               try {
-                const loaded = await loadModule(item);
-                const mod = loaded.module;
-                if (typeof mod.run === 'function') {
-                  await mod.run(ctx, buildHelpers(ctx));
+                if (typeof module.run === 'function') {
+                  await module.run(ctx, buildHelpers(ctx));
                   return;
                 }
-                if (loaded.plugin?.actions.includes('run')) {
-                  await loaded.plugin.invoke('run', undefined);
+                if (plugin?.actions.includes('run')) {
+                  await plugin.invoke('run', undefined);
                 }
               } catch (error) {
                 ctx.actions.globalActions.pushToast(
