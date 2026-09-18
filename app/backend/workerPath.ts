@@ -2,8 +2,7 @@ import { app } from "electron";
 import path from "node:path";
 
 export const getBundledWorkerPath = (fileName: string): string => {
-  const outputDir = app.isPackaged
-    ? __dirname.replace(/app\.asar(?=[\\/])/, "app.asar.unpacked")
-    : __dirname;
-  return path.join(outputDir, fileName);
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "workers", fileName)
+    : path.join(__dirname, fileName);
 };

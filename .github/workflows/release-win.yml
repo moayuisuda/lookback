@@ -32,6 +32,9 @@ jobs:
       - name: Build Windows artifacts
         run: npm run build:win -- --publish never
 
+      - name: Verify packaged app
+        run: node scripts/verify-packaged-app.mjs dist/win-unpacked
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:

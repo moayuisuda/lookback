@@ -18,9 +18,17 @@
     "compression": "maximum",
     "icon": "resources/icon.png",
     "asarUnpack": [
-      "src/commands-pending/**",
-      "dist-electron/commandCompilerWorker.cjs",
-      "dist-electron/pluginServerWorker.cjs"
+      "src/commands-pending/**"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-electron/commandCompilerWorker.cjs",
+        "to": "workers/commandCompilerWorker.cjs"
+      },
+      {
+        "from": "dist-electron/pluginServerWorker.cjs",
+        "to": "workers/pluginServerWorker.cjs"
+      }
     ],
     "mac": {
       "icon": "resources/icon.icns",
@@ -43,7 +51,8 @@
       }
     ],
     "files": [
-      "dist-electron",
+      "dist-electron/main.cjs",
+      "dist-electron/preload.cjs",
       "dist-renderer",
       "package.json",
       "resources",
@@ -104,6 +113,7 @@
     "valtio": "^2.3.0"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.1.18",
     "@types/body-parser": "^1.19.6",

@@ -10,6 +10,6 @@ export default defineConfig({
   format: "cjs",
   outDir: "dist-electron",
   external: ["electron", "sharp"],
-  // Worker 被解包运行，因此它不能从 app.asar 内查找 Sucrase。
+  // Worker 在 resources/workers 中独立运行，不能依赖 app.asar 内的 Sucrase。
   noExternal: ["sucrase"],
 });
