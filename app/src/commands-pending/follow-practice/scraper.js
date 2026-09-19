@@ -383,19 +383,21 @@ const evaluateWithArgRetry = async (page, callback, arg, label = "page-evaluate-
 const getPagePath = async (page) =>
   evaluateWithRetry(page, () => location.pathname, "location-path").catch(() => "(unknown)");
 
-const getFallbackBrowserPaths = () => {
+const getWindowsEnvPath = (name) =>
+  Object.entries(process.env).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] || "";
+
+export const getFallbackBrowserPaths = () => {
   if (process.platform === "win32") {
-    const localAppData = String(process.env.LOCALAPPDATA || "");
-    const programFiles = String(process.env.PROGRAMFILES || "");
-    const programFilesX86 = String(process.env["PROGRAMFILES(X86)"] || "");
+    // Windows Worker 的 process.env 键区分大小写，不能直接按 PROGRAMFILES 读取。
+    const roots = unique([
+      getWindowsEnvPath("PROGRAMFILES"),
+      getWindowsEnvPath("PROGRAMFILES(X86)"),
+      getWindowsEnvPath("LOCALAPPDATA"),
+    ]);
     return unique([
-      path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
-    ]).filter(Boolean);
+      ...roots.map((root) => path.join(root, "Google", "Chrome", "Application", "chrome.exe")),
+      ...roots.map((root) => path.join(root, "Microsoft", "Edge", "Application", "msedge.exe")),
+    ]);
   }
 
   if (process.platform === "darwin") {
