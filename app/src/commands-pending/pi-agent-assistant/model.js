@@ -1,5 +1,12 @@
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
+const proxyDispatcher = new EnvHttpProxyAgent();
+
+// Node fetch 不会自动读取系统注入的 HTTP(S)_PROXY，Ira 的模型请求统一走环境代理。
+globalThis.fetch = (input, init = {}) =>
+  undiciFetch(input, { ...init, dispatcher: proxyDispatcher });
 
 const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
 

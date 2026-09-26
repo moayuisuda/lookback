@@ -12,6 +12,7 @@
     "@earendil-works/pi-ai": "^0.79.3",
     "@earendil-works/pi-agent-core": "^0.79.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "sucrase": "^3.35.1"
+    "sucrase": "^3.35.1",
+    "undici": "^7.16.0"
   }
 }
