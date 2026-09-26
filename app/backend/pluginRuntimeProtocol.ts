@@ -1,6 +1,7 @@
 export type PluginServerContext = {
   pluginKey: string;
   folder: string;
+  apiPort: number;
   storageDir: string;
   commandDir: string;
   pluginDir: string;

@@ -9,6 +9,7 @@ const DEFAULT_USER_RULES = [
   "2. 当需要搜索图片时，优先使用成熟的可用 api",
 ].join("\n");
 const POLL_INTERVAL_MS = 100;
+const TASK_HEARTBEAT_INTERVAL_MS = 2 * 1000;
 const AUTH_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_STORED_TOOL_EVENTS = 120;
 
@@ -282,20 +283,20 @@ const getShellResultText = (details, t) => {
 };
 
 const getToolEventRows = (events) => {
-  const rows = [];
+  const callRows = [];
   const indexByToolCallId = new Map();
 
   events.forEach((event, index) => {
     if (isToolExecutionEvent(event) && event.toolCallId) {
       const existingIndex = indexByToolCallId.get(event.toolCallId);
       if (existingIndex === undefined) {
-        indexByToolCallId.set(event.toolCallId, rows.length);
-        rows.push({ ...event, rowKey: event.toolCallId });
+        indexByToolCallId.set(event.toolCallId, callRows.length);
+        callRows.push({ ...event, rowKey: event.toolCallId });
         return;
       }
 
-      const previous = rows[existingIndex];
-      rows[existingIndex] = {
+      const previous = callRows[existingIndex];
+      callRows[existingIndex] = {
         ...previous,
         ...event,
         toolName: event.toolName || previous.toolName,
@@ -304,13 +305,50 @@ const getToolEventRows = (events) => {
       return;
     }
 
-    rows.push({
+    callRows.push({
       ...event,
       rowKey: `${event.type}-${event.toolCallId || index}`,
     });
   });
 
-  return rows;
+  const groupedRows = [];
+  const indexByToolName = new Map();
+  for (const event of callRows) {
+    const toolName = String(event.toolName || "").trim();
+    if (!toolName) {
+      groupedRows.push({ ...event, count: 1, groupedEvents: [event] });
+      continue;
+    }
+
+    const existingIndex = indexByToolName.get(toolName);
+    if (existingIndex === undefined) {
+      indexByToolName.set(toolName, groupedRows.length);
+      groupedRows.push({
+        ...event,
+        rowKey: `tool-${toolName}`,
+        count: 1,
+        groupedEvents: [event],
+      });
+      continue;
+    }
+
+    const group = groupedRows[existingIndex];
+    groupedRows[existingIndex] = {
+      ...group,
+      count: group.count + 1,
+      groupedEvents: [...group.groupedEvents, event],
+    };
+  }
+
+  return groupedRows;
+};
+
+const getToolGroupDisplayEvent = (row) => {
+  const events = row.groupedEvents || [row];
+  return [...events].reverse().find(isToolEventError)
+    || events.find((event) => event.type === "tool_execution_start")
+    || events.at(-1)
+    || row;
 };
 
 const getToolEventText = (event, t) => {
@@ -351,6 +389,228 @@ const getCanvasImageCandidates = (canvasState) => {
     (item) => item?.type === "image" && item.imagePath && activeGroupItemIds.has(item.itemId),
   ) : [];
   return { directlySelected, activeGroupImages };
+};
+
+const getFrontendActionGroups = (context) => ({
+  canvas: context.actions.canvasActions,
+  global: context.actions.globalActions,
+  command: context.actions.commandActions,
+});
+
+const getFrontendStoreGroups = (context) => ({
+  canvas: context.store.canvas,
+  global: context.store.global,
+  command: context.store.command,
+  i18n: context.store.i18n,
+});
+
+const FRONTEND_READABLE_FIELDS = {
+  canvas: [
+    "currentCanvasName",
+    "canvasItems",
+    "canvasGroups",
+    "canvasViewport",
+    "canvasFilters",
+    "dimensions",
+    "primaryId",
+    "activeCanvasGroupId",
+    "selectionMode",
+    "isPenMode",
+    "penTool",
+  ],
+  global: [
+    "tagColors",
+    "colorSwatches",
+    "uploadProgress",
+    "pinMode",
+    "pinTargetApp",
+    "pinTransparent",
+    "canvasOpacity",
+    "mouseThrough",
+    "isAppHidden",
+  ],
+  command: ["isOpen", "activeCommandId", "externalCommands"],
+  i18n: ["locale", "hydrated"],
+};
+
+// 默认开放运行时 action，仅屏蔽内部维护、瞬时绘制和可能使应用失去控制的方法。
+const FRONTEND_ACTION_DENYLIST = new Set([
+  "canvas.hydrateSettings",
+  "canvas.initCanvas",
+  "canvas.commitCanvasChange",
+  "canvas.beginPathStroke",
+  "canvas.appendPathPoint",
+  "canvas.endPathStroke",
+  "canvas.erasePathStrokeAtPoint",
+  "canvas.erasePathStrokeAtSegment",
+  "canvas.commitPathErase",
+  "canvas.updateCanvasImageTransient",
+  "canvas.updateCanvasImageSilent",
+  "canvas.clearCanvas",
+  "canvas.cancelPendingSave",
+  "canvas.setCommandTriggerPoint",
+  "global.hydrateSettings",
+  "global.beginUploadProgress",
+  "global.showUploadProgress",
+  "global.tickUploadProgress",
+  "global.hideUploadProgress",
+  "global.setWindowResizing",
+  "global.setWindowDragMode",
+  "global.setAppHidden",
+  "global.setMouseThrough",
+  "global.setTitleBarVisible",
+  "command.hydrateSettings",
+  "command.open",
+  "command.close",
+  "command.finishClose",
+  "command.toggle",
+  "command.setActiveCommand",
+  "command.persistPluginPanelWidths",
+  "command.setDeleteTarget",
+  "command.markExternalCommandDirty",
+  "command.resolveExternalCommand",
+  "command.loadExternalCommands",
+  "command.removeShortcutConflictsWithGlobalShortcuts",
+]);
+
+const FRONTEND_ACTION_DOCS = {
+  "canvas.addToCanvas": {
+    signature: "canvas.addToCanvas(image: ImageMeta, x?: number, y?: number)",
+    description: "把一个已经存在的完整 ImageMeta 添加到画布。",
+  },
+  "canvas.addManyImagesToCanvasCentered": {
+    signature: "canvas.addManyImagesToCanvasCentered(images: ImageMeta[], center: {x, y})",
+    description: "把多个已经存在的 ImageMeta 紧凑排列到指定中心。",
+  },
+  "canvas.autoLayoutCanvas": {
+    signature: "canvas.autoLayoutCanvas(targetIds?: string[], options?: {startX, startY})",
+    description: "自动整理指定项目；不传 targetIds 时整理全部未分组项目。",
+  },
+  "canvas.addTextAtViewportCenter": {
+    signature: "canvas.addTextAtViewportCenter()",
+    description: "在当前视口中心添加文本并进入编辑状态。",
+  },
+  "canvas.groupSelectedItems": {
+    signature: "canvas.groupSelectedItems()",
+    description: "把当前选中的至少两个项目组成一组。",
+  },
+  "canvas.removeManyFromCanvas": {
+    signature: "canvas.removeManyFromCanvas(itemIds: string[])",
+    description: "从当前画布移除多个项目。",
+  },
+  "canvas.switchCanvas": {
+    signature: "canvas.switchCanvas(name: string, skipSave?: boolean)",
+    description: "切换当前画布。",
+  },
+  "canvas.undoCanvas": {
+    signature: "canvas.undoCanvas(options?: {preservePenMode?: boolean})",
+    description: "撤销一次画布修改。",
+  },
+  "canvas.redoCanvas": {
+    signature: "canvas.redoCanvas(options?: {preservePenMode?: boolean})",
+    description: "重做一次画布修改。",
+  },
+};
+
+const isFrontendActionAllowed = (groupName, actionName) =>
+  !FRONTEND_ACTION_DENYLIST.has(`${groupName}.${actionName}`);
+
+const serializeFrontendActionResult = (value) => {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value));
+};
+
+const serializeFrontendStoreValue = (path, value) => {
+  if (path !== "canvas.canvasItems" || !Array.isArray(value)) {
+    return serializeFrontendActionResult(value);
+  }
+  return value.map((item) => {
+    if (item?.type !== "path") return serializeFrontendActionResult(item);
+    const { strokes, ...pathItem } = item;
+    return {
+      ...serializeFrontendActionResult(pathItem),
+      strokes: (strokes || []).map((stroke) => {
+        const { points, ...strokeSummary } = stroke;
+        return serializeFrontendActionResult({
+          ...strokeSummary,
+          pointCount: stroke.pointCount ?? points?.length ?? 0,
+        });
+      }),
+    };
+  });
+};
+
+const executeFrontendActionRequest = async (context, payload) => {
+  const groups = getFrontendActionGroups(context);
+  const stores = getFrontendStoreGroups(context);
+  if (payload?.operation === "list") {
+    return {
+      stores: FRONTEND_READABLE_FIELDS,
+      actions: Object.fromEntries(
+        Object.entries(groups).map(([groupName, actions]) => [
+          groupName,
+          Object.entries(actions)
+            .filter(([name, action]) => (
+              typeof action === "function" && isFrontendActionAllowed(groupName, name)
+            ))
+            .map(([name, action]) => {
+              const path = `${groupName}.${name}`;
+              return {
+                name,
+                parameterCount: action.length,
+                ...(FRONTEND_ACTION_DOCS[path] || {}),
+              };
+            }),
+        ]),
+      ),
+    };
+  }
+
+  if (payload?.operation === "read") {
+    const [storeName, ...segments] = String(payload.path || "").split(".").filter(Boolean);
+    if (!storeName || segments.length === 0 || !stores[storeName]) {
+      throw new Error("store 路径应为 canvas.字段、global.字段、command.字段或 i18n.字段");
+    }
+    if (!FRONTEND_READABLE_FIELDS[storeName]?.includes(segments[0])) {
+      throw new Error(`store 字段不可读取：${storeName}.${segments[0]}`);
+    }
+    let value = stores[storeName];
+    for (const segment of segments) {
+      if (!value || typeof value !== "object" || !Object.prototype.hasOwnProperty.call(value, segment)) {
+        throw new Error(`store 路径不存在：${payload.path}`);
+      }
+      value = value[segment];
+    }
+    return {
+      path: payload.path,
+      value: serializeFrontendStoreValue(payload.path, value),
+    };
+  }
+
+  if (payload?.operation !== "execute") {
+    throw new Error("前端操作类型必须是 list、read 或 execute");
+  }
+  const [groupName, actionName, ...rest] = String(payload.action || "").split(".");
+  if (!groupName || !actionName || rest.length > 0) {
+    throw new Error("前端方法格式应为 canvas.方法名、global.方法名或 command.方法名");
+  }
+  const group = groups[groupName];
+  const action = group?.[actionName];
+  if (
+    !isFrontendActionAllowed(groupName, actionName) ||
+    typeof action !== "function" ||
+    !Object.prototype.hasOwnProperty.call(group, actionName)
+  ) {
+    throw new Error(`前端方法未开放：${payload.action}`);
+  }
+  const result = await action.apply(
+    group,
+    Array.isArray(payload.arguments) ? payload.arguments : [],
+  );
+  return {
+    action: payload.action,
+    result: serializeFrontendActionResult(result),
+  };
 };
 
 const resolveImagePaths = async (context, images, canvasName) => {
@@ -427,16 +687,6 @@ const renderInlineMarkdown = (React, text, keyPrefix) => {
                     ?.classList.add("is-error");
                 },
               }),
-              React.createElement(
-                "a",
-                {
-                  className: "pi-agent-markdown-image-fallback",
-                  href: src,
-                  target: "_blank",
-                  rel: "noreferrer",
-                },
-                `${alt || "图片"}加载失败，打开原图`,
-              ),
             )
           : match[0],
       );
@@ -992,23 +1242,8 @@ const ensureStyles = () => {
     .pi-agent-markdown-image-wrap {
       display: block;
     }
-    .pi-agent-markdown-image-fallback {
-      display: none;
-      width: fit-content;
-      max-width: 100%;
-      border: 1px solid rgba(239, 68, 68, 0.48);
-      border-radius: 8px;
-      background: rgba(127, 29, 29, 0.28);
-      color: #fca5a5;
-      padding: 8px 10px;
-      margin: 8px 0;
-      word-break: break-word;
-    }
     .pi-agent-markdown-image-wrap.is-error .pi-agent-markdown-image {
       display: none;
-    }
-    .pi-agent-markdown-image-wrap.is-error .pi-agent-markdown-image-fallback {
-      display: inline-flex;
     }
     .pi-agent-empty {
       height: 100%;
@@ -1210,6 +1445,8 @@ export const ui = ({ context, plugin }) => {
   const [draftText, setDraftText] = useState("");
   const [toolEvents, setToolEvents] = useState(() => conversation.toolEvents || []);
   const taskRef = useRef({ taskId: "", cursor: 0, cancelled: false });
+  const heartbeatRef = useRef(null);
+  const frontendResponsesRef = useRef(new Map());
   const settingsRef = useRef(settings);
   const conversationRef = useRef(conversation);
   const draftTextRef = useRef("");
@@ -1218,6 +1455,19 @@ export const ui = ({ context, plugin }) => {
   const selectedImages = imageCandidates.directlySelected.length > 0
     ? imageCandidates.directlySelected
     : imageCandidates.activeGroupImages;
+
+  const clearTaskHeartbeat = () => {
+    if (!heartbeatRef.current) return;
+    clearInterval(heartbeatRef.current);
+    heartbeatRef.current = null;
+  };
+
+  const startTaskHeartbeat = (taskId) => {
+    clearTaskHeartbeat();
+    heartbeatRef.current = setInterval(() => {
+      void plugin.invoke("heartbeatTurn", { taskId }).catch(() => null);
+    }, TASK_HEARTBEAT_INTERVAL_MS);
+  };
 
   const writeSettings = (patch) => {
     const next = { ...settingsRef.current, ...patch };
@@ -1387,6 +1637,27 @@ export const ui = ({ context, plugin }) => {
   const consumeEvents = async (entries) => {
     for (const entry of entries) {
       const event = entry.event;
+      if (event.type === "frontend_action_request") {
+        let response = frontendResponsesRef.current.get(event.requestId);
+        if (!response) {
+          try {
+            const result = await executeFrontendActionRequest(context, event.payload);
+            response = { requestId: event.requestId, result };
+          } catch (error) {
+            response = {
+              requestId: event.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+          frontendResponsesRef.current.set(event.requestId, response);
+        }
+        const resolved = await plugin.invoke("resolveFrontendAction", response);
+        if (resolved?.success || resolved?.expired) {
+          frontendResponsesRef.current.delete(event.requestId);
+        }
+        taskRef.current.cursor = entry.cursor;
+        continue;
+      }
       if (event.type === "message_update" && event.delta) {
         setDraft((value) => `${value}${event.delta}`);
       }
@@ -1396,6 +1667,7 @@ export const ui = ({ context, plugin }) => {
       if (isImportedPluginEvent(event)) {
         notifyImportedPlugin(event);
       }
+      taskRef.current.cursor = entry.cursor;
     }
   };
 
@@ -1405,7 +1677,6 @@ export const ui = ({ context, plugin }) => {
         taskId,
         cursor: taskRef.current.cursor,
       });
-      taskRef.current.cursor = payload.cursor;
       await consumeEvents(payload.events || []);
 
       if (payload.status === "completed") {
@@ -1479,8 +1750,17 @@ export const ui = ({ context, plugin }) => {
         selectedImageCandidates,
       });
       taskRef.current = { taskId: started.taskId, cursor: 0, cancelled: false, turnId };
-      await pollTask(started.taskId);
+      startTaskHeartbeat(started.taskId);
+      try {
+        await pollTask(started.taskId);
+      } finally {
+        clearTaskHeartbeat();
+      }
     } catch (error) {
+      const activeTaskId = taskRef.current.taskId;
+      if (activeTaskId) {
+        await plugin.invoke("cancelTurn", { taskId: activeTaskId }).catch(() => null);
+      }
       const accountSessionExpired = activeSettings.modelSource === "account"
         && error?.code === "ACCOUNT_AUTH_EXPIRED";
       const message = accountSessionExpired
@@ -1506,7 +1786,8 @@ export const ui = ({ context, plugin }) => {
   const handleCancel = async () => {
     const taskId = taskRef.current.taskId;
     taskRef.current.cancelled = true;
-    if (taskId) await plugin.invoke("cancelTurn", { taskId });
+    clearTaskHeartbeat();
+    if (taskId) await plugin.invoke("cancelTurn", { taskId }).catch(() => null);
     setIsRunning(false);
     setStatus({ key: "command.piAgentAssistant.status.cancelled" });
   };
@@ -1565,12 +1846,14 @@ export const ui = ({ context, plugin }) => {
     return (
       <section className="pi-agent-tools">
         <div className="pi-agent-label">{t("command.piAgentAssistant.tools")}</div>
-        {rows.map((event) => {
+        {rows.map((row) => {
+          const event = getToolGroupDisplayEvent(row);
           const debugText = settings.debug === true ? getToolEventDebugText(event) : "";
           return (
-            <div className="pi-agent-tool-row" key={event.rowKey}>
+            <div className="pi-agent-tool-row" key={row.rowKey}>
               <span className="pi-agent-tool-name">
-                {event.toolName || t("command.piAgentAssistant.tool")}
+                {row.toolName || t("command.piAgentAssistant.tool")}
+                {row.count > 1 ? ` × ${row.count}` : ""}
               </span>
               <span className="pi-agent-tool-status">{getToolEventText(event, t)}</span>
               {debugText ? <pre className="pi-agent-tool-debug">{debugText}</pre> : null}
@@ -1580,6 +1863,15 @@ export const ui = ({ context, plugin }) => {
       </section>
     );
   };
+
+  useEffect(() => {
+    return () => {
+      taskRef.current.cancelled = true;
+      clearTaskHeartbeat();
+      const taskId = taskRef.current.taskId;
+      if (taskId) void plugin.invoke("cancelTurn", { taskId }).catch(() => null);
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;

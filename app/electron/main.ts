@@ -2390,9 +2390,11 @@ ipcMain.handle(
 
       const commandDir = path.join(getStorageDir(), "commands");
       const pluginDir = assertInsidePath(commandDir, path.join(commandDir, folder));
+      const apiPort = await startServer();
       const result = await pluginRuntime.invoke(pluginKey, actionName, payload?.payload, {
         pluginKey,
         folder,
+        apiPort,
         storageDir: getStorageDir(),
         commandDir,
         pluginDir,

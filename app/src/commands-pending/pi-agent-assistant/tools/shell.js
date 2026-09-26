@@ -144,6 +144,10 @@ export const createShellTool = (runtime = {}) => ({
   description: [
     "直接执行一整段 shell 命令字符串，可用于搜索、联网请求、文件处理、脚本执行和其他开放任务。",
     ...getShellDescriptionRules(),
+    "当前 LookBack 的前端状态和 action 使用 frontend_runtime。需要调用 LookBack 后端接口时，在同一轮并行使用 deepwiki_search 确认准确契约、使用 lookback_runtime_info 获取当前实例地址，再按契约请求；禁止猜端口或参数试错。",
+    "查询 LookBack 仓库的架构、API 或已有实现时先用 deepwiki_search。DeepWiki 给出完成同类任务的明确范例后，先精确读取该范例并复用端到端流程；不要先拆读 store、service、config。只有范例缺少不可推断的端点或必填参数时，才读取对应底层文件。",
+    "禁止递归枚举目录、node_modules 或无边界扫描。Windows 下不要使用不存在的 Select-String -Recurse；搜索符号时优先使用 rg，环境没有 rg 时使用 git grep -n，二者都不可用时才对明确目录和扩展名使用 Get-ChildItem 配合 Select-String。读取内容必须指定文件和必要行段。不要重复读取已经回答当前问题的文件或符号，单次输出只保留解决问题所需的片段，避免数百行无关内容。",
+    "需要读取多个已知文件时，合并在一个 shell 调用中精确读取。多个互不依赖的网络请求必须并发执行；可在一个 Node 脚本中使用 Promise.allSettled，或让模型在同一轮发出多个 shell 调用。",
     "需要写入命令时，直接生成 shell 脚本把单个 .jsx 文件写到临时路径，再把该文件路径交给 import_plugin。",
     `系统信息：${formatSystemInfoForToolDescription(runtime.systemInfo || {})}`,
   ].join(" "),

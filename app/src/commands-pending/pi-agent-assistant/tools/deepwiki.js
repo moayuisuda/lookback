@@ -75,7 +75,7 @@ export const createDeepWikiTool = () => ({
   name: "deepwiki_search",
   label: "DeepWiki",
   description:
-    "通过 DeepWiki MCP 补充检索当前仓库知识。默认仓库是 moayuisuda/lookback，用于确认 LookBack 命令 API、架构约定和实现细节。",
+    "查询 LookBack 仓库知识、后端接口契约和现有实现的首选工具，默认仓库是 moayuisuda/lookback。需要调用后端接口时，用本工具一次确认准确端点、请求参数、返回结构和现有调用范例，禁止先猜参数试错。处理具体工作流时优先找已经端到端完成同一件事的范例；返回明确文件后应优先复用该范例，避免从底层 store、service、config 逐层考古。仅在 DeepWiki 未覆盖本地未发布改动时，再精确读取对应本地源码。",
   parameters: Type.Object({
     repository: Type.Optional(Type.String({ description: "GitHub 仓库，例如 moayuisuda/lookback；也可传 DeepWiki/GitHub URL" })),
     question: Type.String({ description: "要检索的问题" }),

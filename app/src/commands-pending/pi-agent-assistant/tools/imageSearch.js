@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 
-const DEFAULT_SOURCE = "baidu";
+const DEFAULT_SOURCE = "bing";
 const DEFAULT_PAGE_SIZE = 8;
 const MAX_PAGE_SIZE = 20;
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -12,6 +12,50 @@ const SOURCE_LABELS = {
   baidu: "百度图片",
   bing: "Bing Images",
   so: "360 图片",
+};
+
+const AI_TAG_FIELDS = new Set([
+  "tag",
+  "tags",
+  "label",
+  "labels",
+  "badge",
+  "badges",
+  "imagetag",
+  "imagetags",
+  "contenttag",
+  "contenttags",
+  "annotation",
+  "annotations",
+]);
+const AI_FLAG_FIELDS = new Set([
+  "isai",
+  "isaiimage",
+  "isaigenerated",
+  "aigenerated",
+  "isaigc",
+  "aigc",
+]);
+const AI_TAG_PATTERN = /(^|[^a-z0-9])(?:ai|aigc|ai[-_\s]*(?:generated|created|art)|人工智能生成|ai生成|智能生成)(?=$|[^a-z0-9])/iu;
+
+const normalizeFieldName = (value) =>
+  String(value || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+const isEnabledFlag = (value) =>
+  value === true || value === 1 || ["true", "1", "yes"].includes(String(value).toLowerCase());
+
+const hasAiText = (...values) =>
+  values.some((value) => AI_TAG_PATTERN.test(String(value || "")));
+
+const hasAiTag = (item) => {
+  if (!item || typeof item !== "object") return false;
+  return Object.entries(item).some(([key, value]) => {
+    const field = normalizeFieldName(key);
+    if (AI_FLAG_FIELDS.has(field)) return isEnabledFlag(value);
+    if (!AI_TAG_FIELDS.has(field)) return false;
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return AI_TAG_PATTERN.test(String(text || ""));
+  });
 };
 
 const clampInteger = (value, { min, max, fallback }) => {
@@ -176,6 +220,14 @@ const firstHttpUrl = (...values) =>
 const escapeMarkdownAlt = (value) =>
   String(value || "image").replace(/[\r\n[\]\\]/g, " ").trim() || "image";
 
+const createResultMarkdown = ({ title, sourceUrl, imageUrl, thumbnailUrl }) => {
+  const previewUrl = thumbnailUrl || imageUrl;
+  return [
+    previewUrl ? `![${escapeMarkdownAlt(title)}](${previewUrl})` : "",
+    sourceUrl ? `[${sourceUrl}](${sourceUrl})` : "",
+  ].filter(Boolean).join("\n");
+};
+
 const createResult = ({
   id,
   title,
@@ -187,24 +239,27 @@ const createResult = ({
   height,
   imageType,
   imageSize,
+  aiTagged = false,
 }) => {
   const normalizedTitle = firstText(title, site, "image");
+  const normalizedSourceUrl = firstHttpUrl(sourceUrl);
   const normalizedImageUrl = firstHttpUrl(imageUrl);
   const normalizedThumbnailUrl = firstHttpUrl(thumbnailUrl, imageUrl);
 
-  return {
+  const result = {
     id: firstText(id, normalizedImageUrl, normalizedThumbnailUrl),
     title: normalizedTitle,
     site: firstText(site),
-    sourceUrl: firstHttpUrl(sourceUrl),
+    sourceUrl: normalizedSourceUrl,
     imageUrl: normalizedImageUrl,
     thumbnailUrl: normalizedThumbnailUrl,
     width: Number(width || 0) || null,
     height: Number(height || 0) || null,
     imageType: firstText(imageType),
     imageSize: firstText(imageSize),
-    markdown: normalizedThumbnailUrl ? `![${escapeMarkdownAlt(normalizedTitle)}](${normalizedThumbnailUrl})` : "",
+    aiTagged,
   };
+  return { ...result, markdown: createResultMarkdown(result) };
 };
 
 const toSoResult = (item) =>
@@ -219,6 +274,7 @@ const toSoResult = (item) =>
     height: item.height,
     imageType: item.imgtype,
     imageSize: item.imgsize,
+    aiTagged: hasAiTag(item) || hasAiText(item.title, item.litetitle),
   });
 
 const toBaiduResult = (item) => {
@@ -241,6 +297,7 @@ const toBaiduResult = (item) => {
     height: item.height,
     imageType: item.type,
     imageSize: item.filesize,
+    aiTagged: hasAiTag(item) || hasAiText(item.title, item.desc),
   });
 };
 
@@ -272,6 +329,7 @@ const toBingResult = (item) =>
     height: item.h,
     imageType: item.img_format,
     imageSize: item.fileSize,
+    aiTagged: hasAiTag(item) || hasAiText(item.t, item.desc),
   });
 
 const parseBingResults = (html) =>
@@ -336,7 +394,8 @@ const searchImages = async (params) => {
       ? await searchBing({ query, page, pageSize, timeoutMs })
       : await searchJsonSource({ source, query, page, pageSize, timeoutMs });
   const results = response.results
-    .filter((item) => item.imageUrl || item.thumbnailUrl)
+    .filter((item) => !item.aiTagged && (item.imageUrl || item.thumbnailUrl))
+    .map(({ aiTagged: _aiTagged, ...item }) => item)
     .slice(0, pageSize);
 
   return {
@@ -357,10 +416,10 @@ export const createImageSearchTool = () => ({
   name: "image_search",
   label: "图片搜索",
   description:
-    "搜索图片并返回缩略图、原图链接、来源站点、来源页和 Markdown 图片语法。支持 source：baidu(默认，百度图片)、bing(Bing Images)、so(360 图片)。不需要代理和 API Key。",
+    "搜索图片并主动过滤标签、标题或描述中含 AI、AIGC、AI generated、AI生成等标记的结果。搜索源返回的图片和来源页 URL 不做额外验证或改写，markdown 使用缩略图预览，并在下一行附带可点击复制的 sourceUrl 来源页链接；展示结果时必须完整使用 markdown。支持 source：bing(默认，Bing Images)、baidu(百度图片)、so(360 图片)。首轮结果满足数量和风格时应停止，不要重复切换搜索源。不需要代理和 API Key。",
   parameters: Type.Object({
     query: Type.String({ description: "图片搜索关键词" }),
-    source: Type.Optional(Type.String({ description: "搜索源：baidu、bing、so。默认 baidu" })),
+    source: Type.Optional(Type.String({ description: "搜索源：bing、baidu、so。默认 bing" })),
     pageSize: Type.Optional(Type.Number({ description: `返回数量，1-${MAX_PAGE_SIZE}，默认 ${DEFAULT_PAGE_SIZE}` })),
     page: Type.Optional(Type.Number({ description: "页码，默认 1" })),
     timeoutMs: Type.Optional(Type.Number({ description: `请求超时毫秒数，最高 ${MAX_TIMEOUT_MS}` })),
