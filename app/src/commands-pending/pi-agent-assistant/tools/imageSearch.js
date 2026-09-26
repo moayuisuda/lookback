@@ -228,6 +228,9 @@ const createResultMarkdown = ({ title, sourceUrl, imageUrl, thumbnailUrl }) => {
   ].filter(Boolean).join("\n");
 };
 
+const createSearchResultsMarkdown = (results) =>
+  results.map((item) => item.markdown).filter(Boolean).join("\n\n");
+
 const createResult = ({
   id,
   title,
@@ -416,7 +419,7 @@ export const createImageSearchTool = () => ({
   name: "image_search",
   label: "图片搜索",
   description:
-    "搜索图片并主动过滤标签、标题或描述中含 AI、AIGC、AI generated、AI生成等标记的结果。搜索源返回的图片和来源页 URL 不做额外验证或改写，markdown 使用缩略图预览，并在下一行附带可点击复制的 sourceUrl 来源页链接；展示结果时必须完整使用 markdown。支持 source：bing(Bing Images)、baidu(百度图片)、so(360 图片)。首轮结果满足数量和风格时应停止，不要重复切换搜索源。不需要代理和 API Key。",
+    "搜索图片并主动过滤标签、标题或描述中含 AI、AIGC、AI generated、AI生成等标记的结果。工具文本是可直接展示的 Markdown，每项包含缩略图预览和独立的 sourceUrl 来源页链接，回复时必须原样保留全部图片语法。搜索源返回的 URL 不做额外验证或改写。支持 source：bing(Bing Images)、baidu(百度图片)、so(360 图片)。首轮结果满足数量和风格时应停止，不要重复切换搜索源。不需要代理和 API Key。",
   parameters: Type.Object({
     query: Type.String({ description: "图片搜索关键词" }),
     source: Type.Optional(Type.String({ description: "搜索源：bing、baidu、so。默认 so" })),
@@ -427,7 +430,7 @@ export const createImageSearchTool = () => ({
   execute: async (_toolCallId, params) => {
     const result = await searchImages(params || {});
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text", text: createSearchResultsMarkdown(result.results) }],
       details: result,
     };
   },
