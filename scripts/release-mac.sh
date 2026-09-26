@@ -36,7 +36,7 @@ cd "$APP_DIR"
 # 先删旧 zip/dmg，防止多版本文件导致后续步骤提交错误产物
 rm -f dist/*.zip dist/*.dmg dist/*.blockmap dist/latest-mac.yml
 echo "▶ 构建 macOS 应用 (证书: ${CSC_NAME})..."
-npm run build:mac -- --publish never
+npm run build:mac
 
 # ── 步骤 2: 上传到 GitHub Release ────────────────────────────────────────────
 # electron-builder 会在构建过程中调用 @electron/notarize 完成公证并 staple .app

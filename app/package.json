@@ -74,9 +74,10 @@
   },
   "scripts": {
     "dev": "concurrently \"tsup --watch --onSuccess \\\"electron .\\\"\" \"vite\"",
-    "build": "tsc -b && vite build && tsup && electron-builder",
-    "build:mac": "npm run build -- --mac --arm64",
-    "build:win": "tsc -b && vite build && tsup && electron-builder --win",
+    "build:source": "tsc -b && vite build && tsup",
+    "build": "npm run build:source && electron-builder",
+    "build:mac": "npm run build:source && electron-builder --mac --arm64 --publish=never",
+    "build:win": "npm run build:source && electron-builder --win --publish=never",
     "lint": "tsc -b --noEmit && eslint .",
     "preview": "vite preview"
   },

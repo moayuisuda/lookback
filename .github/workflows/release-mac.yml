@@ -36,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Build macOS artifacts
-        run: npm run build:mac -- --publish never
+        run: npm run build:mac
 
       - name: Validate macOS signing and notarization
         run: |
