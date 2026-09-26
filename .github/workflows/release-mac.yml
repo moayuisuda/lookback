@@ -35,8 +35,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build macOS artifacts
-        run: npm run build:mac
+      - name: Build app source
+        run: npm run build:source
+
+      - name: Package macOS artifacts
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG_FILE="$RUNNER_TEMP/lookback-mac-package.log"
+
+          if npm run package:mac 2>&1 | tee "$LOG_FILE"; then
+            exit 0
+          fi
+
+          ERROR_OUTPUT="$(tail -n 30 "$LOG_FILE" \
+            | sed -E $'s/\033\\[[0-9;]*[mK]//g' \
+            | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g')"
+          ERROR_OUTPUT="${ERROR_OUTPUT//'%'/'%25'}"
+          ERROR_OUTPUT="${ERROR_OUTPUT//$'\r'/'%0D'}"
+          ERROR_OUTPUT="${ERROR_OUTPUT//$'\n'/'%0A'}"
+          echo "::error title=macOS packaging failed::$ERROR_OUTPUT"
+          exit 1
 
       - name: Validate macOS signing and notarization
         run: |

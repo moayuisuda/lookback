@@ -76,8 +76,10 @@
     "dev": "concurrently \"tsup --watch --onSuccess \\\"electron .\\\"\" \"vite\"",
     "build:source": "tsc -b && vite build && tsup",
     "build": "npm run build:source && electron-builder",
-    "build:mac": "npm run build:source && electron-builder --mac --arm64 --publish=never",
-    "build:win": "npm run build:source && electron-builder --win --publish=never",
+    "package:mac": "electron-builder --mac --arm64 --publish=never",
+    "package:win": "electron-builder --win --publish=never",
+    "build:mac": "npm run build:source && npm run package:mac",
+    "build:win": "npm run build:source && npm run package:win",
     "lint": "tsc -b --noEmit && eslint .",
     "preview": "vite preview"
   },
