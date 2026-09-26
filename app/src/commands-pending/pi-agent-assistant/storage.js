@@ -81,6 +81,10 @@ export const fileLock = {
     return this.with(filePath, () => fs.readFile(filePath, "utf8"));
   },
 
+  async readBuffer(filePath) {
+    return this.with(filePath, () => fs.readFile(filePath));
+  },
+
   async readJson(filePath) {
     return JSON.parse(await this.readText(filePath));
   },

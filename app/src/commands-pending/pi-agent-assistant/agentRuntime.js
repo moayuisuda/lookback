@@ -1,15 +1,25 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
-import { createOpenAiCompatibleModel } from "./model.js";
+import sharp from "sharp";
+import {
+  ACCOUNT_AUTH_EXPIRED_MARKER,
+  createOpenAiCompatibleModel,
+} from "./model.js";
 import { createDeepWikiTool } from "./tools/deepwiki.js";
 import { createImageSearchTool } from "./tools/imageSearch.js";
 import { createImportPluginTool } from "./tools/importPlugin.js";
-import { createSelectedImagePathsTool } from "./tools/selectedImagePaths.js";
+import {
+  createSelectedImagePathsTool,
+  resolveSelectedImagePaths,
+} from "./tools/selectedImagePaths.js";
 import { createShellTool } from "./tools/shell.js";
+import { fileLock } from "./storage.js";
 import { createSystemInfo, formatSystemInfoForPrompt } from "./systemInfo.js";
 
 const TASK_TTL_MS = 30 * 60 * 1000;
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+const MAX_IMAGE_EDGE = 2048;
+const IMAGE_WEBP_QUALITY = 82;
 const MAX_TOTAL_TOOL_CALLS = 50;
 const TOOL_CALL_LIMITS = {
   deepwiki_search: 3,
@@ -171,6 +181,16 @@ const toStoredMessage = (message) => {
 
 const toStoredMessages = (messages) =>
   Array.isArray(messages) ? messages.map(toStoredMessage).filter(Boolean) : [];
+
+// 图片 Base64 只保留在 Agent 会话内存中，避免把大块数据写入前端 localStorage。
+const toClientMessages = (messages) =>
+  toStoredMessages(messages).map((message) => {
+    if (message.role !== "user" || !Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.filter((block) => block.type === "text"),
+    };
+  });
 
 const hasToolTranscriptForTurn = (messages, turnId) =>
   messages.some(
@@ -446,19 +466,69 @@ const createRuntimeTools = (runtime) =>
     createImageSearchTool(),
   ].map((tool) => createGuardedTool(tool, runtime));
 
-const normalizeSelectedImagePaths = (paths) => {
-  if (!Array.isArray(paths)) return [];
-  return Array.from(
-    new Set(
-      paths
-        .map((item) => String(item || "").trim())
-        .filter(Boolean),
-    ),
-  );
+const IMAGE_MIME_TYPES = new Map([
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["png", "image/png"],
+  ["webp", "image/webp"],
+  ["gif", "image/gif"],
+]);
+
+const getImageMimeType = (imagePath, responseMimeType = "") => {
+  const normalizedResponseType = String(responseMimeType).split(";")[0].trim().toLowerCase();
+  if ([...IMAGE_MIME_TYPES.values()].includes(normalizedResponseType)) {
+    return normalizedResponseType;
+  }
+  const pathname = /^https?:\/\//i.test(imagePath) ? new URL(imagePath).pathname : imagePath;
+  const extension = pathname.split(".").pop()?.toLowerCase() || "";
+  const mimeType = IMAGE_MIME_TYPES.get(extension);
+  if (!mimeType) throw new Error(`Ira 不支持该图片格式：${imagePath}`);
+  return mimeType;
+};
+
+const readImageContent = async (imagePath) => {
+  let data;
+  if (/^https?:\/\//i.test(imagePath)) {
+    const response = await fetch(imagePath);
+    if (!response.ok) {
+      throw new Error(`读取图片失败（${response.status}）：${imagePath}`);
+    }
+    data = Buffer.from(await response.arrayBuffer());
+    getImageMimeType(imagePath, response.headers.get("content-type"));
+  } else {
+    data = await fileLock.readBuffer(imagePath);
+    getImageMimeType(imagePath);
+  }
+
+  const compressed = await sharp(data, { animated: false })
+    .rotate()
+    .resize({
+      width: MAX_IMAGE_EDGE,
+      height: MAX_IMAGE_EDGE,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .webp({ quality: IMAGE_WEBP_QUALITY, effort: 4 })
+    .toBuffer();
+
+  return {
+    type: "image",
+    data: compressed.toString("base64"),
+    mimeType: "image/webp",
+  };
+};
+
+const readSelectedImages = async (candidates) => {
+  const { paths } = resolveSelectedImagePaths(candidates);
+  const images = [];
+  for (const imagePath of paths) {
+    images.push(await readImageContent(imagePath));
+  }
+  return images;
 };
 
 const setRuntimeTurnContext = (runtime, payload) => {
-  runtime.selectedImagePaths = normalizeSelectedImagePaths(payload?.selectedImagePaths);
+  runtime.selectedImageCandidates = payload?.selectedImageCandidates || {};
 };
 
 const createRuntime = (context, payload) => {
@@ -466,7 +536,7 @@ const createRuntime = (context, payload) => {
     storageDir: context.storageDir,
     commandDir: context.commandDir,
     pluginDir: context.pluginDir,
-    selectedImagePaths: [],
+    selectedImageCandidates: {},
     totalToolCalls: 0,
     toolCallCounts: new Map(),
   };
@@ -480,8 +550,17 @@ const resetRuntimeTurnLimits = (runtime) => {
   runtime.toolCallCounts = new Map();
 };
 
+const removeImageBlocks = (messages) =>
+  messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
+    const content = message.content.filter((block) => block?.type !== "image");
+    if (content.length === message.content.length) return message;
+    return { ...message, content };
+  });
+
 const getSettingsSignature = (settings) =>
   JSON.stringify({
+    modelSource: String(settings?.modelSource || ""),
     baseUrl: String(settings?.baseUrl || ""),
     model: String(settings?.model || ""),
     userRules: String(settings?.userRules || ""),
@@ -533,11 +612,10 @@ const getAgentSession = ({ payload, context }) => {
   const settings = payload?.settings || {};
   const signature = getSettingsSignature(settings);
   const existing = sessions.get(conversationId);
+  if (existing?.currentTask?.status === "running") {
+    throw new Error("当前会话已有任务正在运行");
+  }
   if (existing?.signature === signature) {
-    existing.apiKey = String(settings.apiKey || "").trim();
-    existing.updatedAt = Date.now();
-    setRuntimeTurnContext(existing.runtime, payload);
-    resetRuntimeTurnLimits(existing.runtime);
     return existing;
   }
 
@@ -552,6 +630,7 @@ const createTask = () => {
     events: [],
     status: "running",
     error: "",
+    errorCode: "",
     result: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -573,6 +652,16 @@ const pushTaskEvent = (task, event) => {
   }
 };
 
+const failTask = (task, error) => {
+  task.status = "failed";
+  task.error = error instanceof Error ? error.message : String(error);
+  if (task.error.includes(ACCOUNT_AUTH_EXPIRED_MARKER)) {
+    task.errorCode = "ACCOUNT_AUTH_EXPIRED";
+  }
+  task.updatedAt = Date.now();
+  pushTaskEvent(task, { type: "error", error: task.error });
+};
+
 const cleanupTasks = () => {
   const now = Date.now();
   for (const [taskId, task] of tasks.entries()) {
@@ -588,39 +677,51 @@ const cleanupTasks = () => {
 export const startTurn = async (payload, context) => {
   cleanupTasks();
   const settings = payload?.settings || {};
-  const apiKey = String(settings.apiKey || "").trim();
+  const useAccount = settings.modelSource === "account";
+  const apiKey = String((useAccount ? settings.accountToken : settings.apiKey) || "").trim();
   const prompt = String(payload?.prompt || "").trim();
-  if (!apiKey) throw new Error("请先配置 API Key");
+  if (!apiKey) throw new Error(useAccount ? "请先登录" : "请先配置 API Key");
   if (!prompt) throw new Error("请输入消息");
 
   const session = getAgentSession({ payload, context });
-  if (session.currentTask?.status === "running") {
-    throw new Error("当前会话已有任务正在运行");
-  }
-
+  session.apiKey = apiKey;
+  session.updatedAt = Date.now();
+  setRuntimeTurnContext(session.runtime, payload);
+  resetRuntimeTurnLimits(session.runtime);
   const task = createTask();
   task.agent = session.agent;
   session.currentTask = task;
-  session.updatedAt = Date.now();
+
+  let images;
+  try {
+    images = await readSelectedImages(payload?.selectedImageCandidates);
+    if (images.length > 0) {
+      session.agent.state.messages = removeImageBlocks(session.agent.state.messages);
+    }
+  } catch (error) {
+    session.currentTask = null;
+    tasks.delete(task.id);
+    throw error;
+  }
 
   void session.agent
-    .prompt(prompt)
+    .prompt(prompt, images)
     .then(() => {
+      const agentError = String(session.agent.state.errorMessage || "");
+      if (agentError.includes(ACCOUNT_AUTH_EXPIRED_MARKER)) {
+        failTask(task, agentError);
+        return;
+      }
       task.status = "completed";
       task.result = {
-        messages: toStoredMessages(session.agent.state.messages),
+        messages: toClientMessages(session.agent.state.messages),
       };
       task.updatedAt = Date.now();
-      session.updatedAt = Date.now();
-      session.currentTask = null;
     })
-    .catch((error) => {
-      task.status = "failed";
-      task.error = error instanceof Error ? error.message : String(error);
-      task.updatedAt = Date.now();
+    .catch((error) => failTask(task, error))
+    .finally(() => {
       session.updatedAt = Date.now();
       session.currentTask = null;
-      pushTaskEvent(task, { type: "error", error: task.error });
     });
 
   return { taskId: task.id };
@@ -632,13 +733,19 @@ export const pollTurn = async (payload) => {
   const after = Number(payload?.cursor || 0);
   const task = tasks.get(taskId);
   if (!task) throw new Error("任务不存在或已过期");
+  const events = task.events.filter((entry) => entry.cursor > after);
+  // 先让前端渲染尚未消费的增量，下一次轮询再切换到终态。
+  const status = task.status !== "running" && events.length > 0
+    ? "running"
+    : task.status;
   return {
     taskId,
-    status: task.status,
+    status,
     cursor: task.cursor,
-    events: task.events.filter((entry) => entry.cursor > after),
-    result: task.status === "completed" ? task.result : null,
+    events,
+    result: status === "completed" ? task.result : null,
     error: task.error,
+    errorCode: task.errorCode,
   };
 };
 

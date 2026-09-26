@@ -2,12 +2,14 @@ const COMMAND_ID = "piAgentAssistant";
 const SETTINGS_KEY = "lookback.command.piAgentAssistant.settings.v1";
 const CONVERSATION_KEY = "lookback.command.piAgentAssistant.conversation.v1";
 const DEFAULT_BASE_URL = "https://zenmux.ai/api/v1";
-const DEFAULT_MODEL = "moonshotai/kimi-k2.7-code-free";
+const DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash";
+const REGISTER_URL = "https://two-moons.site/regist";
 const DEFAULT_USER_RULES = [
   "1. 不要简单问题复杂化，用最有效的方式执行",
   "2. 当需要搜索图片时，优先使用成熟的可用 api",
 ].join("\n");
-const POLL_INTERVAL_MS = 500;
+const POLL_INTERVAL_MS = 100;
+const AUTH_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_STORED_TOOL_EVENTS = 120;
 
 export const config = {
@@ -24,8 +26,21 @@ export const config = {
       "command.piAgentAssistant.baseUrl": "Base URL",
       "command.piAgentAssistant.apiKey": "API Key",
       "command.piAgentAssistant.model": "Model",
+      "command.piAgentAssistant.modelSection": "Model service",
+      "command.piAgentAssistant.modelSectionHint": "Use your two-moons account or connect a custom model",
+      "command.piAgentAssistant.behaviorSection": "Assistant settings",
+      "command.piAgentAssistant.behaviorSectionHint": "Configure Ira's behavior and diagnostics",
+      "command.piAgentAssistant.modelSource.account": "Account",
+      "command.piAgentAssistant.modelSource.custom": "Custom Model",
+      "command.piAgentAssistant.accountName": "Username",
+      "command.piAgentAssistant.accountPassword": "Password",
+      "command.piAgentAssistant.login": "Log in",
+      "command.piAgentAssistant.register": "Create account",
+      "command.piAgentAssistant.logout": "Log out",
+      "command.piAgentAssistant.loggedInAs": "Logged in as {{name}}",
       "command.piAgentAssistant.userRules": "User rules",
       "command.piAgentAssistant.debug": "Debug mode",
+      "command.piAgentAssistant.imageContext": "Use selected images as context ({{count}})",
       "command.piAgentAssistant.save": "Saved",
       "command.piAgentAssistant.clear": "Clear",
       "command.piAgentAssistant.deleteMessage": "Delete",
@@ -48,9 +63,15 @@ export const config = {
       "command.piAgentAssistant.thinking": "Ira is working",
       "command.piAgentAssistant.imported": "Plugin imported.",
       "command.piAgentAssistant.error.agentFailed": "Agent failed",
+      "command.piAgentAssistant.error.sessionExpired": "Your login has expired. Please log in again.",
       "toast.command.piAgentAssistant.failed": "Ira failed: {{error}}",
       "toast.command.piAgentAssistant.imported": "Plugin imported.",
       "toast.command.piAgentAssistant.cleared": "Conversation cleared",
+      "toast.command.piAgentAssistant.loggedIn": "Logged in",
+      "toast.command.piAgentAssistant.loggedOut": "Logged out",
+      "toast.command.piAgentAssistant.loginFailed": "Login failed: {{error}}",
+      "toast.command.piAgentAssistant.sessionExpired": "Your login has expired. Please log in again.",
+      "toast.command.piAgentAssistant.openRegistrationFailed": "Could not open registration page: {{error}}",
     },
     zh: {
       "command.piAgentAssistant.title": "Ira",
@@ -58,8 +79,21 @@ export const config = {
       "command.piAgentAssistant.baseUrl": "Base URL",
       "command.piAgentAssistant.apiKey": "API Key",
       "command.piAgentAssistant.model": "模型",
+      "command.piAgentAssistant.modelSection": "模型服务",
+      "command.piAgentAssistant.modelSectionHint": "使用 two-moons 账号，或连接自定义模型",
+      "command.piAgentAssistant.behaviorSection": "助手设置",
+      "command.piAgentAssistant.behaviorSectionHint": "调整 Ira 的行为规则和调试信息",
+      "command.piAgentAssistant.modelSource.account": "账号登录",
+      "command.piAgentAssistant.modelSource.custom": "自定义模型",
+      "command.piAgentAssistant.accountName": "用户名",
+      "command.piAgentAssistant.accountPassword": "密码",
+      "command.piAgentAssistant.login": "登录",
+      "command.piAgentAssistant.register": "注册账号",
+      "command.piAgentAssistant.logout": "退出登录",
+      "command.piAgentAssistant.loggedInAs": "已登录：{{name}}",
       "command.piAgentAssistant.userRules": "用户规则",
       "command.piAgentAssistant.debug": "调试模式",
+      "command.piAgentAssistant.imageContext": "将选中图片作为上下文（{{count}}）",
       "command.piAgentAssistant.save": "已保存",
       "command.piAgentAssistant.clear": "清空",
       "command.piAgentAssistant.deleteMessage": "删除",
@@ -82,9 +116,15 @@ export const config = {
       "command.piAgentAssistant.thinking": "Ira 正在处理",
       "command.piAgentAssistant.imported": "插件已导入",
       "command.piAgentAssistant.error.agentFailed": "Agent 执行失败",
+      "command.piAgentAssistant.error.sessionExpired": "登录已失效，请重新登录",
       "toast.command.piAgentAssistant.failed": "Ira 失败：{{error}}",
       "toast.command.piAgentAssistant.imported": "插件已导入",
       "toast.command.piAgentAssistant.cleared": "对话已清空",
+      "toast.command.piAgentAssistant.loggedIn": "登录成功",
+      "toast.command.piAgentAssistant.loggedOut": "已退出登录",
+      "toast.command.piAgentAssistant.loginFailed": "登录失败：{{error}}",
+      "toast.command.piAgentAssistant.sessionExpired": "登录已失效，请重新登录",
+      "toast.command.piAgentAssistant.openRegistrationFailed": "无法打开注册页：{{error}}",
     },
   },
 };
@@ -94,14 +134,22 @@ const parseJson = (value, fallback) => {
   return JSON.parse(value);
 };
 
-const loadSettings = () => ({
-  baseUrl: DEFAULT_BASE_URL,
-  apiKey: "",
-  model: DEFAULT_MODEL,
-  userRules: DEFAULT_USER_RULES,
-  debug: false,
-  ...parseJson(localStorage.getItem(SETTINGS_KEY), {}),
-});
+const loadSettings = () => {
+  const stored = parseJson(localStorage.getItem(SETTINGS_KEY), {});
+  return {
+    baseUrl: DEFAULT_BASE_URL,
+    apiKey: "",
+    model: DEFAULT_MODEL,
+    modelSource: "account",
+    accountToken: "",
+    accountName: "",
+    accountId: "",
+    userRules: DEFAULT_USER_RULES,
+    debug: false,
+    includeSelectedImages: true,
+    ...stored,
+  };
+};
 
 const saveSettings = (settings) => {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -289,32 +337,59 @@ const getToolEventDebugText = (event) => {
   return `${text.slice(0, 8000)}\n...[debug output truncated]`;
 };
 
-const getSelectedImagePathSnapshot = async (context) => {
-  const canvasState = context.store.canvas;
-  const canvasActions = context.actions.canvasActions;
+const getCanvasImageCandidates = (canvasState) => {
   const items = canvasState.canvasItems || [];
+  const directlySelected = items.filter(
+    (item) => item?.type === "image" && item.imagePath && item.isSelected === true,
+  );
+
   const activeGroup = (canvasState.canvasGroups || []).find(
     (group) => group.groupId === canvasState.activeCanvasGroupId,
   );
   const activeGroupItemIds = new Set(activeGroup?.items || []);
-  const selectedImages = items.filter(
-    (item) =>
-      item?.type === "image" &&
-      item.imagePath &&
-      (item.isSelected || activeGroupItemIds.has(item.itemId)),
-  );
+  const activeGroupImages = activeGroup ? items.filter(
+    (item) => item?.type === "image" && item.imagePath && activeGroupItemIds.has(item.itemId),
+  ) : [];
+  return { directlySelected, activeGroupImages };
+};
+
+const resolveImagePaths = async (context, images, canvasName) => {
+  const canvasActions = context.actions.canvasActions;
   const paths = [];
 
-  for (const image of selectedImages) {
+  for (const image of images) {
     const rawPath = String(image.imagePath || "").trim();
     if (!rawPath) continue;
     const resolvedPath = await canvasActions
-      .resolveLocalImagePath(rawPath, canvasState.currentCanvasName)
+      .resolveLocalImagePath(rawPath, canvasName)
       .catch(() => rawPath);
     paths.push(resolvedPath || rawPath);
   }
 
   return Array.from(new Set(paths.filter(Boolean)));
+};
+
+const getSelectedImageCandidatesSnapshot = async (context, candidates, canvasName) => ({
+  directlySelectedPaths: await resolveImagePaths(
+    context,
+    candidates.directlySelected,
+    canvasName,
+  ),
+  activeGroupPaths: await resolveImagePaths(
+    context,
+    candidates.activeGroupImages,
+    canvasName,
+  ),
+});
+
+const getCanvasImageUrl = (imagePath, canvasName, apiBaseUrl) => {
+  const normalized = String(imagePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (normalized.startsWith("assets/")) {
+    const filename = normalized.split("/").pop() || normalized;
+    return `${apiBaseUrl}/api/assets/${encodeURIComponent(canvasName)}/${encodeURIComponent(filename)}`;
+  }
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  return `${apiBaseUrl}/${normalized}`;
 };
 
 const isSafeResourceUrl = (value) => {
@@ -592,13 +667,96 @@ const ensureStyles = () => {
     }
     .pi-agent-settings-panel {
       border-top: 1px solid #262626;
-      padding: 10px 14px 12px;
-      background: linear-gradient(180deg, rgba(23, 23, 23, 0.96), rgba(10, 10, 10, 0.98));
+      display: grid;
+      gap: 10px;
+      padding: 12px 14px 14px;
+      background: linear-gradient(180deg, rgba(18, 18, 18, 0.98), rgba(8, 8, 8, 0.99));
+    }
+    .pi-agent-settings-section {
+      border: 1px solid #2b2b2b;
+      border-radius: 11px;
+      background: rgba(20, 20, 20, 0.82);
+      padding: 11px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+    .pi-agent-settings-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .pi-agent-settings-section-title {
+      color: #ededed;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.4;
+    }
+    .pi-agent-settings-section-hint {
+      margin-top: 2px;
+      color: #737373;
+      font-size: 10px;
+      line-height: 1.45;
     }
     .pi-agent-settings-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
       gap: 9px;
+    }
+    .pi-agent-source-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 0 0 10px;
+      border: 1px solid #303030;
+      border-radius: 9px;
+      background: #0c0c0c;
+      padding: 4px;
+    }
+    .pi-agent-settings-section-head .pi-agent-source-tabs {
+      grid-template-columns: repeat(2, auto);
+      flex: none;
+      margin: 0 0 0 auto;
+      padding: 3px;
+    }
+    .pi-agent-source-tab {
+      height: 30px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #a3a3a3;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .pi-agent-settings-section-head .pi-agent-source-tab {
+      height: 26px;
+      padding: 0 14px;
+      white-space: nowrap;
+    }
+    .pi-agent-source-tab.is-active {
+      background: rgba(57, 197, 187, 0.16);
+      color: #7ddbd5;
+      box-shadow: inset 0 0 0 1px rgba(57, 197, 187, 0.4);
+    }
+    .pi-agent-account-status {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 36px;
+      border: 1px solid rgba(57, 197, 187, 0.3);
+      border-radius: 8px;
+      background: rgba(57, 197, 187, 0.08);
+      padding: 6px 9px;
+      color: #d4d4d4;
+      font-size: 12px;
+    }
+    .pi-agent-account-login-action {
+      display: flex;
+      align-items: end;
+      gap: 8px;
     }
     .pi-agent-field {
       display: flex;
@@ -920,6 +1078,48 @@ const ensureStyles = () => {
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
     }
+    .pi-agent-image-context {
+      grid-column: 1 / -1;
+      min-width: 0;
+      border: 1px solid #262626;
+      border-radius: 8px;
+      background: rgba(23, 23, 23, 0.72);
+      padding: 8px;
+    }
+    .pi-agent-image-context-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #d4d4d4;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .pi-agent-image-context-toggle input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: #39c5bb;
+    }
+    .pi-agent-image-context-list {
+      display: flex;
+      gap: 7px;
+      margin-top: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .pi-agent-image-context-thumb {
+      width: 54px;
+      height: 54px;
+      flex: 0 0 54px;
+      border: 1px solid rgba(57, 197, 187, 0.36);
+      border-radius: 7px;
+      background: #050505;
+      object-fit: cover;
+    }
+    .pi-agent-image-context--disabled .pi-agent-image-context-list {
+      opacity: 0.38;
+      filter: grayscale(0.7);
+    }
     .pi-agent-textarea {
       min-height: 72px;
       resize: vertical;
@@ -994,10 +1194,14 @@ export const ui = ({ context, plugin }) => {
   const { hooks, actions } = context;
   const { useEffect, useRef, useState } = React;
   const { t } = hooks.useT();
+  const { canvas } = hooks.useEnvState();
 
   ensureStyles();
 
   const [settings, setSettings] = useState(loadSettings);
+  const [loginName, setLoginName] = useState(() => settings.accountName || "");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [isAccountSubmitting, setIsAccountSubmitting] = useState(false);
   const [conversation, setConversation] = useState(loadConversation);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState({ key: "command.piAgentAssistant.status.ready" });
@@ -1010,12 +1214,103 @@ export const ui = ({ context, plugin }) => {
   const conversationRef = useRef(conversation);
   const draftTextRef = useRef("");
   const scrollRef = useRef(null);
+  const imageCandidates = getCanvasImageCandidates(canvas);
+  const selectedImages = imageCandidates.directlySelected.length > 0
+    ? imageCandidates.directlySelected
+    : imageCandidates.activeGroupImages;
 
   const writeSettings = (patch) => {
     const next = { ...settingsRef.current, ...patch };
     settingsRef.current = next;
     saveSettings(next);
     setSettings(next);
+  };
+
+  const saveAccount = (account) => {
+    writeSettings({
+      modelSource: "account",
+      accountToken: account.token,
+      accountName: account.name,
+      accountId: account.id,
+    });
+    setLoginName(account.name);
+    setLoginPassword("");
+  };
+
+  const updateAccount = (account) => {
+    writeSettings({
+      accountToken: account.token,
+      accountName: account.name,
+      accountId: account.id,
+    });
+    setLoginName(account.name);
+  };
+
+  const clearAccountSession = () => {
+    writeSettings({ accountToken: "", accountName: "", accountId: "" });
+    setLoginPassword("");
+  };
+
+  const notifyAccountSessionExpired = () => {
+    clearAccountSession();
+    setIsSettingsOpen(true);
+    actions.globalActions.pushToast(
+      { key: "toast.command.piAgentAssistant.sessionExpired" },
+      "error",
+    );
+  };
+
+  const handleAccountLogin = async () => {
+    const name = loginName.trim();
+    if (!name || !loginPassword || isAccountSubmitting) return;
+    setIsAccountSubmitting(true);
+    try {
+      const account = await plugin.invoke("loginAccount", {
+        name,
+        password: loginPassword,
+      });
+      saveAccount(account);
+      actions.globalActions.pushToast(
+        { key: "toast.command.piAgentAssistant.loggedIn" },
+        "success",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      actions.globalActions.pushToast(
+        { key: "toast.command.piAgentAssistant.loginFailed", params: { error: message } },
+        "error",
+      );
+    } finally {
+      setIsAccountSubmitting(false);
+    }
+  };
+
+  const handleOpenRegistration = async () => {
+    try {
+      if (window.electron?.openExternal) {
+        const result = await window.electron.openExternal(REGISTER_URL);
+        if (result?.success === false) throw new Error(result.error || "OPEN_EXTERNAL_FAILED");
+        return;
+      }
+      window.open(REGISTER_URL, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      actions.globalActions.pushToast(
+        {
+          key: "toast.command.piAgentAssistant.openRegistrationFailed",
+          params: { error: message },
+        },
+        "error",
+      );
+    }
+  };
+
+  const handleAccountLogout = () => {
+    clearAccountSession();
+    actions.globalActions.pushToast(
+      { key: "toast.command.piAgentAssistant.loggedOut" },
+      "success",
+    );
   };
 
   const writeConversation = (next) => {
@@ -1133,7 +1428,9 @@ export const ui = ({ context, plugin }) => {
         return;
       }
       if (payload.status === "failed") {
-        throw new Error(payload.error || t("command.piAgentAssistant.error.agentFailed"));
+        const error = new Error(payload.error || t("command.piAgentAssistant.error.agentFailed"));
+        error.code = payload.errorCode || "";
+        throw error;
       }
       if (payload.status === "cancelled") {
         setStatus({ key: "command.piAgentAssistant.status.cancelled" });
@@ -1147,7 +1444,11 @@ export const ui = ({ context, plugin }) => {
 
   const handleSend = async () => {
     const prompt = input.trim();
-    if (!prompt || isRunning) return;
+    const activeSettings = settingsRef.current;
+    const hasModelAccess = activeSettings.modelSource === "account"
+      ? Boolean(activeSettings.accountToken)
+      : Boolean(activeSettings.apiKey && activeSettings.baseUrl && activeSettings.model);
+    if (!prompt || isRunning || !hasModelAccess) return;
     try {
       const turnId = createTurnId();
       setInput("");
@@ -1162,19 +1463,30 @@ export const ui = ({ context, plugin }) => {
         ],
       };
       writeConversation(optimistic);
-      const selectedImagePaths = await getSelectedImagePathSnapshot(context);
+      const selectedImageCandidates = settingsRef.current.includeSelectedImages === false
+        ? {}
+        : await getSelectedImageCandidatesSnapshot(
+          context,
+          imageCandidates,
+          canvas.currentCanvasName,
+        );
       const started = await plugin.invoke("startTurn", {
         conversationId: conversationRef.current.sessionId,
         settings: settingsRef.current,
         messages: conversationRef.current.messages.slice(0, -1),
         toolEvents: conversationRef.current.toolEvents || [],
         prompt,
-        selectedImagePaths,
+        selectedImageCandidates,
       });
       taskRef.current = { taskId: started.taskId, cursor: 0, cancelled: false, turnId };
       await pollTask(started.taskId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const accountSessionExpired = activeSettings.modelSource === "account"
+        && error?.code === "ACCOUNT_AUTH_EXPIRED";
+      const message = accountSessionExpired
+        ? t("command.piAgentAssistant.error.sessionExpired")
+        : error instanceof Error ? error.message : String(error);
+      if (accountSessionExpired) notifyAccountSessionExpired();
       persistAssistantFailure(message);
       setDraft("");
       setStatus({
@@ -1182,10 +1494,12 @@ export const ui = ({ context, plugin }) => {
         params: { error: message },
       });
       setIsRunning(false);
-      actions.globalActions.pushToast(
-        { key: "toast.command.piAgentAssistant.failed", params: { error: message } },
-        "error",
-      );
+      if (!accountSessionExpired) {
+        actions.globalActions.pushToast(
+          { key: "toast.command.piAgentAssistant.failed", params: { error: message } },
+          "error",
+        );
+      }
     }
   };
 
@@ -1241,6 +1555,9 @@ export const ui = ({ context, plugin }) => {
   const iraState = getIraState(status.key);
   const showToolThinkingInline = isRunning && Boolean(draftText);
   const showLoadingMessage = isRunning && !draftText;
+  const hasModelAccess = settings.modelSource === "account"
+    ? Boolean(settings.accountToken)
+    : Boolean(settings.apiKey && settings.baseUrl && settings.model);
   const renderToolEvents = (turnId) => {
     const events = toolEvents.filter((event) => event.turnId && event.turnId === turnId);
     const rows = getToolEventRows(events);
@@ -1263,6 +1580,32 @@ export const ui = ({ context, plugin }) => {
       </section>
     );
   };
+
+  useEffect(() => {
+    let disposed = false;
+    const refresh = async (force) => {
+      const token = settingsRef.current.accountToken;
+      if (!token) return;
+      try {
+        const account = await plugin.invoke("refreshAccount", { token, force });
+        if (disposed || settingsRef.current.accountToken !== token || !account.refreshed) return;
+        updateAccount(account);
+      } catch {
+        if (disposed || settingsRef.current.accountToken !== token) return;
+        notifyAccountSessionExpired();
+      }
+    };
+
+    void refresh(true);
+    const interval = setInterval(
+      () => void refresh(false),
+      AUTH_REFRESH_CHECK_INTERVAL_MS,
+    );
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -1317,49 +1660,162 @@ export const ui = ({ context, plugin }) => {
         </div>
         {isSettingsOpen ? (
           <div className="pi-agent-settings-panel">
-            <div className="pi-agent-settings-grid">
-              <label className="pi-agent-field">
-                <span className="pi-agent-label">{t("command.piAgentAssistant.baseUrl")}</span>
-                <input
-                  className="pi-agent-input"
-                  value={settings.baseUrl}
-                  onChange={(event) => writeSettings({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label className="pi-agent-field">
-                <span className="pi-agent-label">{t("command.piAgentAssistant.apiKey")}</span>
-                <input
-                  className="pi-agent-input"
-                  type="password"
-                  value={settings.apiKey}
-                  onChange={(event) => writeSettings({ apiKey: event.target.value })}
-                />
-              </label>
-              <label className="pi-agent-field">
-                <span className="pi-agent-label">{t("command.piAgentAssistant.model")}</span>
-                <input
-                  className="pi-agent-input"
-                  value={settings.model}
-                  onChange={(event) => writeSettings({ model: event.target.value })}
-                />
-              </label>
-              <label className="pi-agent-field pi-agent-field--wide">
-                <span className="pi-agent-label">{t("command.piAgentAssistant.userRules")}</span>
-                <textarea
-                  className="pi-agent-textarea"
-                  rows={4}
-                  value={settings.userRules}
-                  onChange={(event) => writeSettings({ userRules: event.target.value })}
-                />
-              </label>
-              <label className="pi-agent-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.debug === true}
-                  onChange={(event) => writeSettings({ debug: event.target.checked })}
-                />
-                <span>{t("command.piAgentAssistant.debug")}</span>
-              </label>
+            <div className="pi-agent-settings-section">
+              <div className="pi-agent-settings-section-head">
+                <div>
+                  <div className="pi-agent-settings-section-title">
+                    {t("command.piAgentAssistant.modelSection")}
+                  </div>
+                  <div className="pi-agent-settings-section-hint">
+                    {t("command.piAgentAssistant.modelSectionHint")}
+                  </div>
+                </div>
+                <div className="pi-agent-source-tabs">
+                  <button
+                    type="button"
+                    className={`pi-agent-source-tab ${
+                      settings.modelSource === "account" ? "is-active" : ""
+                    }`}
+                    onClick={() => writeSettings({ modelSource: "account" })}
+                    disabled={isRunning}
+                  >
+                    {t("command.piAgentAssistant.modelSource.account")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`pi-agent-source-tab ${
+                      settings.modelSource === "custom" ? "is-active" : ""
+                    }`}
+                    onClick={() => writeSettings({ modelSource: "custom" })}
+                    disabled={isRunning}
+                  >
+                    {t("command.piAgentAssistant.modelSource.custom")}
+                  </button>
+                </div>
+              </div>
+              <div className="pi-agent-settings-grid">
+                {settings.modelSource === "account" ? (
+                  settings.accountToken ? (
+                    <div className="pi-agent-account-status">
+                      <span>{t("command.piAgentAssistant.loggedInAs", {
+                        name: settings.accountName,
+                      })}</span>
+                      <button
+                        type="button"
+                        className="pi-agent-button"
+                        onClick={handleAccountLogout}
+                        disabled={isRunning}
+                      >
+                        {t("command.piAgentAssistant.logout")}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="pi-agent-field">
+                        <span className="pi-agent-label">
+                          {t("command.piAgentAssistant.accountName")}
+                        </span>
+                        <input
+                          className="pi-agent-input"
+                          value={loginName}
+                          onChange={(event) => setLoginName(event.target.value)}
+                          disabled={isAccountSubmitting}
+                        />
+                      </label>
+                      <label className="pi-agent-field">
+                        <span className="pi-agent-label">
+                          {t("command.piAgentAssistant.accountPassword")}
+                        </span>
+                        <input
+                          className="pi-agent-input"
+                          type="password"
+                          value={loginPassword}
+                          onChange={(event) => setLoginPassword(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") void handleAccountLogin();
+                          }}
+                          disabled={isAccountSubmitting}
+                        />
+                      </label>
+                      <div className="pi-agent-account-login-action">
+                        <button
+                          type="button"
+                          className="pi-agent-button pi-agent-button--primary"
+                          onClick={() => void handleAccountLogin()}
+                          disabled={isAccountSubmitting || !loginName.trim() || !loginPassword}
+                        >
+                          {t("command.piAgentAssistant.login")}
+                        </button>
+                        <button
+                          type="button"
+                          className="pi-agent-button"
+                          onClick={() => void handleOpenRegistration()}
+                          disabled={isAccountSubmitting}
+                        >
+                          {t("command.piAgentAssistant.register")}
+                        </button>
+                      </div>
+                    </>
+                  )
+                ) : (
+                  <>
+                    <label className="pi-agent-field">
+                      <span className="pi-agent-label">{t("command.piAgentAssistant.baseUrl")}</span>
+                      <input
+                        className="pi-agent-input"
+                        value={settings.baseUrl}
+                        onChange={(event) => writeSettings({ baseUrl: event.target.value })}
+                      />
+                    </label>
+                    <label className="pi-agent-field">
+                      <span className="pi-agent-label">{t("command.piAgentAssistant.apiKey")}</span>
+                      <input
+                        className="pi-agent-input"
+                        type="password"
+                        value={settings.apiKey}
+                        onChange={(event) => writeSettings({ apiKey: event.target.value })}
+                      />
+                    </label>
+                    <label className="pi-agent-field">
+                      <span className="pi-agent-label">{t("command.piAgentAssistant.model")}</span>
+                      <input
+                        className="pi-agent-input"
+                        value={settings.model}
+                        onChange={(event) => writeSettings({ model: event.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="pi-agent-settings-section">
+              <div className="pi-agent-settings-section-head">
+                <div className="pi-agent-settings-section-title">
+                  {t("command.piAgentAssistant.behaviorSection")}
+                </div>
+                <div className="pi-agent-settings-section-hint">
+                  {t("command.piAgentAssistant.behaviorSectionHint")}
+                </div>
+              </div>
+              <div className="pi-agent-settings-grid">
+                <label className="pi-agent-field pi-agent-field--wide">
+                  <span className="pi-agent-label">{t("command.piAgentAssistant.userRules")}</span>
+                  <textarea
+                    className="pi-agent-textarea"
+                    rows={4}
+                    value={settings.userRules}
+                    onChange={(event) => writeSettings({ userRules: event.target.value })}
+                  />
+                </label>
+                <label className="pi-agent-toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.debug === true}
+                    onChange={(event) => writeSettings({ debug: event.target.checked })}
+                  />
+                  <span>{t("command.piAgentAssistant.debug")}</span>
+                </label>
+              </div>
             </div>
           </div>
         ) : null}
@@ -1457,6 +1913,43 @@ export const ui = ({ context, plugin }) => {
       </main>
 
       <div className="pi-agent-compose">
+        {selectedImages.length > 0 ? (
+          <section
+            className={`pi-agent-image-context ${
+              settings.includeSelectedImages === false
+                ? "pi-agent-image-context--disabled"
+                : ""
+            }`}
+          >
+            <label className="pi-agent-image-context-toggle">
+              <input
+                type="checkbox"
+                checked={settings.includeSelectedImages !== false}
+                onChange={(event) => writeSettings({
+                  includeSelectedImages: event.target.checked,
+                })}
+                disabled={isRunning}
+              />
+              <span>{t("command.piAgentAssistant.imageContext", {
+                count: selectedImages.length,
+              })}</span>
+            </label>
+            <div className="pi-agent-image-context-list">
+              {selectedImages.map((image) => (
+                <img
+                  key={image.itemId}
+                  className="pi-agent-image-context-thumb"
+                  src={getCanvasImageUrl(
+                    image.imagePath,
+                    canvas.currentCanvasName,
+                    context.config.API_BASE_URL,
+                  )}
+                  alt=""
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
         <textarea
           className="pi-agent-textarea"
           value={input}
@@ -1470,7 +1963,7 @@ export const ui = ({ context, plugin }) => {
             type="button"
             className="pi-agent-button pi-agent-button--primary"
             onClick={() => void handleSend()}
-            disabled={isRunning || !input.trim()}
+            disabled={isRunning || !input.trim() || !hasModelAccess}
           >
             {t("command.piAgentAssistant.send")}
           </button>
