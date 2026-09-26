@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 
-const DEFAULT_SOURCE = "bing";
+const DEFAULT_SOURCE = "so";
 const DEFAULT_PAGE_SIZE = 8;
 const MAX_PAGE_SIZE = 20;
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -416,10 +416,10 @@ export const createImageSearchTool = () => ({
   name: "image_search",
   label: "图片搜索",
   description:
-    "搜索图片并主动过滤标签、标题或描述中含 AI、AIGC、AI generated、AI生成等标记的结果。搜索源返回的图片和来源页 URL 不做额外验证或改写，markdown 使用缩略图预览，并在下一行附带可点击复制的 sourceUrl 来源页链接；展示结果时必须完整使用 markdown。支持 source：bing(默认，Bing Images)、baidu(百度图片)、so(360 图片)。首轮结果满足数量和风格时应停止，不要重复切换搜索源。不需要代理和 API Key。",
+    "搜索图片并主动过滤标签、标题或描述中含 AI、AIGC、AI generated、AI生成等标记的结果。搜索源返回的图片和来源页 URL 不做额外验证或改写，markdown 使用缩略图预览，并在下一行附带可点击复制的 sourceUrl 来源页链接；展示结果时必须完整使用 markdown。支持 source：bing(Bing Images)、baidu(百度图片)、so(360 图片)。首轮结果满足数量和风格时应停止，不要重复切换搜索源。不需要代理和 API Key。",
   parameters: Type.Object({
     query: Type.String({ description: "图片搜索关键词" }),
-    source: Type.Optional(Type.String({ description: "搜索源：bing、baidu、so。默认 bing" })),
+    source: Type.Optional(Type.String({ description: "搜索源：bing、baidu、so。默认 so" })),
     pageSize: Type.Optional(Type.Number({ description: `返回数量，1-${MAX_PAGE_SIZE}，默认 ${DEFAULT_PAGE_SIZE}` })),
     page: Type.Optional(Type.Number({ description: "页码，默认 1" })),
     timeoutMs: Type.Optional(Type.Number({ description: `请求超时毫秒数，最高 ${MAX_TIMEOUT_MS}` })),
